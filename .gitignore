@@ -9,6 +9,7 @@
 config/secrets.py
 *_key*
 *secret*
+!.secrets.baseline
 
 # Python
 __pycache__/

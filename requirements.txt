@@ -1,0 +1,6 @@
+sqlcipher3>=0.5.0
+cryptography>=42.0.0
+keyring>=25.0.0
+python-dotenv>=1.0.0
+pytest>=8.0.0
+pre-commit>=3.7.0

@@ -1,0 +1,17 @@
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: Detect secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: \.secrets\.baseline$
+
+  - repo: local
+    hooks:
+      - id: no-db-files
+        name: Block staged .db files
+        language: fail
+        entry: "ERROR: A .db file is staged. Database files must never be committed. Remove it with: git rm --cached <file>"
+        files: '\.(db|db-shm|db-wal)$'
+        stages: [pre-commit]
