@@ -4,7 +4,7 @@ PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help setup init test clean run interview add-anthropic-key add-groq-key
+.PHONY: help setup init test clean run interview view add-anthropic-key add-groq-key
 
 ## Show this help message
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  make test    Run the pytest test suite with verbose output"
 	@echo "  make clean   Remove .venv and __pycache__ (never removes the database)"
 	@echo "  make run     (Phase 2 placeholder) Print a not-implemented message"
+	@echo "  make view    Pretty-print the identity store grouped by domain"
 	@echo ""
 
 ## Create .venv, install requirements, install pre-commit hooks
@@ -59,6 +60,10 @@ run:
 ## Run the interactive identity interview
 interview:
 	.venv/bin/python scripts/seed_interview.py
+
+## Pretty-print the identity store grouped by domain
+view:
+	.venv/bin/python scripts/view_db.py
 
 ## Store an Anthropic API key in the system keychain
 ## Usage: make add-anthropic-key KEY=sk-ant-...

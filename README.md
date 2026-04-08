@@ -24,6 +24,7 @@ make setup      # create venv, install deps, install pre-commit hooks
 make init       # generate key, create database, seed domains
 make test       # run the test suite
 make interview  # start the interactive identity interview
+make view       # pretty-print the identity store
 ```
 
 ## LLM backend
@@ -89,6 +90,34 @@ You can run the interview as many times as you like. Re-answering a question
 whose label already exists prompts you to update (supersede) the old value or
 skip — the full history is preserved in `attribute_history`.
 
+## Inspecting the store
+
+`make view` prints everything currently in the database, grouped by domain:
+
+```
+════════════════════════════════════════════════
+  IDENTITY STORE  —  7 attributes across 3 domains
+════════════════════════════════════════════════
+
+── PERSONALITY (3) ──────────────────────────────
+  decision_making  [stable, reflection, 0.90] local_only
+    Deliberate and research-driven.
+
+  recharge_style   [evolving, reflection, 0.80] local_only
+    Introvert — quiet time after social events.
+  ...
+
+────────────────────────────────────────────────
+  3 domains with data  ·  5 domains empty  ·  7 total attributes
+  Last updated: 2026-04-06 14:23:01
+────────────────────────────────────────────────
+```
+
+Only `active` attributes are shown. Superseded and retracted rows are retained
+in `attribute_history` but excluded from the view.
+
+See [docs/view_db.md](docs/view_db.md) for the full output format reference.
+
 ## Structure
 
 ```
@@ -98,14 +127,18 @@ db/connection.py            — SQLCipher connection context manager
 db/schema.py                — DDL and domain seeding
 scripts/init_db.py          — one-time (idempotent) initialisation script
 scripts/seed_interview.py   — interactive identity interview (make interview)
+scripts/view_db.py          — terminal viewer for the identity store (make view)
 tests/test_schema.py        — schema and constraint tests
 tests/test_interview.py     — interview logic, DB helpers, and UI flow tests
 tests/test_llm_router.py    — hardware detection, router resolution, and inference tests
+tests/test_view_db.py       — viewer output and filtering tests
 docs/schema.md              — full schema reference
 docs/interview.md           — interview script reference
 docs/llm_routing.md         — LLM routing reference and key setup guide
+docs/view_db.md             — viewer output format reference
 ```
 
 See [docs/schema.md](docs/schema.md) for the full schema reference.
 See [docs/interview.md](docs/interview.md) for the interview script reference.
 See [docs/llm_routing.md](docs/llm_routing.md) for the LLM routing reference.
+See [docs/view_db.md](docs/view_db.md) for the viewer reference.

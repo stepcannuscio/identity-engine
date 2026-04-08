@@ -204,6 +204,8 @@ def _start_ollama(log_path=None) -> object | None:
             kwargs.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         process = subprocess.Popen(["ollama", "serve"], **kwargs)
+        if log_path:
+            fh.close()  # subprocess has inherited the fd; parent copy is no longer needed
     except FileNotFoundError:
         return None
 

@@ -457,7 +457,7 @@ def interview_question(question: str, domain_name: str, config: ProviderConfig) 
                         print(f"  Skipped: {attr['label']}")
                         continue
 
-                outcome = write_attribute(conn, domain_id, attr, existing if existing and upd == "y" else None)
+                outcome = write_attribute(conn, domain_id, attr, existing)
                 if outcome == "updated":
                     updated += 1
                     print(f"  Updated: {attr['label']}")
@@ -532,7 +532,7 @@ def run_interview(config: ProviderConfig) -> None:
             write_reflection_session(
                 conn, started_at, domains_covered, total_created, total_updated
             )
-        print("Session saved. Run 'make test' to verify your data.")
+        print("Session saved. Run 'make view' to view your data.")
     except Exception as exc:
         print(f"Warning: Could not save session record: {exc}")
 
