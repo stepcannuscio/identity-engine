@@ -4,7 +4,7 @@ PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help setup init test clean run interview
+.PHONY: help setup init test clean run interview add-anthropic-key add-groq-key
 
 ## Show this help message
 help:
@@ -59,3 +59,17 @@ run:
 ## Run the interactive identity interview
 interview:
 	.venv/bin/python scripts/seed_interview.py
+
+## Store an Anthropic API key in the system keychain
+## Usage: make add-anthropic-key KEY=sk-ant-...
+add-anthropic-key:
+	.venv/bin/python -c "import keyring, sys; \
+	keyring.set_password('identity-engine', \
+	'anthropic-api-key', sys.argv[1])" $(KEY)
+
+## Store a Groq API key in the system keychain
+## Usage: make add-groq-key KEY=gsk_...
+add-groq-key:
+	.venv/bin/python -c "import keyring, sys; \
+	keyring.set_password('identity-engine', \
+	'groq-api-key', sys.argv[1])" $(KEY)

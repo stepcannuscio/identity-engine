@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 seed_interview.py — Interactive terminal interview that extracts structured
-identity attributes via Ollama and writes confirmed entries to the
-identity-engine database.
+identity attributes and writes confirmed entries to the identity-engine database.
 
 Run via:  make interview
           .venv/bin/python scripts/seed_interview.py
@@ -10,41 +9,23 @@ Run via:  make interview
 
 import sys
 import os
-import json
 import uuid
 import datetime
-import subprocess
 import threading
 import time
 
 # Project root must be on the path so db/ and config/ are importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import requests
-
 from db.connection import get_connection
-from config.settings import LOCAL_ONLY, REFLECTION, STABLE, EVOLVING, DB_DIR
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "llama3.1:8b"
-OLLAMA_TIMEOUT = 120
-OLLAMA_LOG_PATH = DB_DIR / "ollama.log"
-
-EXTRACT_SYSTEM_PROMPT = (
-    "You are a structured data extractor for a personal identity store. "
-    "Given the user's answer to an identity question, extract one or more identity attributes. "
-    "For each attribute output a JSON object with these exact fields:\n"
-    "- label: short snake_case identifier (e.g. 'recharge_style')\n"
-    "- value: a clear, specific description in first person where natural (1-3 sentences max)\n"
-    "- elaboration: any nuance or context worth preserving, or null\n"
-    "- mutability: 'stable' or 'evolving'\n"
-    "- confidence: float between 0.0 and 1.0\n\n"
-    "Return a JSON array of attribute objects. Return JSON only. "
-    "No preamble, no explanation, no markdown fences."
+from config.settings import LOCAL_ONLY, REFLECTION, STABLE, EVOLVING
+from config.llm_router import (
+    resolve_router,
+    extract_attributes,
+    print_routing_report,
+    ConfigurationError,
+    ExtractionError,
+    ProviderConfig,
 )
 
 # ---------------------------------------------------------------------------
@@ -137,67 +118,6 @@ DOMAINS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Ollama server management
-# ---------------------------------------------------------------------------
-
-def _ollama_is_running() -> bool:
-    """Return True if Ollama is already listening on port 11434."""
-    try:
-        requests.get(OLLAMA_BASE_URL, timeout=2)
-        return True
-    except Exception:
-        return False
-
-
-def ensure_ollama():
-    """Ensure Ollama is running, starting it if necessary.
-
-    Returns the Popen process if this call started it, or None if it was
-    already running. The caller is responsible for terminating the process
-    on exit.
-    """
-    if _ollama_is_running():
-        return None
-
-    # Start Ollama, redirecting its output to a log file.
-    OLLAMA_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(OLLAMA_LOG_PATH, "a") as log_fh:
-            process = subprocess.Popen(
-                ["ollama", "serve"],
-                stdout=log_fh,
-                stderr=log_fh,
-                start_new_session=True
-            )
-    except FileNotFoundError:
-        print("\nError: 'ollama' command not found.")
-        print("Install Ollama from https://ollama.com and retry.")
-        sys.exit(1)
-
-    # Poll for up to 10 seconds.
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if _ollama_is_running():
-            return process
-        time.sleep(0.5)
-
-    process.terminate()
-    print(f"\nError: Ollama did not become available within 10 seconds.")
-    print(f"Check {OLLAMA_LOG_PATH} for details.")
-    sys.exit(1)
-
-
-def ensure_model() -> None:
-    """Check that llama3.1:8b is available; pull it if not."""
-    resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-    resp.raise_for_status()
-    models = [m.get("name", "") for m in resp.json().get("models", [])]
-    if not any(m.startswith("llama3.1:8b") for m in models):
-        print("llama3.1:8b not found. Pulling now — this may take a few minutes on first run...")
-        subprocess.run(["ollama", "pull", "llama3.1:8b"])
-
-
-# ---------------------------------------------------------------------------
 # Database check
 # ---------------------------------------------------------------------------
 
@@ -248,14 +168,11 @@ def select_domains() -> list:
 
 
 # ---------------------------------------------------------------------------
-# Ollama interaction
+# Elapsed-time spinner
 # ---------------------------------------------------------------------------
 
 def _run_with_elapsed(label: str, fn):
-    """Run fn() in a background thread, printing elapsed seconds in place while it runs.
-
-    Clears the status line before returning or re-raising any exception fn() raised.
-    """
+    """Run fn() in a background thread, printing elapsed seconds while it runs."""
     holder: dict = {}
 
     def _worker():
@@ -276,41 +193,11 @@ def _run_with_elapsed(label: str, fn):
         print(msg, end="", flush=True)
         thread.join(timeout=1.0)
 
-    # Erase the status line completely before returning.
     print(f"\r{' ' * max_width}\r", end="", flush=True)
 
     if "error" in holder:
         raise holder["error"]
     return holder["result"]
-
-
-def call_ollama(question: str, answer: str) -> str:
-    """Send question + answer to Ollama and return the raw content string."""
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Question: {question}\n\nAnswer: {answer}"},
-        ],
-        "stream": False,
-    }
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json=payload,
-        timeout=OLLAMA_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()["message"]["content"].strip()
-
-
-def parse_attributes(raw: str) -> list:
-    """Strip any markdown fences and parse JSON from Ollama output."""
-    content = raw
-    if content.startswith("```"):
-        lines = content.splitlines()
-        lines = [ln for ln in lines if not ln.strip().startswith("```")]
-        content = "\n".join(lines).strip()
-    return json.loads(content)
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +224,7 @@ def display_preview(attributes: list) -> None:
 
 
 def confirm_attributes(attributes: list) -> tuple:
-    """
-    Interactive confirmation loop.
+    """Interactive confirmation loop.
 
     Returns:
         (confirmed_list, retry)
@@ -353,19 +239,15 @@ def confirm_attributes(attributes: list) -> tuple:
         except EOFError:
             return None, False
 
-        # Confirm all
         if choice == "":
             return list(attributes), False
 
-        # Skip question entirely
         if choice.lower() == "s":
             return None, False
 
-        # Rephrase and retry
         if choice.lower() == "r":
             return [], True
 
-        # Edit a specific attribute value
         if choice.lower().startswith("e") and len(choice) > 1:
             try:
                 idx = int(choice[1:]) - 1
@@ -385,9 +267,8 @@ def confirm_attributes(attributes: list) -> tuple:
                 continue
             if new_val:
                 attr["value"] = new_val
-            continue  # re-display preview
+            continue
 
-        # Skip specific numbered attributes
         try:
             skip_set = {int(x.strip()) for x in choice.split(",") if x.strip()}
             confirmed = [a for i, a in enumerate(attributes, 1) if i not in skip_set]
@@ -412,7 +293,6 @@ def get_domain_id(conn, domain_name: str) -> str:
 
 
 def find_existing_active(conn, domain_id: str, label: str):
-    """Return (id, value, confidence) for the active attribute, or None."""
     return conn.execute(
         "SELECT id, value, confidence FROM attributes "
         "WHERE domain_id = ? AND label = ? AND status = 'active'",
@@ -444,11 +324,6 @@ def _insert_attribute_row(conn, domain_id: str, attr: dict, now: str) -> None:
 
 
 def write_attribute(conn, domain_id: str, attr: dict, old_row) -> str:
-    """
-    Write a single attribute.
-    If old_row is not None, supersede it and record history first.
-    Returns 'updated' or 'created'.
-    """
     now = datetime.datetime.now(datetime.UTC).isoformat()
 
     if old_row is not None:
@@ -509,9 +384,8 @@ def write_reflection_session(
 # Per-question interview step
 # ---------------------------------------------------------------------------
 
-def interview_question(question: str, domain_name: str) -> tuple:
-    """
-    Run the full ask → extract → preview → confirm → write cycle for one question.
+def interview_question(question: str, domain_name: str, config: ProviderConfig) -> tuple:
+    """Run the full ask → extract → preview → confirm → write cycle for one question.
 
     Returns (created_count, updated_count).
     """
@@ -530,16 +404,15 @@ def interview_question(question: str, domain_name: str) -> tuple:
             print("  (No answer given — skipping.)")
             return created, updated
 
-        # Extract attributes from Ollama
         print()
         try:
-            raw = _run_with_elapsed(
+            attributes = _run_with_elapsed(
                 "Extracting attributes...",
-                lambda: call_ollama(question, answer),
+                lambda: extract_attributes(question, answer, config),
             )
-        except requests.exceptions.Timeout:
-            print(f"Timed out after {OLLAMA_TIMEOUT}s.")
-            print("Would you like to retry? (y/n)")
+        except ExtractionError as exc:
+            print(f"Could not parse a valid response: {exc}")
+            print("Would you like to rephrase your answer and retry? (y/n)")
             if input("> ").strip().lower() == "y":
                 continue
             return created, updated
@@ -550,25 +423,14 @@ def interview_question(question: str, domain_name: str) -> tuple:
                 continue
             return created, updated
 
-        try:
-            attributes = parse_attributes(raw)
-        except (json.JSONDecodeError, ValueError):
-            print("Response was not valid JSON.")
-            print(f"Raw response:\n{raw[:600]}")
-            print("\nWould you like to rephrase your answer and retry? (y/n)")
-            if input("> ").strip().lower() == "y":
-                continue
-            return created, updated
-
         if not attributes:
             print("No attributes extracted.")
             return created, updated
 
-        # Confirmation loop
         confirmed, retry = confirm_attributes(attributes)
 
         if retry:
-            continue  # user wants to rephrase
+            continue
 
         if confirmed is None:
             print("  (Question skipped.)")
@@ -578,7 +440,6 @@ def interview_question(question: str, domain_name: str) -> tuple:
             print("  (All attributes skipped.)")
             return created, updated
 
-        # Write each confirmed attribute immediately
         with get_connection() as conn:
             domain_id = get_domain_id(conn, domain_name)
             for attr in confirmed:
@@ -611,7 +472,7 @@ def interview_question(question: str, domain_name: str) -> tuple:
 # Main interview loop
 # ---------------------------------------------------------------------------
 
-def run_interview() -> None:
+def run_interview(config: ProviderConfig) -> None:
     started_at = datetime.datetime.now(datetime.UTC)
     total_created = 0
     total_updated = 0
@@ -636,7 +497,7 @@ def run_interview() -> None:
             domain_updated = 0
 
             for question in domain["questions"]:
-                q_created, q_updated = interview_question(question, domain_name)
+                q_created, q_updated = interview_question(question, domain_name, config)
                 domain_created += q_created
                 domain_updated += q_updated
 
@@ -648,7 +509,6 @@ def run_interview() -> None:
             n_saved = domain_created + domain_updated
             print(f"\nDomain complete: {n_saved} attribute(s) saved.")
 
-            # Prompt to continue — skip after the last domain
             if d_idx < len(selected) - 1:
                 print("Continue to next domain? (y/n/q to quit)")
                 try:
@@ -661,7 +521,6 @@ def run_interview() -> None:
     except KeyboardInterrupt:
         print("\n\nInterrupted. Saving session record...")
 
-    # Session summary
     print(f"\n{'=' * 60}")
     print("Session complete.")
     print(f"  Attributes saved (new): {total_created}")
@@ -686,28 +545,23 @@ def main() -> None:
     print("identity-engine — Identity Interview")
     print("━" * 40)
 
-    ollama_proc = None
     try:
-        ollama_proc = ensure_ollama()
-        ensure_model()
+        config = resolve_router()
+    except ConfigurationError as exc:
+        print(f"\nConfiguration error: {exc}")
+        sys.exit(1)
 
-        print("Checking database...", end=" ", flush=True)
-        check_database()
-        print("OK")
+    print_routing_report(config)
 
-        print()
-        print("This session will guide you through questions across your selected identity domains.")
-        print("Answers are processed locally by Ollama (llama3.1:8b) — no external API calls.")
-        print("Nothing is written to the database without your explicit confirmation.")
+    print("Checking database...", end=" ", flush=True)
+    check_database()
+    print("OK")
 
-        run_interview()
-    finally:
-        if ollama_proc is not None:
-            ollama_proc.terminate()
-            try:
-                ollama_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                ollama_proc.kill()
+    print()
+    print("This session will guide you through questions across your selected identity domains.")
+    print("Nothing is written to the database without your explicit confirmation.")
+
+    run_interview(config)
 
 
 if __name__ == "__main__":

@@ -16,12 +16,35 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
 import scripts.seed_interview as interview
+import config.llm_router as llm_router
+from config.llm_router import (
+    _parse_json_response as parse_attributes,
+    _call_ollama,
+    _ollama_is_running,
+    _start_ollama,
+    _ensure_local_model,
+    _pull_model,
+    ProviderConfig,
+)
+
+# Shim: the old call_ollama(question, answer) is now split across
+# _build_messages + _call_ollama; tests below use the new interface.
+
+OLLAMA_TIMEOUT = llm_router.OLLAMA_TIMEOUT
+
+
+def _local_config(model="llama3.1:8b") -> ProviderConfig:
+    return ProviderConfig(
+        provider="ollama", api_key=None, model=model,
+        is_local=True, arch="apple_silicon", ram_gb=36.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -75,38 +98,38 @@ VALID_OLLAMA_RESPONSE = {
 
 def test_parse_attributes_valid_json():
     raw = json.dumps([SAMPLE_ATTR])
-    result = interview.parse_attributes(raw)
+    result = parse_attributes(raw)
     assert len(result) == 1
     assert result[0]["label"] == "recharge_style"
 
 
 def test_parse_attributes_strips_backtick_fences():
     raw = f"```json\n{json.dumps([SAMPLE_ATTR])}\n```"
-    result = interview.parse_attributes(raw)
+    result = parse_attributes(raw)
     assert result[0]["label"] == "recharge_style"
 
 
 def test_parse_attributes_strips_plain_fences():
     raw = f"```\n{json.dumps([SAMPLE_ATTR])}\n```"
-    result = interview.parse_attributes(raw)
+    result = parse_attributes(raw)
     assert result[0]["label"] == "recharge_style"
 
 
 def test_parse_attributes_multiple_attrs():
     attrs = [SAMPLE_ATTR, {**SAMPLE_ATTR, "label": "decision_style"}]
-    result = interview.parse_attributes(json.dumps(attrs))
+    result = parse_attributes(json.dumps(attrs))
     assert len(result) == 2
     assert result[1]["label"] == "decision_style"
 
 
 def test_parse_attributes_raises_on_invalid_json():
     with pytest.raises((json.JSONDecodeError, ValueError)):
-        interview.parse_attributes("not json at all")
+        parse_attributes("not json at all")
 
 
 def test_parse_attributes_raises_on_truncated_json():
     with pytest.raises((json.JSONDecodeError, ValueError)):
-        interview.parse_attributes('[{"label": "x"')
+        parse_attributes('[{"label": "x"')
 
 
 # ---------------------------------------------------------------------------
@@ -333,9 +356,10 @@ def test_call_ollama_sends_correct_model(monkeypatch):
         captured["payload"] = json
         return mock_resp
 
-    monkeypatch.setattr(interview.requests, "post", mock_post)
-    interview.call_ollama("Q?", "A.")
-    assert captured["payload"]["model"] == interview.OLLAMA_MODEL
+    monkeypatch.setattr(llm_router.requests, "post", mock_post)
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "Q\n\nA"}]
+    _call_ollama(messages, "llama3.1:8b")
+    assert captured["payload"]["model"] == "llama3.1:8b"
 
 
 def test_call_ollama_includes_system_prompt(monkeypatch):
@@ -347,8 +371,12 @@ def test_call_ollama_includes_system_prompt(monkeypatch):
         captured["messages"] = json["messages"]
         return mock_resp
 
-    monkeypatch.setattr(interview.requests, "post", mock_post)
-    interview.call_ollama("Q?", "A.")
+    monkeypatch.setattr(llm_router.requests, "post", mock_post)
+    messages = [
+        {"role": "system", "content": "structured data extractor"},
+        {"role": "user", "content": "Q\n\nA"},
+    ]
+    _call_ollama(messages, "llama3.1:8b")
     assert captured["messages"][0]["role"] == "system"
     assert "structured data extractor" in captured["messages"][0]["content"]
 
@@ -362,8 +390,12 @@ def test_call_ollama_includes_question_and_answer(monkeypatch):
         captured["messages"] = json["messages"]
         return mock_resp
 
-    monkeypatch.setattr(interview.requests, "post", mock_post)
-    interview.call_ollama("What is your goal?", "Build something meaningful.")
+    monkeypatch.setattr(llm_router.requests, "post", mock_post)
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "Question: What is your goal?\n\nAnswer: Build something meaningful."},
+    ]
+    _call_ollama(messages, "llama3.1:8b")
     user_content = captured["messages"][1]["content"]
     assert "What is your goal?" in user_content
     assert "Build something meaningful." in user_content
@@ -373,8 +405,9 @@ def test_call_ollama_returns_content_string(monkeypatch):
     mock_resp = MagicMock()
     mock_resp.json.return_value = VALID_OLLAMA_RESPONSE
 
-    monkeypatch.setattr(interview.requests, "post", lambda *a, **kw: mock_resp)
-    result = interview.call_ollama("Q?", "A.")
+    monkeypatch.setattr(llm_router.requests, "post", MagicMock(return_value=mock_resp))
+    messages = [{"role": "user", "content": "Q\n\nA"}]
+    result = _call_ollama(messages, "llama3.1:8b")
     assert isinstance(result, str)
     assert "recharge_style" in result
 
@@ -388,9 +421,10 @@ def test_call_ollama_uses_configured_timeout(monkeypatch):
         captured["timeout"] = timeout
         return mock_resp
 
-    monkeypatch.setattr(interview.requests, "post", mock_post)
-    interview.call_ollama("Q?", "A.")
-    assert captured["timeout"] == interview.OLLAMA_TIMEOUT
+    monkeypatch.setattr(llm_router.requests, "post", mock_post)
+    messages = [{"role": "user", "content": "Q\n\nA"}]
+    _call_ollama(messages, "llama3.1:8b")
+    assert captured["timeout"] == OLLAMA_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -582,10 +616,10 @@ def test_run_with_elapsed_reraises_generic_exception():
 
 
 def test_run_with_elapsed_preserves_timeout_exception_type():
-    """Timeout must propagate as its original type — interview_question branches on it."""
+    """Timeout must propagate as its original type."""
     def timeout():
-        raise interview.requests.exceptions.Timeout()
-    with pytest.raises(interview.requests.exceptions.Timeout):
+        raise requests.exceptions.Timeout()
+    with pytest.raises(requests.exceptions.Timeout):
         interview._run_with_elapsed("Working...", timeout)
 
 
@@ -603,12 +637,12 @@ def test_run_with_elapsed_clears_status_line(capsys):
 
 def test_interview_question_saves_on_confirm(conn, monkeypatch, mock_get_connection):
     """Answer + confirm-all writes one attribute to the DB."""
-    monkeypatch.setattr(interview, "call_ollama", lambda q, a: OLLAMA_JSON)
+    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["My answer.", ""])  # answer, then Enter to confirm
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("How do you recharge?", "personality")
+    created, updated = interview.interview_question("How do you recharge?", "personality", _local_config())
 
     assert created == 1
     assert updated == 0
@@ -624,7 +658,7 @@ def test_interview_question_empty_answer_skips(conn, monkeypatch, mock_get_conne
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     monkeypatch.setattr("builtins.input", lambda _="": "")
 
-    created, updated = interview.interview_question("Q?", "personality")
+    created, updated = interview.interview_question("Q?", "personality", _local_config())
 
     assert created == 0
     assert updated == 0
@@ -633,12 +667,12 @@ def test_interview_question_empty_answer_skips(conn, monkeypatch, mock_get_conne
 
 
 def test_interview_question_skip_at_preview_writes_nothing(conn, monkeypatch, mock_get_connection):
-    monkeypatch.setattr(interview, "call_ollama", lambda q, a: OLLAMA_JSON)
+    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["Some answer.", "s"])
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("Q?", "personality")
+    created, updated = interview.interview_question("Q?", "personality", _local_config())
 
     assert created == 0
     assert conn.execute("SELECT count(*) FROM attributes").fetchone()[0] == 0
@@ -649,13 +683,13 @@ def test_interview_question_supersedes_existing_on_update(conn, monkeypatch, moc
     domain_id = interview.get_domain_id(conn, "personality")
     _insert_raw_attribute(conn, domain_id, "recharge_style", value="old value")
 
-    monkeypatch.setattr(interview, "call_ollama", lambda q, a: OLLAMA_JSON)
+    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     # answer, then Enter (confirm all at preview), then 'y' to update existing
     responses = iter(["New answer.", "", "y"])
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("How do you recharge?", "personality")
+    created, updated = interview.interview_question("How do you recharge?", "personality", _local_config())
 
     assert updated == 1
     assert created == 0
@@ -670,12 +704,12 @@ def test_interview_question_skip_existing_on_no(conn, monkeypatch, mock_get_conn
     domain_id = interview.get_domain_id(conn, "personality")
     _insert_raw_attribute(conn, domain_id, "recharge_style", value="original")
 
-    monkeypatch.setattr(interview, "call_ollama", lambda q, a: OLLAMA_JSON)
+    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["New answer.", "", "n"])  # answer, confirm, don't update
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("How do you recharge?", "personality")
+    created, updated = interview.interview_question("How do you recharge?", "personality", _local_config())
 
     assert created == 0
     assert updated == 0
@@ -687,14 +721,16 @@ def test_interview_question_skip_existing_on_no(conn, monkeypatch, mock_get_conn
     assert row[1] == "active"
 
 
-def test_interview_question_invalid_json_from_ollama(conn, monkeypatch, mock_get_connection):
-    """If Ollama returns unparseable JSON, no attribute is written."""
-    monkeypatch.setattr(interview, "call_ollama", lambda q, a: "not json")
+def test_interview_question_extraction_error_writes_nothing(conn, monkeypatch, mock_get_connection):
+    """If extraction raises ExtractionError, no attribute is written."""
+    from config.llm_router import ExtractionError
+    monkeypatch.setattr(interview, "extract_attributes",
+                        lambda q, a, c: (_ for _ in ()).throw(ExtractionError("bad json: []")))
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["My answer.", "n"])  # answer, then 'n' to not retry
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("Q?", "personality")
+    created, updated = interview.interview_question("Q?", "personality", _local_config())
 
     assert created == 0
     assert conn.execute("SELECT count(*) FROM attributes").fetchone()[0] == 0
@@ -705,27 +741,27 @@ def test_interview_question_invalid_json_from_ollama(conn, monkeypatch, mock_get
 # ---------------------------------------------------------------------------
 
 def test_ollama_is_running_true_when_reachable(monkeypatch):
-    monkeypatch.setattr(interview.requests, "get", lambda *a, **kw: MagicMock())
-    assert interview._ollama_is_running() is True
+    # MagicMock accepts any call signature, including timeout= kwargs
+    monkeypatch.setattr(llm_router.requests, "get", MagicMock(return_value=MagicMock()))
+    assert _ollama_is_running() is True
 
 
 def test_ollama_is_running_false_on_connection_error(monkeypatch):
-    def raise_err(*a, **kw):
-        raise interview.requests.exceptions.ConnectionError()
-    monkeypatch.setattr(interview.requests, "get", raise_err)
-    assert interview._ollama_is_running() is False
+    monkeypatch.setattr(llm_router.requests, "get",
+                        MagicMock(side_effect=requests.exceptions.ConnectionError()))
+    assert _ollama_is_running() is False
 
 
 def test_ollama_is_running_false_on_timeout(monkeypatch):
-    def raise_timeout(*a, **kw):
-        raise interview.requests.exceptions.Timeout()
-    monkeypatch.setattr(interview.requests, "get", raise_timeout)
-    assert interview._ollama_is_running() is False
+    monkeypatch.setattr(llm_router.requests, "get",
+                        MagicMock(side_effect=requests.exceptions.Timeout()))
+    assert _ollama_is_running() is False
 
 
 def test_ollama_is_running_false_on_any_exception(monkeypatch):
-    monkeypatch.setattr(interview.requests, "get", lambda *a, **kw: (_ for _ in ()).throw(OSError("refused")))
-    assert interview._ollama_is_running() is False
+    monkeypatch.setattr(llm_router.requests, "get",
+                        MagicMock(side_effect=OSError("refused")))
+    assert _ollama_is_running() is False
 
 
 def test_ollama_is_running_uses_2s_timeout(monkeypatch):
@@ -733,115 +769,112 @@ def test_ollama_is_running_uses_2s_timeout(monkeypatch):
     def mock_get(url, timeout=None):
         captured["timeout"] = timeout
         return MagicMock()
-    monkeypatch.setattr(interview.requests, "get", mock_get)
-    interview._ollama_is_running()
+    monkeypatch.setattr(llm_router.requests, "get", mock_get)
+    _ollama_is_running()
     assert captured["timeout"] == 2
 
 
 # ---------------------------------------------------------------------------
-# ensure_ollama
+# _start_ollama
+# Note: _start_ollama always attempts Popen — it does NOT check if Ollama is
+# already running first. That guard lives in _ensure_local_model.
 # ---------------------------------------------------------------------------
 
-def test_ensure_ollama_returns_none_when_already_running(monkeypatch):
-    monkeypatch.setattr(interview, "_ollama_is_running", lambda: True)
-    result = interview.ensure_ollama()
-    assert result is None
+def _monotonic_time(start=0.0, step=1.0):
+    """Return a callable that yields start, start+step, start+2*step, ..."""
+    t = [start]
+    def _next():
+        v = t[0]
+        t[0] += step
+        return v
+    return _next
 
 
-def test_ensure_ollama_starts_process_when_not_running(monkeypatch, tmp_path):
-    # First call (pre-start check) → False; second call (poll in loop) → True
+def test_start_ollama_returns_process_when_ollama_responds(monkeypatch):
+    """_start_ollama returns the Popen process when Ollama answers on first poll."""
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
+    mock_proc = MagicMock()
+    monkeypatch.setattr(llm_router.subprocess, "Popen", MagicMock(return_value=mock_proc))
+    monkeypatch.setattr(llm_router.time, "sleep", lambda _: None)
+    monkeypatch.setattr(llm_router.time, "time", _monotonic_time())
+
+    result = _start_ollama()
+    assert result is mock_proc
+
+
+def test_start_ollama_starts_process_when_not_running(monkeypatch):
+    """Returns the process after a single failed poll followed by a passing poll."""
     results = iter([False, True])
-    monkeypatch.setattr(interview, "_ollama_is_running", lambda: next(results))
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: next(results))
 
     mock_proc = MagicMock()
-    monkeypatch.setattr(interview.subprocess, "Popen", MagicMock(return_value=mock_proc))
-    monkeypatch.setattr(interview, "OLLAMA_LOG_PATH", tmp_path / "ollama.log")
-    monkeypatch.setattr(interview.time, "sleep", lambda x: None)
+    monkeypatch.setattr(llm_router.subprocess, "Popen", MagicMock(return_value=mock_proc))
+    monkeypatch.setattr(llm_router.time, "sleep", lambda _: None)
+    monkeypatch.setattr(llm_router.time, "time", _monotonic_time())
 
-    # time.time: first call sets deadline, second call is the while-condition check
-    t_calls = iter([0.0, 1.0, 1.0])
-    monkeypatch.setattr(interview.time, "time", lambda: next(t_calls))
-
-    result = interview.ensure_ollama()
+    result = _start_ollama()
     assert result is mock_proc
-    assert interview.subprocess.Popen.called
+    assert llm_router.subprocess.Popen.called
 
 
-def test_ensure_ollama_popen_args(monkeypatch, tmp_path):
+def test_start_ollama_popen_args(monkeypatch):
     """Popen must be called with ['ollama', 'serve'] in a new session."""
-    results = iter([False, True])
-    monkeypatch.setattr(interview, "_ollama_is_running", lambda: next(results))
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
 
     captured = {}
-    def mock_popen(args, stdout=None, stderr=None, start_new_session=False):
+    def mock_popen(args, **kwargs):
         captured["args"] = args
-        captured["start_new_session"] = start_new_session
+        captured["start_new_session"] = kwargs.get("start_new_session", False)
         return MagicMock()
-    monkeypatch.setattr(interview.subprocess, "Popen", mock_popen)
-    monkeypatch.setattr(interview, "OLLAMA_LOG_PATH", tmp_path / "ollama.log")
-    monkeypatch.setattr(interview.time, "sleep", lambda x: None)
+    monkeypatch.setattr(llm_router.subprocess, "Popen", mock_popen)
+    monkeypatch.setattr(llm_router.time, "sleep", lambda _: None)
+    monkeypatch.setattr(llm_router.time, "time", _monotonic_time())
 
-    t_calls = iter([0.0, 1.0])
-    monkeypatch.setattr(interview.time, "time", lambda: next(t_calls))
-
-    interview.ensure_ollama()
+    _start_ollama()
     assert captured["args"] == ["ollama", "serve"]
     assert captured["start_new_session"] is True
 
 
-def test_ensure_ollama_writes_log_to_correct_path(monkeypatch, tmp_path):
-    """Ollama stdout/stderr must be directed to OLLAMA_LOG_PATH."""
-    results = iter([False, True])
-    monkeypatch.setattr(interview, "_ollama_is_running", lambda: next(results))
+def test_start_ollama_writes_log_to_correct_path(monkeypatch, tmp_path):
+    """When log_path is provided, stdout/stderr are directed to that file."""
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
 
     log_path = tmp_path / "ollama.log"
-    monkeypatch.setattr(interview, "OLLAMA_LOG_PATH", log_path)
-
     opened_paths = []
     real_open = open
-    def mock_open(path, mode="r", **kw):
+    def mock_open(path, mode="r", **kwargs):
         opened_paths.append(str(path))
-        return real_open(path, mode, **kw)
+        return real_open(path, mode, **kwargs)
 
     monkeypatch.setattr("builtins.open", mock_open)
-    monkeypatch.setattr(interview.subprocess, "Popen", lambda args, stdout=None, stderr=None, start_new_session=False: MagicMock())
-    monkeypatch.setattr(interview.time, "sleep", lambda x: None)
+    monkeypatch.setattr(llm_router.subprocess, "Popen", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(llm_router.time, "sleep", lambda _: None)
+    monkeypatch.setattr(llm_router.time, "time", _monotonic_time())
 
-    t_calls = iter([0.0, 1.0])
-    monkeypatch.setattr(interview.time, "time", lambda: next(t_calls))
-
-    interview.ensure_ollama()
+    _start_ollama(log_path=log_path)
     assert str(log_path) in opened_paths
 
 
-def test_ensure_ollama_exits_if_not_available_in_time(monkeypatch, tmp_path):
-    """If Ollama doesn't respond within 10 s, terminate the process and exit."""
-    monkeypatch.setattr(interview, "_ollama_is_running", lambda: False)
+def test_start_ollama_returns_none_if_not_available_in_time(monkeypatch):
+    """If Ollama doesn't respond within the deadline, terminate and return None."""
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: False)
     mock_proc = MagicMock()
-    monkeypatch.setattr(interview.subprocess, "Popen", MagicMock(return_value=mock_proc))
-    monkeypatch.setattr(interview, "OLLAMA_LOG_PATH", tmp_path / "ollama.log")
-    monkeypatch.setattr(interview.time, "sleep", lambda x: None)
+    monkeypatch.setattr(llm_router.subprocess, "Popen", MagicMock(return_value=mock_proc))
+    monkeypatch.setattr(llm_router.time, "sleep", lambda _: None)
+    # step=20 means second call to time.time() returns 20.0, past the 15s deadline
+    monkeypatch.setattr(llm_router.time, "time", _monotonic_time(step=20.0))
 
-    # deadline = 0 + 10 = 10; loop condition: 11 < 10 → False immediately
-    t_calls = iter([0.0, 11.0])
-    monkeypatch.setattr(interview.time, "time", lambda: next(t_calls))
-
-    with pytest.raises(SystemExit):
-        interview.ensure_ollama()
-
+    result = _start_ollama()
+    assert result is None
     mock_proc.terminate.assert_called_once()
 
 
-def test_ensure_ollama_exits_if_ollama_command_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(interview, "_ollama_is_running", lambda: False)
-    monkeypatch.setattr(interview, "OLLAMA_LOG_PATH", tmp_path / "ollama.log")
+def test_start_ollama_returns_none_if_ollama_command_missing(monkeypatch):
+    monkeypatch.setattr(llm_router.subprocess, "Popen",
+                        MagicMock(side_effect=FileNotFoundError("ollama not found")))
 
-    def raise_not_found(*a, **kw):
-        raise FileNotFoundError("ollama not found")
-    monkeypatch.setattr(interview.subprocess, "Popen", raise_not_found)
-
-    with pytest.raises(SystemExit):
-        interview.ensure_ollama()
+    result = _start_ollama()
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -854,117 +887,87 @@ def _tags_response(model_names: list) -> MagicMock:
     return mock
 
 
-def test_ensure_model_does_nothing_when_model_present(monkeypatch):
-    monkeypatch.setattr(interview.requests, "get", lambda *a, **kw: _tags_response(["llama3.1:8b"]))
-    pulled = []
-    monkeypatch.setattr(interview.subprocess, "run", lambda *a, **kw: pulled.append(a))
-    interview.ensure_model()
-    assert not pulled
+def test_ensure_local_model_true_when_running_and_present(monkeypatch):
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
+    monkeypatch.setattr(llm_router, "_ollama_has_model", lambda m: True)
+    assert _ensure_local_model("llama3.1:8b") is True
 
 
-def test_ensure_model_accepts_tagged_variant(monkeypatch):
-    """llama3.1:8b-instruct-q4_K_M should count as llama3.1:8b present."""
-    monkeypatch.setattr(
-        interview.requests, "get",
-        lambda *a, **kw: _tags_response(["llama3.1:8b-instruct-q4_K_M"])
-    )
-    pulled = []
-    monkeypatch.setattr(interview.subprocess, "run", lambda *a, **kw: pulled.append(a))
-    interview.ensure_model()
-    assert not pulled
+def test_ensure_local_model_pulls_when_model_missing(monkeypatch):
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
+    monkeypatch.setattr(llm_router, "_ollama_has_model", lambda m: False)
+    monkeypatch.setattr(llm_router, "_pull_model", lambda m: True)
+    assert _ensure_local_model("llama3.1:8b") is True
 
 
-def test_ensure_model_pulls_when_missing(monkeypatch, capsys):
-    monkeypatch.setattr(interview.requests, "get", lambda *a, **kw: _tags_response(["llama3:latest"]))
-    pulled = []
-    monkeypatch.setattr(interview.subprocess, "run", lambda args, **kw: pulled.append(args))
-    interview.ensure_model()
-    assert pulled == [["ollama", "pull", "llama3.1:8b"]]
-    out = capsys.readouterr().out
-    assert "llama3.1:8b not found" in out
-    assert "Pulling now" in out
+def test_ensure_local_model_false_when_pull_fails(monkeypatch):
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
+    monkeypatch.setattr(llm_router, "_ollama_has_model", lambda m: False)
+    monkeypatch.setattr(llm_router, "_pull_model", lambda m: False)
+    assert _ensure_local_model("llama3.1:8b") is False
 
 
-def test_ensure_model_pull_message_exact(monkeypatch, capsys):
-    monkeypatch.setattr(interview.requests, "get", lambda *a, **kw: _tags_response([]))
-    monkeypatch.setattr(interview.subprocess, "run", lambda *a, **kw: None)
-    interview.ensure_model()
-    out = capsys.readouterr().out
-    assert "llama3.1:8b not found. Pulling now — this may take a few minutes on first run..." in out
+def test_ensure_local_model_starts_ollama_if_not_running(monkeypatch):
+    monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: False)
+    monkeypatch.setattr(llm_router, "_start_ollama", lambda: MagicMock())
+    monkeypatch.setattr(llm_router, "_ollama_has_model", lambda m: True)
+    assert _ensure_local_model("llama3.1:8b") is True
 
 
 # ---------------------------------------------------------------------------
-# main — Ollama lifecycle management
+# main
 # ---------------------------------------------------------------------------
 
-def test_main_terminates_and_waits_for_ollama(monkeypatch):
-    """main must terminate then wait for the process it started."""
-    mock_proc = MagicMock()
-    monkeypatch.setattr(interview, "ensure_ollama", lambda: mock_proc)
-    monkeypatch.setattr(interview, "ensure_model", lambda: None)
+def test_main_runs_interview_with_resolved_config(monkeypatch):
+    """main calls run_interview with the config from resolve_router."""
+    config = _local_config()
+    monkeypatch.setattr(interview, "resolve_router", lambda: config)
+    monkeypatch.setattr(interview, "print_routing_report", lambda c: None)
     monkeypatch.setattr(interview, "check_database", lambda: None)
-    monkeypatch.setattr(interview, "run_interview", lambda: None)
+    received = []
+    monkeypatch.setattr(interview, "run_interview", lambda c: received.append(c))
     monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
 
     interview.main()
 
-    mock_proc.terminate.assert_called_once()
-    mock_proc.wait.assert_called_once_with(timeout=5)
-    mock_proc.kill.assert_not_called()
+    assert received == [config]
 
 
-def test_main_kills_ollama_if_wait_times_out(monkeypatch):
-    """If wait times out, main must send SIGKILL."""
-    mock_proc = MagicMock()
-    mock_proc.wait.side_effect = interview.subprocess.TimeoutExpired(cmd="ollama", timeout=5)
-    monkeypatch.setattr(interview, "ensure_ollama", lambda: mock_proc)
-    monkeypatch.setattr(interview, "ensure_model", lambda: None)
-    monkeypatch.setattr(interview, "check_database", lambda: None)
-    monkeypatch.setattr(interview, "run_interview", lambda: None)
+def test_main_exits_on_configuration_error(monkeypatch):
+    """main calls sys.exit(1) when resolve_router raises ConfigurationError."""
+    from config.llm_router import ConfigurationError
+    monkeypatch.setattr(interview, "resolve_router",
+                        lambda: (_ for _ in ()).throw(ConfigurationError("no backend")))
     monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
 
-    interview.main()
-
-    mock_proc.terminate.assert_called_once()
-    mock_proc.kill.assert_called_once()
-
-
-def test_main_does_not_terminate_when_ollama_was_already_running(monkeypatch):
-    """If ensure_ollama returns None (already running), terminate must not be called."""
-    monkeypatch.setattr(interview, "ensure_ollama", lambda: None)
-    monkeypatch.setattr(interview, "ensure_model", lambda: None)
-    monkeypatch.setattr(interview, "check_database", lambda: None)
-    monkeypatch.setattr(interview, "run_interview", lambda: None)
-    monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
-
-    # Should complete without error and without trying to terminate None
-    interview.main()
-
-
-def test_main_terminates_ollama_even_when_interview_raises(monkeypatch):
-    """Ollama is terminated even if run_interview raises an unhandled exception."""
-    mock_proc = MagicMock()
-    monkeypatch.setattr(interview, "ensure_ollama", lambda: mock_proc)
-    monkeypatch.setattr(interview, "ensure_model", lambda: None)
-    monkeypatch.setattr(interview, "check_database", lambda: None)
-    monkeypatch.setattr(interview, "run_interview", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
-
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(SystemExit) as exc_info:
         interview.main()
 
-    mock_proc.terminate.assert_called_once()
+    assert exc_info.value.code == 1
 
 
-def test_main_terminates_ollama_on_system_exit(monkeypatch):
-    """Ollama is terminated even when check_database calls sys.exit."""
-    mock_proc = MagicMock()
-    monkeypatch.setattr(interview, "ensure_ollama", lambda: mock_proc)
-    monkeypatch.setattr(interview, "ensure_model", lambda: None)
+def test_main_checks_database_before_interview(monkeypatch):
+    """check_database is called before run_interview."""
+    config = _local_config()
+    monkeypatch.setattr(interview, "resolve_router", lambda: config)
+    monkeypatch.setattr(interview, "print_routing_report", lambda c: None)
+    call_order = []
+    monkeypatch.setattr(interview, "check_database", lambda: call_order.append("db"))
+    monkeypatch.setattr(interview, "run_interview", lambda c: call_order.append("interview"))
+    monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
+
+    interview.main()
+
+    assert call_order == ["db", "interview"]
+
+
+def test_main_exits_if_database_check_fails(monkeypatch):
+    """If check_database calls sys.exit, main propagates the SystemExit."""
+    config = _local_config()
+    monkeypatch.setattr(interview, "resolve_router", lambda: config)
+    monkeypatch.setattr(interview, "print_routing_report", lambda c: None)
     monkeypatch.setattr(interview, "check_database", lambda: sys.exit(1))
     monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
 
     with pytest.raises(SystemExit):
         interview.main()
-
-    mock_proc.terminate.assert_called_once()

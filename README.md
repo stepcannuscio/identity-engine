@@ -15,7 +15,7 @@ application layer yet.
 - The encryption key is stored in the system keychain — never on disk in plaintext
 - Pre-commit hooks block any attempt to commit `.db` files or secret-like strings
 - Each attribute carries a `routing` flag: `local_only` (default) or `external_ok`
-- The interview script uses Ollama (local) for extraction — no external API calls
+- API keys are stored in the system keychain and never logged, printed, or committed
 
 ## Quick start
 
@@ -26,6 +26,39 @@ make test       # run the test suite
 make interview  # start the interactive identity interview
 ```
 
+## LLM backend
+
+The interview script automatically selects the best available backend at
+startup and prints a one-line summary so you always know what's running:
+
+```
+──────────────────────────────────────────────────────────────
+  Running locally   llama3.1:8b            (Apple Silicon, 36GB)
+──────────────────────────────────────────────────────────────
+```
+
+**Selection order — local is always preferred:**
+
+| Hardware | RAM | Backend | Model |
+|---|---|---|---|
+| Apple Silicon | ≥ 16 GB | Ollama (local) | `llama3.1:8b` |
+| Apple Silicon | 8–15 GB | Ollama (local) | `llama3.2:3b` |
+| Intel Mac | ≥ 16 GB | Ollama (local) | `llama3.2:3b` |
+| Intel Mac / other | < 16 GB | API | Anthropic or Groq |
+
+If local Ollama is not installed or the model cannot be pulled, the router
+falls back to API providers in this order: Anthropic → Groq. If neither is
+configured, startup exits with clear instructions.
+
+**Adding API keys (stored in system keychain, never on disk):**
+
+```sh
+make add-anthropic-key KEY=sk-ant-...
+make add-groq-key KEY=gsk_...
+```
+
+See [docs/llm_routing.md](docs/llm_routing.md) for the full routing reference.
+
 ## Seeding your identity store
 
 `make interview` launches a guided terminal interview across eight identity
@@ -34,20 +67,22 @@ and beliefs.
 
 **How it works:**
 
-1. You answer one question at a time in plain English
-2. Ollama (`llama3.1:8b`, running locally) extracts structured attributes from
-   your answer and shows you a numbered preview
-3. You confirm, skip, edit, or retry before anything is written
-4. Confirmed attributes are written to the database immediately — nothing is
+1. The router detects your hardware and selects a backend automatically
+2. You answer one question at a time in plain English
+3. The LLM extracts structured attributes from your answer and shows you a
+   numbered preview
+4. You confirm, skip, edit, or retry before anything is written
+5. Confirmed attributes are written to the database immediately — nothing is
    batched or written without your explicit approval
-5. A `reflection_sessions` record is saved at the end of every session,
+6. A `reflection_sessions` record is saved at the end of every session,
    including interrupted ones
 
 **Before your first interview:**
 
 ```sh
-make init       # if you haven't already
-make interview  # Ollama is started and llama3.1:8b pulled automatically
+make setup      # if you haven't already
+make init
+make interview  # Ollama is started and the model pulled automatically if needed
 ```
 
 You can run the interview as many times as you like. Re-answering a question
@@ -57,16 +92,20 @@ skip — the full history is preserved in `attribute_history`.
 ## Structure
 
 ```
-config/settings.py          — paths, keychain access, routing constants
+config/settings.py          — paths, keychain access, routing and source constants
+config/llm_router.py        — hardware detection, backend selection, unified inference
 db/connection.py            — SQLCipher connection context manager
 db/schema.py                — DDL and domain seeding
 scripts/init_db.py          — one-time (idempotent) initialisation script
 scripts/seed_interview.py   — interactive identity interview (make interview)
 tests/test_schema.py        — schema and constraint tests
 tests/test_interview.py     — interview logic, DB helpers, and UI flow tests
+tests/test_llm_router.py    — hardware detection, router resolution, and inference tests
 docs/schema.md              — full schema reference
 docs/interview.md           — interview script reference
+docs/llm_routing.md         — LLM routing reference and key setup guide
 ```
 
 See [docs/schema.md](docs/schema.md) for the full schema reference.
 See [docs/interview.md](docs/interview.md) for the interview script reference.
+See [docs/llm_routing.md](docs/llm_routing.md) for the LLM routing reference.

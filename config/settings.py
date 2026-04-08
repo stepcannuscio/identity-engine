@@ -24,6 +24,25 @@ STABLE = "stable"
 EVOLVING = "evolving"
 
 
+_PROVIDER_KEY_MAP = {
+    "anthropic": "anthropic-api-key",
+    "groq":      "groq-api-key",
+}
+
+
+def get_api_key(provider: str) -> str | None:
+    """Retrieve an API key from the system keychain by provider name.
+
+    Supported providers: "anthropic", "groq".
+    Returns None if no key is stored for that provider.
+    Never logs, prints, or raises with the key value included.
+    """
+    keyring_username = _PROVIDER_KEY_MAP.get(provider)
+    if keyring_username is None:
+        return None
+    return keyring.get_password(_KEYRING_SERVICE, keyring_username) or None
+
+
 def get_db_key() -> str:
     """Retrieve the database encryption key from the system keychain.
 
