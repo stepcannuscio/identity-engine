@@ -191,3 +191,28 @@ INSERT INTO inference_evidence (
 included in a request to Claude or any other external service. A local Ollama
 model may use it. If the user later decides this is safe to share, they update
 `routing` to `external_ok` — and that change is logged in `attribute_history`.
+
+---
+
+## How attributes are created
+
+The primary ingestion path is `scripts/seed_interview.py` (run via
+`make interview`). The interview:
+
+1. Asks questions across the eight domains, one at a time
+2. Sends each answer to a local Ollama model, which returns a JSON array of
+   extracted attributes
+3. Lets the user preview, edit, and confirm before any write occurs
+4. Writes each confirmed attribute with `source = 'reflection'` and
+   `routing = 'local_only'` — these values are fixed by the script regardless
+   of what the model suggests
+5. If a label already exists as an active attribute in the same domain,
+   supersedes the old row (sets `status = 'superseded'`), appends a row to
+   `attribute_history` with `changed_by = 'reflection'`, then inserts the new
+   active row
+6. Writes a `reflection_sessions` row at session end (or on Ctrl+C)
+
+The `external_calls_made` counter on `reflection_sessions` is always `0` for
+interview sessions because Ollama is local.
+
+See [interview.md](interview.md) for the full operational reference.

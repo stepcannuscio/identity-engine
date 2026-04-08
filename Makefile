@@ -4,7 +4,7 @@ PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help setup init test clean run
+.PHONY: help setup init test clean run interview
 
 ## Show this help message
 help:
@@ -55,3 +55,7 @@ clean:
 ## Phase 2 placeholder
 run:
 	@echo "Application layer not yet implemented."
+
+## Run the interactive identity interview
+interview:
+	.venv/bin/python scripts/seed_interview.py
