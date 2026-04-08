@@ -3,10 +3,10 @@
 A privacy-first personal identity store. Models who you are — values, goals,
 personality, patterns — in a structured, queryable, encrypted local database.
 
-## Status: Phase 1 — Foundation + Identity Seeding
+## Status: Phase 2 — Query Engine
 
-Schema, security infrastructure, and interactive identity interview. No
-application layer yet.
+Schema, security infrastructure, identity seeding, and an interactive query
+engine that answers grounded questions using retrieved identity attributes.
 
 ## Security model
 
@@ -24,6 +24,7 @@ make setup      # create venv, install deps, install pre-commit hooks
 make init       # generate key, create database, seed domains
 make test       # run the test suite
 make interview  # start the interactive identity interview
+make query      # start interactive freeform query mode
 make view       # pretty-print the identity store
 ```
 
@@ -118,6 +119,25 @@ in `attribute_history` but excluded from the view.
 
 See [docs/view_db.md](docs/view_db.md) for the full output format reference.
 
+## Querying the store
+
+`make query` launches an interactive freeform question loop:
+
+- Classifies each question (`simple` or `open_ended`)
+- Retrieves and scores relevant active attributes from the encrypted store
+- Builds a grounded prompt with capped conversation history (6 exchanges)
+- Generates a concise answer through the resolved backend
+- Writes one `reflection_sessions` record when the session exits
+
+In-session commands:
+
+- `history` — print current session history
+- `clear` — clear current session history
+- `status` — show query count, retrieved-attribute total, and backend
+- `quit` / `q` — exit and persist session summary
+
+See [docs/query.md](docs/query.md) for details.
+
 ## Structure
 
 ```
@@ -125,20 +145,29 @@ config/settings.py          — paths, keychain access, routing and source const
 config/llm_router.py        — hardware detection, backend selection, unified inference
 db/connection.py            — SQLCipher connection context manager
 db/schema.py                — DDL and domain seeding
+engine/query_classifier.py  — deterministic simple/open-ended query classification
+engine/retriever.py         — score-based identity attribute retrieval
+engine/prompt_builder.py    — grounded system prompt + message assembly
+engine/session.py           — in-memory session state and routing log
+engine/query_engine.py      — end-to-end query orchestration
 scripts/init_db.py          — one-time (idempotent) initialisation script
 scripts/seed_interview.py   — interactive identity interview (make interview)
+scripts/query.py            — interactive freeform query engine (make query)
 scripts/view_db.py          — terminal viewer for the identity store (make view)
 tests/test_schema.py        — schema and constraint tests
 tests/test_interview.py     — interview logic, DB helpers, and UI flow tests
 tests/test_llm_router.py    — hardware detection, router resolution, and inference tests
+tests/test_query_engine.py  — classifier, retriever, prompts, session, query flow tests
 tests/test_view_db.py       — viewer output and filtering tests
 docs/schema.md              — full schema reference
 docs/interview.md           — interview script reference
 docs/llm_routing.md         — LLM routing reference and key setup guide
+docs/query.md               — query engine and interactive session reference
 docs/view_db.md             — viewer output format reference
 ```
 
 See [docs/schema.md](docs/schema.md) for the full schema reference.
 See [docs/interview.md](docs/interview.md) for the interview script reference.
 See [docs/llm_routing.md](docs/llm_routing.md) for the LLM routing reference.
+See [docs/query.md](docs/query.md) for the query engine reference.
 See [docs/view_db.md](docs/view_db.md) for the viewer reference.

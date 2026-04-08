@@ -7,11 +7,14 @@ best available inference backend, and exposes a single unified inference
 function used by all other scripts.
 
 Usage:
-    from config.llm_router import resolve_router, extract_attributes, print_routing_report
+    from config.llm_router import (
+        resolve_router, extract_attributes, generate_response, print_routing_report
+    )
 
     config = resolve_router()
     print_routing_report(config)
     attrs = extract_attributes(question, answer, config)
+    text = generate_response(messages, config)
 """
 
 import json
@@ -343,18 +346,20 @@ def _parse_json_response(raw: str) -> list:
     return json.loads(content)
 
 
-def _call_ollama(messages: list[dict], model: str) -> str:
+def _call_ollama(messages: list[dict], model: str, timeout: int = OLLAMA_TIMEOUT) -> str:
     payload = {"model": model, "messages": messages, "stream": False}
     resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
+        f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=timeout
     )
     resp.raise_for_status()
     return resp.json()["message"]["content"].strip()
 
 
-def _call_anthropic(messages: list[dict], model: str, api_key: str) -> str:
+def _call_anthropic(
+    messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
+) -> str:
     import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
     # Separate system from user messages
     system_content = ""
     user_messages = []
@@ -372,9 +377,11 @@ def _call_anthropic(messages: list[dict], model: str, api_key: str) -> str:
     return response.content[0].text.strip()  # type: ignore[union-attr]
 
 
-def _call_groq(messages: list[dict], model: str, api_key: str) -> str:
+def _call_groq(
+    messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
+) -> str:
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = Groq(api_key=api_key, timeout=timeout)
     response = client.chat.completions.create(
         model=model,
         messages=messages,  # type: ignore[arg-type]
@@ -428,6 +435,27 @@ def extract_attributes(question: str, answer: str, config: ProviderConfig) -> li
 
     # Unreachable, but satisfies type checkers
     raise ExtractionError("Extraction loop exited without result.")
+
+
+def generate_response(messages: list[dict], config: ProviderConfig) -> str:
+    """Generate a plain-text response from a full message array.
+
+    Uses the same backend routing policy as extract_attributes() and enforces
+    a 120-second timeout across all providers.
+    """
+    timeout_seconds = 120
+
+    if config.is_local:
+        return _call_ollama(messages, config.model, timeout=timeout_seconds)
+    if config.provider == "anthropic":
+        assert config.api_key is not None
+        return _call_anthropic(
+            messages, config.model, config.api_key, timeout=timeout_seconds
+        )
+    if config.provider == "groq":
+        assert config.api_key is not None
+        return _call_groq(messages, config.model, config.api_key, timeout=timeout_seconds)
+    raise ConfigurationError(f"Unknown provider: {config.provider!r}")
 
 # ---------------------------------------------------------------------------
 # Startup report

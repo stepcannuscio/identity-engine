@@ -1,9 +1,10 @@
 # LLM Routing
 
 `config/llm_router.py` automatically selects the best available inference
-backend for the current machine and exposes a single `extract_attributes()`
-function used by all scripts. No script other than `llm_router.py` should
-call an LLM directly.
+backend for the current machine and exposes two unified inference functions:
+`extract_attributes()` for structured extraction and `generate_response()` for
+freeform chat responses. No script other than `llm_router.py` should call an
+LLM directly.
 
 ---
 

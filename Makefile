@@ -4,7 +4,7 @@ PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help setup init test clean run interview view add-anthropic-key add-groq-key
+.PHONY: help setup init test clean interview query view add-anthropic-key add-groq-key
 
 ## Show this help message
 help:
@@ -14,7 +14,7 @@ help:
 	@echo "  make init    Run scripts/init_db.py to initialise the encrypted database"
 	@echo "  make test    Run the pytest test suite with verbose output"
 	@echo "  make clean   Remove .venv and __pycache__ (never removes the database)"
-	@echo "  make run     (Phase 2 placeholder) Print a not-implemented message"
+	@echo "  make query   Start an interactive freeform query session"
 	@echo "  make view    Pretty-print the identity store grouped by domain"
 	@echo ""
 
@@ -60,6 +60,10 @@ run:
 ## Run the interactive identity interview
 interview:
 	.venv/bin/python scripts/seed_interview.py
+
+## Run an interactive freeform query session
+query:
+	.venv/bin/python scripts/query.py
 
 ## Pretty-print the identity store grouped by domain
 view:
