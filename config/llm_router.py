@@ -3,8 +3,8 @@ llm_router.py — Hardware-aware LLM backend router for the identity-engine.
 
 This module is a standalone, importable utility with zero knowledge of the
 identity store, database, or schema. It detects local hardware, resolves the
-best available inference backend, and exposes a single unified inference
-function used by all other scripts.
+best available inference backend, and exposes unified extraction and response
+generation helpers, including streaming support for the FastAPI server.
 
 Usage:
     from config.llm_router import (
@@ -22,8 +22,9 @@ import logging
 import platform
 import subprocess
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import requests
 
@@ -31,6 +32,7 @@ import requests
 from config.settings import get_api_key
 
 logger = logging.getLogger(__name__)
+_STARTED_OLLAMA_PROCESS: object | None = None
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -241,10 +243,13 @@ def _pull_model(model: str) -> bool:
 
 def _ensure_local_model(model: str) -> bool:
     """Ensure Ollama is running and the model is available. Returns True on success."""
+    global _STARTED_OLLAMA_PROCESS
+
     if not _ollama_is_running():
         proc = _start_ollama()
         if proc is None:
             return False
+        _STARTED_OLLAMA_PROCESS = proc
 
     if _ollama_has_model(model):
         return True
@@ -256,6 +261,66 @@ def _ensure_local_model(model: str) -> bool:
 # ---------------------------------------------------------------------------
 # Router resolution
 # ---------------------------------------------------------------------------
+
+
+def _resolve_local_router(hw: dict[str, Any]) -> ProviderConfig:
+    tier = hw["recommended_tier"]
+    if tier not in ("local_large", "local_small"):
+        raise ConfigurationError("Local inference is not available on this hardware.")
+
+    model = TIER_MODELS[tier]
+    if not _ensure_local_model(model):
+        raise ConfigurationError("Local Ollama inference is not available.")
+
+    return ProviderConfig(
+        provider="ollama",
+        api_key=None,
+        model=model,
+        is_local=True,
+        arch=hw["arch"],
+        ram_gb=hw["ram_gb"],
+    )
+
+
+def resolve_local_router() -> ProviderConfig:
+    """Resolve a local-only Ollama backend or raise ConfigurationError."""
+    return _resolve_local_router(detect_hardware())
+
+
+def _resolve_external_router(hw: dict[str, Any]) -> ProviderConfig:
+    anthropic_key = get_api_key("anthropic")
+    if anthropic_key:
+        return ProviderConfig(
+            provider="anthropic",
+            api_key=anthropic_key,
+            model="claude-sonnet-4-6",
+            is_local=False,
+            arch=hw["arch"],
+            ram_gb=hw["ram_gb"],
+        )
+
+    groq_key = get_api_key("groq")
+    if groq_key:
+        return ProviderConfig(
+            provider="groq",
+            api_key=groq_key,
+            model="llama-3.1-8b-instant",
+            is_local=False,
+            arch=hw["arch"],
+            ram_gb=hw["ram_gb"],
+        )
+
+    raise ConfigurationError(
+        "No external LLM backend is available.\n\n"
+        "Options:\n"
+        "  1. Add an Anthropic API key:  make add-anthropic-key KEY=sk-ant-...\n"
+        "  2. Add a Groq API key:        make add-groq-key KEY=gsk_...\n"
+    )
+
+
+def resolve_external_router() -> ProviderConfig:
+    """Resolve an external-only backend or raise ConfigurationError."""
+    return _resolve_external_router(detect_hardware())
 
 
 def resolve_router() -> ProviderConfig:
@@ -271,46 +336,19 @@ def resolve_router() -> ProviderConfig:
         ConfigurationError: when no usable backend is found.
     """
     hw = detect_hardware()
-    arch = hw["arch"]
-    ram_gb = hw["ram_gb"]
-    tier = hw["recommended_tier"]
 
     # Try local first
-    if tier in ("local_large", "local_small"):
-        model = TIER_MODELS[tier]
-        if _ensure_local_model(model):
-            return ProviderConfig(
-                provider="ollama",
-                api_key=None,
-                model=model,
-                is_local=True,
-                arch=arch,
-                ram_gb=ram_gb,
-            )
-        # Local failed — fall through to API
+    if hw["recommended_tier"] in ("local_large", "local_small"):
+        try:
+            return _resolve_local_router(hw)
+        except ConfigurationError as exc:
+            logger.warning("Local LLM resolution failed: %s", exc)
 
     # Try API providers in preference order
-    anthropic_key = get_api_key("anthropic")
-    if anthropic_key:
-        return ProviderConfig(
-            provider="anthropic",
-            api_key=anthropic_key,
-            model="claude-sonnet-4-6",
-            is_local=False,
-            arch=arch,
-            ram_gb=ram_gb,
-        )
-
-    groq_key = get_api_key("groq")
-    if groq_key:
-        return ProviderConfig(
-            provider="groq",
-            api_key=groq_key,
-            model="llama-3.1-8b-instant",
-            is_local=False,
-            arch=arch,
-            ram_gb=ram_gb,
-        )
+    try:
+        return _resolve_external_router(hw)
+    except ConfigurationError:
+        pass
 
     # Nothing available
     raise ConfigurationError(
@@ -355,6 +393,26 @@ def _call_ollama(messages: list[dict], model: str, timeout: int = OLLAMA_TIMEOUT
     return resp.json()["message"]["content"].strip()
 
 
+def _stream_ollama(
+    messages: list[dict], model: str, timeout: int = OLLAMA_TIMEOUT
+) -> Generator[str, None, None]:
+    payload = {"model": model, "messages": messages, "stream": True}
+    with requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json=payload,
+        timeout=timeout,
+        stream=True,
+    ) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            chunk = json.loads(line.decode("utf-8"))
+            content = chunk.get("message", {}).get("content", "")
+            if content:
+                yield str(content)
+
+
 def _call_anthropic(
     messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
 ) -> str:
@@ -377,6 +435,31 @@ def _call_anthropic(
     return response.content[0].text.strip()  # type: ignore[union-attr]
 
 
+def _stream_anthropic(
+    messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
+) -> Generator[str, None, None]:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+    system_content = ""
+    user_messages = []
+    for message in messages:
+        if message["role"] == "system":
+            system_content = message["content"]
+        else:
+            user_messages.append(message)
+
+    with client.messages.stream(
+        model=model,
+        max_tokens=1024,
+        system=system_content,
+        messages=user_messages,  # type: ignore[arg-type]
+    ) as stream:
+        for text in stream.text_stream:
+            if text:
+                yield text
+
+
 def _call_groq(
     messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
 ) -> str:
@@ -389,6 +472,27 @@ def _call_groq(
     )
     content = response.choices[0].message.content or ""
     return content.strip()
+
+
+def _stream_groq(
+    messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
+) -> Generator[str, None, None]:
+    from groq import Groq
+
+    client = Groq(api_key=api_key, timeout=timeout)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,  # type: ignore[arg-type]
+        max_tokens=1024,
+        stream=True,
+    )
+    for chunk in response:
+        if not hasattr(chunk, "choices"):
+            continue
+        chunk_data = cast(Any, chunk)
+        delta = chunk_data.choices[0].delta.content or ""
+        if delta:
+            yield delta
 
 
 def extract_attributes(question: str, answer: str, config: ProviderConfig) -> list[dict]:
@@ -437,7 +541,11 @@ def extract_attributes(question: str, answer: str, config: ProviderConfig) -> li
     raise ExtractionError("Extraction loop exited without result.")
 
 
-def generate_response(messages: list[dict], config: ProviderConfig) -> str:
+def generate_response(
+    messages: list[dict],
+    config: ProviderConfig,
+    stream: bool = False,
+) -> str | Generator[str, None, None]:
     """Generate a plain-text response from a full message array.
 
     Uses the same backend routing policy as extract_attributes() and enforces
@@ -446,16 +554,50 @@ def generate_response(messages: list[dict], config: ProviderConfig) -> str:
     timeout_seconds = 120
 
     if config.is_local:
+        if stream:
+            return _stream_ollama(messages, config.model, timeout=timeout_seconds)
         return _call_ollama(messages, config.model, timeout=timeout_seconds)
     if config.provider == "anthropic":
         assert config.api_key is not None
+        if stream:
+            return _stream_anthropic(
+                messages, config.model, config.api_key, timeout=timeout_seconds
+            )
         return _call_anthropic(
             messages, config.model, config.api_key, timeout=timeout_seconds
         )
     if config.provider == "groq":
         assert config.api_key is not None
+        if stream:
+            return _stream_groq(
+                messages, config.model, config.api_key, timeout=timeout_seconds
+            )
         return _call_groq(messages, config.model, config.api_key, timeout=timeout_seconds)
     raise ConfigurationError(f"Unknown provider: {config.provider!r}")
+
+
+def shutdown_started_ollama() -> None:
+    """Terminate the Ollama process started by this module, if any."""
+    global _STARTED_OLLAMA_PROCESS
+
+    process = _STARTED_OLLAMA_PROCESS
+    if process is None:
+        return
+
+    terminate = getattr(process, "terminate", None)
+    if callable(terminate):
+        terminate()
+
+    wait = getattr(process, "wait", None)
+    if callable(wait):
+        try:
+            wait(timeout=5)
+        except Exception:
+            kill = getattr(process, "kill", None)
+            if callable(kill):
+                kill()
+
+    _STARTED_OLLAMA_PROCESS = None
 
 # ---------------------------------------------------------------------------
 # Startup report

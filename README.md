@@ -3,10 +3,10 @@
 A privacy-first personal identity store. Models who you are — values, goals,
 personality, patterns — in a structured, queryable, encrypted local database.
 
-## Status: Phase 2 — Query Engine + Quick Capture
+## Status: Phase 3a — FastAPI Backend
 
-Schema, security infrastructure, identity seeding, and an interactive query
-engine that answers grounded questions using retrieved identity attributes.
+Schema, security infrastructure, identity seeding, the interactive query/capture
+CLI flows, and an HTTPS FastAPI backend for the web UI.
 
 ## Security model
 
@@ -16,6 +16,9 @@ engine that answers grounded questions using retrieved identity attributes.
 - Pre-commit hooks block any attempt to commit `.db` files or secret-like strings
 - Each attribute carries a `routing` flag: `local_only` (default) or `external_ok`
 - API keys are stored in the system keychain and never logged, printed, or committed
+- The web server binds to a Tailscale IP when available and never to `0.0.0.0`
+- The web server serves HTTPS only with a self-signed cert in `~/.identity-engine/certs/`
+- The web UI passphrase is stored in the system keychain, never in a file
 
 ## Quick start
 
@@ -26,7 +29,10 @@ make test       # run the test suite
 make interview  # start the interactive identity interview
 make capture    # save a quick note directly as identity attributes
 make query      # start interactive freeform query mode
+make serve      # start the HTTPS FastAPI backend for the web UI
+make smoke  # run a quick API smoke test against the backend
 make view       # pretty-print the identity store
+make set-ui-passphrase  # update the web UI passphrase
 ```
 
 ## LLM backend
@@ -175,6 +181,62 @@ In-session commands:
 
 See [docs/query.md](docs/query.md) for details.
 
+## FastAPI backend
+
+`make serve` starts the local HTTPS backend consumed by the React web UI.
+
+Startup behaviour:
+
+1. Detects a Tailscale IP from `tailscale0` or `utun*`
+2. Falls back to `IDENTITY_ENGINE_BIND_IP`, then `127.0.0.1`
+3. Refuses to bind to `0.0.0.0`
+4. Generates `~/.identity-engine/certs/key.pem` and `cert.pem` on first run
+5. Opens the encrypted database and resolves the active LLM backend
+6. Prompts for a UI passphrase on first run and stores it in the keychain
+
+Authentication:
+
+- `POST /auth/login` issues an in-memory session token valid for 8 hours
+- All routes except `POST /auth/login` and `GET /health` require auth
+- Failed logins are rate-limited per IP
+- Tokens are invalidated on server restart
+
+Core routes:
+
+- `GET /health`
+- `POST /query`
+- `POST /query/stream`
+- `GET/POST/PUT/DELETE /attributes...`
+- `POST /capture/preview`
+- `POST /capture`
+- `GET /sessions`
+
+See [docs/server.md](docs/server.md) for the full API reference.
+
+## Smoke testing the API
+
+After starting the backend with `make serve`, you can run a quick end-to-end
+check with:
+
+```sh
+make smoke
+```
+
+The Python smoke script:
+
+- prompts for the UI passphrase unless `PASSPHRASE` is set
+- defaults to `https://127.0.0.1:8443`
+- can target another server with `BASE_URL=https://100.x.x.x:8443`
+- skips TLS verification by default because the server uses a self-signed cert
+
+Examples:
+
+```sh
+make smoke
+BASE_URL=https://100.x.x.x:8443 PASSPHRASE='your passphrase' make smoke
+.venv/bin/python scripts/smoke_api.py --base-url https://127.0.0.1:8443
+```
+
 ## Structure
 
 ```
@@ -188,18 +250,27 @@ engine/prompt_builder.py    — grounded system prompt + message assembly
 engine/session.py           — in-memory session state and routing log
 engine/query_engine.py      — end-to-end query orchestration
 engine/capture.py           — quick-capture extraction, confirmation, and writes
+server/main.py              — FastAPI app, lifecycle, bind/TLS startup
+server/auth.py              — passphrase login and in-memory session tokens
+server/routes/              — query, attributes, capture, and session endpoints
+server/middleware/          — auth enforcement, interface checks, security headers
+server/models/              — Pydantic request/response schemas
 scripts/init_db.py          — one-time (idempotent) initialisation script
 scripts/seed_interview.py   — interactive identity interview (make interview)
 scripts/capture.py          — quick capture CLI (make capture)
 scripts/query.py            — interactive freeform query engine (make query)
+scripts/serve.py            — HTTPS server entrypoint (make serve)
+scripts/smoke_api.py        — Python API smoke test helper (make smoke)
 scripts/view_db.py          — terminal viewer for the identity store (make view)
 tests/test_capture.py       — quick capture flow, conflicts, and write-path tests
 tests/test_schema.py        — schema and constraint tests
 tests/test_interview.py     — interview logic, DB helpers, and UI flow tests
 tests/test_llm_router.py    — hardware detection, router resolution, and inference tests
 tests/test_query_engine.py  — classifier, retriever, prompts, session, query flow tests
+tests/test_server.py        — FastAPI auth, security, CRUD, and capture endpoint tests
 tests/test_view_db.py       — viewer output and filtering tests
 docs/capture.md             — quick capture command reference
+docs/server.md              — FastAPI backend reference
 docs/schema.md              — full schema reference
 docs/interview.md           — interview script reference
 docs/llm_routing.md         — LLM routing reference and key setup guide
@@ -212,4 +283,5 @@ See [docs/capture.md](docs/capture.md) for the quick capture reference.
 See [docs/interview.md](docs/interview.md) for the interview script reference.
 See [docs/llm_routing.md](docs/llm_routing.md) for the LLM routing reference.
 See [docs/query.md](docs/query.md) for the query engine reference.
+See [docs/server.md](docs/server.md) for the backend server reference.
 See [docs/view_db.md](docs/view_db.md) for the viewer reference.

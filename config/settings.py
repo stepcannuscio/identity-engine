@@ -1,11 +1,20 @@
+"""Canonical settings, constants, and keychain access for identity-engine."""
+
+import logging
+
 from pathlib import Path
+
 import keyring
+from keyring.errors import KeyringError
+
+logger = logging.getLogger(__name__)
 
 DB_DIR = Path.home() / ".identity-engine"
 DB_PATH = DB_DIR / "identity.db"
 
 _KEYRING_SERVICE = "identity-engine"
 _KEYRING_USERNAME = "db-encryption-key"
+_UI_PASSPHRASE_USERNAME = "ui-passphrase"
 
 SQLCIPHER_PBKDF2_ITER = 256000
 SQLCIPHER_PAGE_SIZE = 4096
@@ -40,7 +49,11 @@ def get_api_key(provider: str) -> str | None:
     keyring_username = _PROVIDER_KEY_MAP.get(provider)
     if keyring_username is None:
         return None
-    return keyring.get_password(_KEYRING_SERVICE, keyring_username) or None
+    try:
+        return keyring.get_password(_KEYRING_SERVICE, keyring_username) or None
+    except KeyringError as exc:
+        logger.warning("Unable to read %s API key from keychain: %s", provider, exc)
+        return None
 
 
 def get_db_key() -> str:
@@ -49,7 +62,13 @@ def get_db_key() -> str:
     Raises RuntimeError if the key has not been stored yet.
     Never returns None or an empty string.
     """
-    key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+    try:
+        key = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+    except KeyringError as exc:
+        raise RuntimeError(
+            "Database encryption key could not be read from the system keychain. "
+            "Unlock the keychain or re-run 'make init' in an interactive session."
+        ) from exc
     if not key:
         raise RuntimeError(
             "Database encryption key not found in system keychain. "
@@ -57,3 +76,17 @@ def get_db_key() -> str:
             "Run 'make init' or 'python scripts/init_db.py' to generate and store the key."
         )
     return key
+
+
+def get_ui_passphrase() -> str | None:
+    """Return the UI passphrase from the system keychain, if configured."""
+    try:
+        return keyring.get_password(_KEYRING_SERVICE, _UI_PASSPHRASE_USERNAME) or None
+    except KeyringError as exc:
+        logger.warning("Unable to read UI passphrase from keychain: %s", exc)
+        return None
+
+
+def set_ui_passphrase(passphrase: str) -> None:
+    """Store the UI passphrase in the system keychain."""
+    keyring.set_password(_KEYRING_SERVICE, _UI_PASSPHRASE_USERNAME, passphrase)

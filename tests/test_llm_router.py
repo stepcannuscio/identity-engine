@@ -198,6 +198,28 @@ class TestResolveRouter:
         assert config.is_local is False
         assert config.provider == "anthropic"
 
+    def test_logs_local_resolution_failure_before_fallback(self, caplog):
+        with (
+            patch("config.llm_router.detect_hardware", return_value={
+                "arch": "apple_silicon", "ram_gb": 36.0, "cpu_cores": 10,
+                "has_metal": True, "has_cuda": False, "recommended_tier": "local_large",
+            }),
+            patch(
+                "config.llm_router._resolve_local_router",
+                side_effect=ConfigurationError("Ollama did not start"),
+            ),
+            patch(
+                "config.llm_router.get_api_key",
+                side_effect=(
+                    lambda p: "sk-ant-test" if p == "anthropic" else None
+                ),
+            ),
+        ):
+            config = resolve_router()
+
+        assert config.provider == "anthropic"
+        assert "Local LLM resolution failed: Ollama did not start" in caplog.text
+
     def test_falls_back_to_groq_when_anthropic_missing(self):
         with (
             patch("config.llm_router.detect_hardware", return_value={

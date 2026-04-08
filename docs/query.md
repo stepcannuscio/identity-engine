@@ -3,6 +3,11 @@
 `make query` starts an interactive freeform query session backed by the
 identity store.
 
+Phase 3 also exposes the same query engine over the FastAPI backend:
+
+- `POST /query` for full JSON responses
+- `POST /query/stream` for SSE token streaming
+
 ## End-to-end flow
 
 For each user question:

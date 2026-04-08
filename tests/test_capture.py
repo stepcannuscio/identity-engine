@@ -166,6 +166,50 @@ def test_capture_clamps_confidence_to_point_75(conn, config, monkeypatch):
     assert row == pytest.approx(0.75)
 
 
+def test_capture_defaults_missing_confidence(conn, config, monkeypatch):
+    monkeypatch.setattr(
+        capture_module,
+        "generate_response",
+        lambda messages, provider_config: _mock_capture_response(
+            [
+                {
+                    "domain": "patterns",
+                    "label": "morning_focus",
+                    "value": "I focus best in the morning.",
+                    "elaboration": None,
+                    "mutability": "evolving",
+                }
+            ]
+        ),
+    )
+
+    saved = capture_module.capture("Morning works well for me", None, conn, config, confirm=False)
+
+    assert saved[0]["confidence"] == pytest.approx(0.5)
+
+
+def test_capture_defaults_missing_mutability_and_elaboration(conn, config, monkeypatch):
+    monkeypatch.setattr(
+        capture_module,
+        "generate_response",
+        lambda messages, provider_config: _mock_capture_response(
+            [
+                {
+                    "domain": "values",
+                    "label": "clarity",
+                    "value": "I care about clear communication.",
+                    "confidence": 0.6,
+                }
+            ]
+        ),
+    )
+
+    saved = capture_module.capture("Clarity matters to me", None, conn, config, confirm=False)
+
+    assert saved[0]["mutability"] == "evolving"
+    assert saved[0]["elaboration"] is None
+
+
 def test_conflict_update_marks_old_superseded(conn, config, monkeypatch):
     old_id = _insert_active(conn, "personality", "response_to_change", "Old value")
     monkeypatch.setattr(

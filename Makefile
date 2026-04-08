@@ -4,7 +4,8 @@ PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help setup init test clean interview capture query view add-anthropic-key add-groq-key
+.PHONY: help setup init test clean interview capture query view serve smoke \
+	add-anthropic-key add-groq-key set-ui-passphrase
 
 ## Show this help message
 help:
@@ -16,7 +17,10 @@ help:
 	@echo "  make clean   Remove .venv and __pycache__ (never removes the database)"
 	@echo "  make capture Write a quick capture directly to the identity store"
 	@echo "  make query   Start an interactive freeform query session"
+	@echo "  make serve   Start the HTTPS FastAPI backend server"
+	@echo "  make smoke   Run the Python smoke test against the backend"
 	@echo "  make view    Pretty-print the identity store grouped by domain"
+	@echo "  make set-ui-passphrase  Update the web UI passphrase in the keychain"
 	@echo ""
 
 ## Create .venv, install requirements, install pre-commit hooks
@@ -71,6 +75,14 @@ capture:
 query:
 	.venv/bin/python scripts/query.py
 
+## Run the HTTPS FastAPI backend server
+serve:
+	.venv/bin/python scripts/serve.py
+
+## Run the Python smoke test against the HTTPS backend
+smoke:
+	.venv/bin/python scripts/smoke_api.py
+
 ## Pretty-print the identity store grouped by domain
 view:
 	.venv/bin/python scripts/view_db.py
@@ -88,3 +100,12 @@ add-groq-key:
 	.venv/bin/python -c "import keyring, sys; \
 	keyring.set_password('identity-engine', \
 	'groq-api-key', sys.argv[1])" $(KEY)
+
+## Update the UI passphrase stored in the system keychain
+set-ui-passphrase:
+	.venv/bin/python -c "\
+	import keyring, getpass; \
+	p = getpass.getpass('New UI passphrase (min 12 chars): '); \
+	assert len(p) >= 12, 'Too short'; \
+	keyring.set_password('identity-engine', 'ui-passphrase', p); \
+	print('Passphrase updated.')"

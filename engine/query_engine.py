@@ -6,6 +6,8 @@ response generation, while keeping all session state in the Session object.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from config.llm_router import generate_response
 from engine.prompt_builder import build_prompt
 from engine.query_classifier import classify_query
@@ -13,19 +15,28 @@ from engine.retriever import retrieve_attributes
 from engine.session import Session
 
 
-def query(
+@dataclass
+class QueryContext:
+    """Prepared query state used by both CLI and API entrypoints."""
+
+    query: str
+    query_type: str
+    attributes: list[dict]
+    messages: list[dict[str, str]]
+    backend: str
+
+
+def prepare_query(
     user_query: str,
     session: Session,
     conn,
     provider_config,
-) -> str:
-    """Run one end-to-end query and update only in-memory session state."""
+) -> QueryContext:
+    """Prepare a query without generating a response yet."""
     query_type = classify_query(user_query)
     attributes = retrieve_attributes(user_query, query_type, conn)
 
-    backend = "local" if getattr(provider_config, "is_local", False) else str(
-        getattr(provider_config, "provider", "unknown")
-    )
+    backend = "local" if getattr(provider_config, "is_local", False) else "external"
 
     messages = build_prompt(
         user_query,
@@ -35,10 +46,38 @@ def query(
         target_backend=backend,
     )
 
-    response = generate_response(messages, provider_config)
-    session.add_exchange(user_query, response)
+    return QueryContext(
+        query=user_query,
+        query_type=query_type,
+        attributes=attributes,
+        messages=messages,
+        backend=backend,
+    )
+
+
+def record_query_result(session: Session, context: QueryContext, response: str) -> None:
+    """Persist in-memory session metadata after a completed query."""
+    session.add_exchange(context.query, response)
     session.query_count += 1
-    session.attributes_retrieved += len(attributes)
-    session.log_query(user_query, query_type, backend, len(attributes))
+    session.attributes_retrieved += len(context.attributes)
+    session.log_query(
+        context.query,
+        context.query_type,
+        context.backend,
+        len(context.attributes),
+    )
+
+
+def query(
+    user_query: str,
+    session: Session,
+    conn,
+    provider_config,
+) -> str:
+    """Run one end-to-end query and update only in-memory session state."""
+    context = prepare_query(user_query, session, conn, provider_config)
+    response = generate_response(context.messages, provider_config)
+    assert isinstance(response, str)
+    record_query_result(session, context, response)
 
     return response

@@ -1,3 +1,5 @@
+"""Database connection helpers for SQLCipher production and sqlite test usage."""
+
 from contextlib import contextmanager
 from pathlib import Path
 from config.settings import DB_PATH, SQLCIPHER_PAGE_SIZE, SQLCIPHER_PBKDF2_ITER, get_db_key
@@ -41,7 +43,10 @@ def get_connection(db_path: Path = DB_PATH):
                         "Run 'pip install sqlcipher3'."
                     ) from e
 
-        conn = sqlcipher.connect(str(db_path))  # type: ignore[attr-defined]
+        conn = sqlcipher.connect(  # type: ignore[attr-defined]
+            str(db_path),
+            check_same_thread=False,
+        )
         _apply_pragmas(conn, key)
 
         # Verify the key is correct by running a trivial query
@@ -69,7 +74,7 @@ def get_plain_connection(db_path: str = ":memory:"):
     """
     import sqlite3
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA foreign_keys = ON;")
     try:

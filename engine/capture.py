@@ -18,6 +18,8 @@ from config.settings import EVOLVING, EXPLICIT, LOCAL_ONLY
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CAPTURE_CONFIDENCE = 0.5
+
 VALID_DOMAINS = {
     "personality",
     "values",
@@ -80,18 +82,23 @@ def _parse_attributes(raw: str) -> list[dict]:
     return [_normalize_attribute(attr) for attr in parsed]
 
 
+def preview_capture(
+    text: str,
+    domain_hint: str | None,
+    provider_config,
+) -> list[dict]:
+    """Extract quick-capture attributes without writing them to the database."""
+    _validate_domain_hint(domain_hint)
+    raw = generate_response(_build_messages(text, domain_hint), provider_config)
+    assert isinstance(raw, str)
+    return _parse_attributes(raw)
+
+
 def _normalize_attribute(attr: object) -> dict:
     if not isinstance(attr, dict):
         raise ValueError("Each extracted attribute must be a JSON object.")
 
-    required = {
-        "domain",
-        "label",
-        "value",
-        "elaboration",
-        "mutability",
-        "confidence",
-    }
+    required = {"domain", "label", "value"}
     missing = sorted(required.difference(attr.keys()))
     if missing:
         raise ValueError(f"Extracted attribute is missing required fields: {', '.join(missing)}")
@@ -100,18 +107,20 @@ def _normalize_attribute(attr: object) -> dict:
     if domain not in VALID_DOMAINS:
         raise ValueError(f"Extracted attribute has invalid domain '{domain}'.")
 
-    mutability = str(attr["mutability"]).strip()
+    raw_mutability = str(attr.get("mutability", EVOLVING)).strip() or EVOLVING
+    mutability = raw_mutability
     if mutability not in {"stable", "evolving"}:
         raise ValueError(f"Extracted attribute has invalid mutability '{mutability}'.")
 
-    confidence = min(float(attr["confidence"]), 0.75)
+    raw_confidence = attr.get("confidence", DEFAULT_CAPTURE_CONFIDENCE)
+    confidence = min(float(raw_confidence), 0.75)
 
     return {
         "domain": domain,
         "label": str(attr["label"]).strip(),
         "value": str(attr["value"]).strip(),
-        "elaboration": attr["elaboration"],
-        "mutability": mutability or EVOLVING,
+        "elaboration": attr.get("elaboration"),
+        "mutability": mutability,
         "confidence": confidence,
     }
 
@@ -301,9 +310,7 @@ def capture(
     Returns:
         The list of attribute dicts that were actually written.
     """
-    _validate_domain_hint(domain_hint)
-    raw = generate_response(_build_messages(text, domain_hint), provider_config)
-    attributes = _parse_attributes(raw)
+    attributes = preview_capture(text, domain_hint, provider_config)
 
     if not attributes:
         return []
