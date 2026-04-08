@@ -30,8 +30,7 @@ from config.llm_router import (
     _ollama_is_running,
     _start_ollama,
     _ensure_local_model,
-    _pull_model,
-    ProviderConfig,
+    ProviderConfig
 )
 
 # Shim: the old call_ollama(question, answer) is now split across
@@ -353,6 +352,7 @@ def test_call_ollama_sends_correct_model(monkeypatch):
     captured = {}
 
     def mock_post(url, json=None, timeout=None):
+        assert json is not None
         captured["payload"] = json
         return mock_resp
 
@@ -368,6 +368,7 @@ def test_call_ollama_includes_system_prompt(monkeypatch):
     captured = {}
 
     def mock_post(url, json=None, timeout=None):
+        assert json is not None
         captured["messages"] = json["messages"]
         return mock_resp
 
@@ -387,13 +388,15 @@ def test_call_ollama_includes_question_and_answer(monkeypatch):
     captured = {}
 
     def mock_post(url, json=None, timeout=None):
+        assert json is not None
         captured["messages"] = json["messages"]
         return mock_resp
 
     monkeypatch.setattr(llm_router.requests, "post", mock_post)
     messages = [
         {"role": "system", "content": "sys"},
-        {"role": "user", "content": "Question: What is your goal?\n\nAnswer: Build something meaningful."},
+        {"role": "user",
+         "content": "Question: What is your goal?\n\nAnswer: Build something meaningful."},
     ]
     _call_ollama(messages, "llama3.1:8b")
     user_content = captured["messages"][1]["content"]
@@ -642,7 +645,9 @@ def test_interview_question_saves_on_confirm(conn, monkeypatch, mock_get_connect
     responses = iter(["My answer.", ""])  # answer, then Enter to confirm
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("How do you recharge?", "personality", _local_config())
+    created, updated = interview.interview_question(
+        "How do you recharge?", "personality", _local_config()
+    )
 
     assert created == 1
     assert updated == 0
@@ -689,7 +694,9 @@ def test_interview_question_supersedes_existing_on_update(conn, monkeypatch, moc
     responses = iter(["New answer.", "", "y"])
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("How do you recharge?", "personality", _local_config())
+    created, updated = interview.interview_question(
+        "How do you recharge?", "personality", _local_config()
+    )
 
     assert updated == 1
     assert created == 0
@@ -709,7 +716,9 @@ def test_interview_question_skip_existing_on_no(conn, monkeypatch, mock_get_conn
     responses = iter(["New answer.", "", "n"])  # answer, confirm, don't update
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
 
-    created, updated = interview.interview_question("How do you recharge?", "personality", _local_config())
+    created, updated = interview.interview_question(
+        "How do you recharge?", "personality", _local_config()
+    )
 
     assert created == 0
     assert updated == 0
@@ -766,6 +775,7 @@ def test_ollama_is_running_false_on_any_exception(monkeypatch):
 
 def test_ollama_is_running_uses_2s_timeout(monkeypatch):
     captured = {}
+
     def mock_get(url, timeout=None):
         captured["timeout"] = timeout
         return MagicMock()
@@ -783,6 +793,7 @@ def test_ollama_is_running_uses_2s_timeout(monkeypatch):
 def _monotonic_time(start=0.0, step=1.0):
     """Return a callable that yields start, start+step, start+2*step, ..."""
     t = [start]
+
     def _next():
         v = t[0]
         t[0] += step
@@ -808,13 +819,14 @@ def test_start_ollama_starts_process_when_not_running(monkeypatch):
     monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: next(results))
 
     mock_proc = MagicMock()
-    monkeypatch.setattr(llm_router.subprocess, "Popen", MagicMock(return_value=mock_proc))
+    mock_popen = MagicMock(return_value=mock_proc)
+    monkeypatch.setattr(llm_router.subprocess, "Popen", mock_popen)
     monkeypatch.setattr(llm_router.time, "sleep", lambda _: None)
     monkeypatch.setattr(llm_router.time, "time", _monotonic_time())
 
     result = _start_ollama()
     assert result is mock_proc
-    assert llm_router.subprocess.Popen.called
+    assert mock_popen.called
 
 
 def test_start_ollama_popen_args(monkeypatch):
@@ -822,6 +834,7 @@ def test_start_ollama_popen_args(monkeypatch):
     monkeypatch.setattr(llm_router, "_ollama_is_running", lambda: True)
 
     captured = {}
+
     def mock_popen(args, **kwargs):
         captured["args"] = args
         captured["start_new_session"] = kwargs.get("start_new_session", False)
@@ -842,6 +855,7 @@ def test_start_ollama_writes_log_to_correct_path(monkeypatch, tmp_path):
     log_path = tmp_path / "ollama.log"
     opened_paths = []
     real_open = open
+
     def mock_open(path, mode="r", **kwargs):
         opened_paths.append(str(path))
         return real_open(path, mode, **kwargs)

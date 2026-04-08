@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
-from db.schema import SCHEMA_SQL, create_tables, seed_domains, INITIAL_DOMAINS
+from db.schema import create_tables, seed_domains, INITIAL_DOMAINS
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +63,13 @@ def _insert_attribute(conn, **overrides) -> str:
         """INSERT INTO attributes
                (id, domain_id, label, value, mutability, source, confidence, routing, status)
            VALUES
-               (:id, :domain_id, :label, :value, :mutability, :source, :confidence, :routing, :status)
+               (:id, :domain_id, :label, :value, :mutability, :source,
+                :confidence, :routing, :status)
         """,
         defaults,
     )
     conn.commit()
-    return defaults["id"]
+    return str(defaults["id"])
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,9 @@ def test_all_tables_created(conn):
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    expected = {"domains", "attributes", "attribute_history", "inference_evidence", "reflection_sessions"}
+    expected = {
+        "domains", "attributes", "attribute_history", "inference_evidence", "reflection_sessions"
+    }
     assert expected.issubset(tables)
 
 
@@ -102,7 +105,9 @@ def test_routing_accepts_local_only(conn):
 
 
 def test_routing_accepts_external_ok(conn):
-    aid = _insert_attribute(conn, routing="external_ok", id=str(uuid.uuid4()), label="r-ext", status="active")
+    aid = _insert_attribute(
+        conn, routing="external_ok", id=str(uuid.uuid4()), label="r-ext", status="active"
+    )
     row = conn.execute("SELECT routing FROM attributes WHERE id = ?", (aid,)).fetchone()
     assert row[0] == "external_ok"
 
@@ -118,10 +123,18 @@ def test_confidence_rejects_below_0(conn):
 
 
 def test_confidence_accepts_boundary_values(conn):
-    a1 = _insert_attribute(conn, confidence=0.0, id=str(uuid.uuid4()), label="c-zero", status="active")
-    a2 = _insert_attribute(conn, confidence=1.0, id=str(uuid.uuid4()), label="c-one", status="active")
-    assert conn.execute("SELECT confidence FROM attributes WHERE id = ?", (a1,)).fetchone()[0] == 0.0
-    assert conn.execute("SELECT confidence FROM attributes WHERE id = ?", (a2,)).fetchone()[0] == 1.0
+    a1 = _insert_attribute(
+        conn, confidence=0.0, id=str(uuid.uuid4()), label="c-zero", status="active"
+    )
+    a2 = _insert_attribute(
+        conn, confidence=1.0, id=str(uuid.uuid4()), label="c-one", status="active"
+    )
+    assert conn.execute(
+        "SELECT confidence FROM attributes WHERE id = ?", (a1,)
+    ).fetchone()[0] == 0.0
+    assert conn.execute(
+        "SELECT confidence FROM attributes WHERE id = ?", (a2,)
+    ).fetchone()[0] == 1.0
 
 
 def test_status_rejects_invalid(conn):

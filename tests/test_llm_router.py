@@ -6,7 +6,6 @@ No real Ollama server or API key is required.
 
 import json
 import sys
-from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -188,7 +187,12 @@ class TestResolveRouter:
                 "has_metal": True, "has_cuda": False, "recommended_tier": "local_large",
             }),
             patch("config.llm_router._ensure_local_model", return_value=False),
-            patch("config.llm_router.get_api_key", side_effect=lambda p: "sk-ant-test" if p == "anthropic" else None),  # pragma: allowlist secret
+            patch(
+                "config.llm_router.get_api_key",
+                side_effect=(  # pragma: allowlist secret
+                    lambda p: "sk-ant-test" if p == "anthropic" else None
+                ),
+            ),
         ):
             config = resolve_router()
         assert config.is_local is False
@@ -200,7 +204,12 @@ class TestResolveRouter:
                 "arch": "intel_mac", "ram_gb": 8.0, "cpu_cores": 4,
                 "has_metal": False, "has_cuda": False, "recommended_tier": "api",
             }),
-            patch("config.llm_router.get_api_key", side_effect=lambda p: "gsk_test" if p == "groq" else None),  # pragma: allowlist secret
+            patch(
+                "config.llm_router.get_api_key",
+                side_effect=(
+                    lambda p: "gsk_test" if p == "groq" else None  # pragma: allowlist secret
+                ),
+            ),
         ):
             config = resolve_router()
         assert config.is_local is False
@@ -236,14 +245,18 @@ class TestExtractAttributes:
 
     def test_anthropic_path_returns_parsed_attributes(self):
         raw = json.dumps(SAMPLE_ATTRS)
-        config = _make_config(provider="anthropic", api_key="sk-ant-test", is_local=False)  # pragma: allowlist secret
+        config = _make_config(
+            provider="anthropic", api_key="sk-ant-test", is_local=False  # pragma: allowlist secret
+        )
         with patch("config.llm_router._call_anthropic", return_value=raw):
             result = extract_attributes(QUESTION, ANSWER, config)
         assert result == SAMPLE_ATTRS
 
     def test_groq_path_returns_parsed_attributes(self):
         raw = json.dumps(SAMPLE_ATTRS)
-        config = _make_config(provider="groq", api_key="gsk_test", is_local=False)  # pragma: allowlist secret
+        config = _make_config(
+            provider="groq", api_key="gsk_test", is_local=False  # pragma: allowlist secret
+        )
         with patch("config.llm_router._call_groq", return_value=raw):
             result = extract_attributes(QUESTION, ANSWER, config)
         assert result == SAMPLE_ATTRS
@@ -292,7 +305,9 @@ class TestPrintRoutingReport:
 
     def test_api_config_does_not_raise(self, capsys):
         config = _make_config(
-            provider="anthropic", api_key="sk-ant-x", model="claude-sonnet-4-6",  # pragma: allowlist secret
+            provider="anthropic",
+            api_key="sk-ant-x",  # pragma: allowlist secret
+            model="claude-sonnet-4-6",
             is_local=False, arch="intel_mac", ram_gb=8.0,
         )
         print_routing_report(config)
@@ -302,7 +317,9 @@ class TestPrintRoutingReport:
 
     def test_groq_config_does_not_raise(self, capsys):
         config = _make_config(
-            provider="groq", api_key="gsk_x", model="llama-3.1-8b-instant",  # pragma: allowlist secret
+            provider="groq",
+            api_key="gsk_x",  # pragma: allowlist secret
+            model="llama-3.1-8b-instant",
             is_local=False, arch="intel_mac", ram_gb=16.0,
         )
         print_routing_report(config)

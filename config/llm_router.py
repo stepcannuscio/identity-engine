@@ -20,6 +20,7 @@ import platform
 import subprocess
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import requests
 
@@ -32,11 +33,14 @@ logger = logging.getLogger(__name__)
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class ConfigurationError(Exception):
     """Raised when no usable LLM backend can be resolved."""
 
+
 class ExtractionError(Exception):
     """Raised when JSON extraction fails after all retries."""
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -67,6 +71,7 @@ EXTRACT_SYSTEM_PROMPT = (
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ProviderConfig:
     provider: str | None      # "anthropic", "groq", "ollama", or None
@@ -80,6 +85,7 @@ class ProviderConfig:
 # ---------------------------------------------------------------------------
 # Hardware detection
 # ---------------------------------------------------------------------------
+
 
 def detect_hardware() -> dict:
     """Detect local hardware and return a capability summary.
@@ -173,6 +179,7 @@ def _has_nvidia() -> bool:
 # Ollama helpers
 # ---------------------------------------------------------------------------
 
+
 def _ollama_is_running() -> bool:
     try:
         requests.get(OLLAMA_BASE_URL, timeout=2)
@@ -195,7 +202,8 @@ def _ollama_has_model(model: str) -> bool:
 def _start_ollama(log_path=None) -> object | None:
     """Attempt to start the Ollama server. Returns Popen or None on failure."""
     try:
-        kwargs = {"start_new_session": True}
+        kwargs: dict[str, Any] = {"start_new_session": True}
+        fh = None
         if log_path:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             fh = open(log_path, "a")
@@ -204,7 +212,7 @@ def _start_ollama(log_path=None) -> object | None:
             kwargs.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         process = subprocess.Popen(["ollama", "serve"], **kwargs)
-        if log_path:
+        if fh is not None:
             fh.close()  # subprocess has inherited the fd; parent copy is no longer needed
     except FileNotFoundError:
         return None
@@ -245,6 +253,7 @@ def _ensure_local_model(model: str) -> bool:
 # ---------------------------------------------------------------------------
 # Router resolution
 # ---------------------------------------------------------------------------
+
 
 def resolve_router() -> ProviderConfig:
     """Detect hardware, resolve the best available backend, return ProviderConfig.
@@ -313,6 +322,7 @@ def resolve_router() -> ProviderConfig:
 # Unified inference
 # ---------------------------------------------------------------------------
 
+
 def _build_messages(question: str, answer: str, retry: bool = False) -> list[dict]:
     user_content = f"Question: {question}\n\nAnswer: {answer}"
     if retry:
@@ -357,9 +367,9 @@ def _call_anthropic(messages: list[dict], model: str, api_key: str) -> str:
         model=model,
         max_tokens=1024,
         system=system_content,
-        messages=user_messages,
+        messages=user_messages,  # type: ignore[arg-type]
     )
-    return response.content[0].text.strip()
+    return response.content[0].text.strip()  # type: ignore[union-attr]
 
 
 def _call_groq(messages: list[dict], model: str, api_key: str) -> str:
@@ -367,10 +377,11 @@ def _call_groq(messages: list[dict], model: str, api_key: str) -> str:
     client = Groq(api_key=api_key)
     response = client.chat.completions.create(
         model=model,
-        messages=messages,
+        messages=messages,  # type: ignore[arg-type]
         max_tokens=1024,
     )
-    return response.choices[0].message.content.strip()
+    content = response.choices[0].message.content or ""
+    return content.strip()
 
 
 def extract_attributes(question: str, answer: str, config: ProviderConfig) -> list[dict]:
@@ -397,8 +408,10 @@ def extract_attributes(question: str, answer: str, config: ProviderConfig) -> li
         if config.is_local:
             raw = _call_ollama(messages, config.model)
         elif config.provider == "anthropic":
+            assert config.api_key is not None
             raw = _call_anthropic(messages, config.model, config.api_key)
         elif config.provider == "groq":
+            assert config.api_key is not None
             raw = _call_groq(messages, config.model, config.api_key)
         else:
             raise ConfigurationError(f"Unknown provider: {config.provider!r}")
@@ -419,6 +432,7 @@ def extract_attributes(question: str, answer: str, config: ProviderConfig) -> li
 # ---------------------------------------------------------------------------
 # Startup report
 # ---------------------------------------------------------------------------
+
 
 def print_routing_report(config: ProviderConfig) -> None:
     """Print a single-line summary of the resolved backend at startup."""

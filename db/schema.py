@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS inference_evidence (
 
 CREATE TABLE IF NOT EXISTS reflection_sessions (
     id                  TEXT PRIMARY KEY,
-    session_type        TEXT NOT NULL CHECK(session_type IN ('guided', 'freeform', 'vault_analysis')),
+    session_type        TEXT NOT NULL CHECK(
+                            session_type IN ('guided', 'freeform', 'vault_analysis')
+                        ),
     summary             TEXT,
     attributes_created  INTEGER DEFAULT 0,
     attributes_updated  INTEGER DEFAULT 0,

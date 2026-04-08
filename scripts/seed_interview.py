@@ -18,7 +18,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.connection import get_connection
-from config.settings import LOCAL_ONLY, REFLECTION, STABLE, EVOLVING
+from config.settings import LOCAL_ONLY, REFLECTION, STABLE
 from config.llm_router import (
     resolve_router,
     extract_attributes,
@@ -60,8 +60,10 @@ DOMAINS = [
         "name": "goals",
         "description": "Short-term and long-term goals, aspirations, and active letting-go.",
         "questions": [
-            "What is the most important thing you are trying to achieve in the next six months, professionally?",
-            "What is the most important thing you are trying to achieve in the next six months, personally?",
+            "What is the most important thing you are trying to achieve in the next six months,"
+            " professionally?",
+            "What is the most important thing you are trying to achieve in the next six months,"
+            " personally?",
             "What does success look like to you right now — not abstractly, but concretely?",
             "What are you actively trying to stop doing or let go of?",
         ],
@@ -82,7 +84,8 @@ DOMAINS = [
         "description": "Communication style, tone, and self-expression.",
         "questions": [
             "How would you describe your communication style to someone who has never met you?",
-            "How does the way you write or speak change between professional and personal contexts?",
+            "How does the way you write or speak change between professional and personal"
+            " contexts?",
             "What tone do you default to when you are most yourself?",
         ],
     },
@@ -121,6 +124,7 @@ DOMAINS = [
 # Database check
 # ---------------------------------------------------------------------------
 
+
 def check_database() -> None:
     """Verify the encrypted database is accessible."""
     try:
@@ -144,7 +148,7 @@ def select_domains() -> list:
     """Return a list of 0-based domain indices chosen by the user."""
     print("\nDomains available:")
     for i, domain in enumerate(DOMAINS, 1):
-        print(f"  {i}. {domain['name'].capitalize()} — {domain['description']}")
+        print(f"  {i}. {str(domain['name']).capitalize()} — {domain['description']}")
     print()
     print("Would you like to go through all domains, or focus on specific ones?")
     print("Enter 'all' or a comma-separated list of numbers (e.g. '1,3,5'):")
@@ -274,7 +278,10 @@ def confirm_attributes(attributes: list) -> tuple:
             confirmed = [a for i, a in enumerate(attributes, 1) if i not in skip_set]
             return confirmed, False
         except ValueError:
-            print("  Unrecognised input. Press Enter to confirm all, or type numbers like '2,3' to skip.")
+            print(
+                "  Unrecognised input. Press Enter to confirm all, "
+                "or type numbers like '2,3' to skip."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +341,8 @@ def write_attribute(conn, domain_id: str, attr: dict, old_row) -> str:
         )
         conn.execute(
             "INSERT INTO attribute_history "
-            "(id, attribute_id, previous_value, previous_confidence, reason, changed_at, changed_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'reflection')",
+            "(id, attribute_id, previous_value, previous_confidence, reason, changed_at,"
+            " changed_by) VALUES (?, ?, ?, ?, ?, ?, 'reflection')",
             (
                 str(uuid.uuid4()),
                 old_id,

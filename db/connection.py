@@ -35,13 +35,13 @@ def get_connection(db_path: Path = DB_PATH):
     try:
         try:
             from sqlcipher3 import dbapi2 as sqlcipher
-        except ImportError:
+        except ImportError as e:
             raise RuntimeError(
                         "sqlcipher3 is not installed. "
                         "Run 'pip install sqlcipher3'."
-                    ) from exc
-                    
-        conn = sqlcipher.connect(str(db_path))
+                    ) from e
+
+        conn = sqlcipher.connect(str(db_path))  # type: ignore[attr-defined]
         _apply_pragmas(conn, key)
 
         # Verify the key is correct by running a trivial query
