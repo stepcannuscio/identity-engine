@@ -215,4 +215,16 @@ The primary ingestion path is `scripts/seed_interview.py` (run via
 The `external_calls_made` counter on `reflection_sessions` is always `0` for
 interview sessions because Ollama is local.
 
+The secondary ingestion path is `scripts/capture.py` (run via `make capture`).
+Quick capture:
+
+1. Accepts a short free-text note instead of a guided question/answer exchange
+2. Uses the LLM to extract one or more structured attributes, including domain
+3. Lets the user confirm the full preview before any writes occur
+4. Writes confirmed attributes with `source = 'explicit'` and
+   `routing = 'local_only'`
+5. Detects active label conflicts in the same domain and requires
+   `update`, `skip`, or `keep both`
+6. Does not create a `reflection_sessions` row
+
 See [interview.md](interview.md) for the full operational reference.
