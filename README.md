@@ -83,7 +83,7 @@ and beliefs.
 
 1. The router detects your hardware and selects a backend automatically
 2. You answer one question at a time in plain English
-3. The LLM extracts structured attributes from your answer and shows you a
+3. `PrivacyBroker` routes extraction to the resolved backend and shows you a
    numbered preview
 4. You confirm, skip, edit, or retry before anything is written
 5. Confirmed attributes are written to the database immediately — nothing is
@@ -272,6 +272,7 @@ config/settings.py          — paths, keychain access, routing and source const
 config/llm_router.py        — hardware detection, backend selection, unified inference
 db/connection.py            — SQLCipher connection context manager
 db/schema.py                — DDL and domain seeding
+engine/privacy_broker.py    — application-level inference boundary and routing metadata
 engine/query_classifier.py  — deterministic simple/open-ended query classification
 engine/retriever.py         — score-based identity attribute retrieval
 engine/prompt_builder.py    — grounded system prompt + message assembly

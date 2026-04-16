@@ -46,8 +46,8 @@ You can also run the script directly:
 ## Flow
 
 1. Resolve the configured LLM backend and print the routing report.
-2. Send the quick capture text to `generate_response()` with the structured
-   extractor prompt.
+2. Send the quick capture text through `engine/privacy_broker.py`, which
+   delegates structured extraction to `config/llm_router.py`.
 3. Show a single preview of all extracted attributes.
 4. If confirmed, process each attribute one at a time:
    - write immediately when there is no conflict
@@ -57,6 +57,11 @@ You can also run the script directly:
 
 Quick capture writes are atomic per attribute. There is no session object and
 no `reflection_sessions` row is created.
+
+The current broker policy preserves existing behavior for capture extraction:
+the raw capture text may still be processed by the resolved backend, but every
+saved attribute is written back as `local_only`. Future hardening for external
+capture processing should happen inside the broker rather than in callers.
 
 ---
 

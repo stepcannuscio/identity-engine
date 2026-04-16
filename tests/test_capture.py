@@ -6,6 +6,7 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -64,22 +65,61 @@ def _mock_capture_response(attrs: list[dict]) -> str:
     return json.dumps(attrs)
 
 
-def test_capture_non_interactive_writes_attributes(conn, config, monkeypatch):
+def _mock_capture_extraction(monkeypatch, attrs: list[dict]) -> None:
     monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "patterns",
-                    "label": "morning_focus",
-                    "value": "I feel more focused in the morning.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
+        capture_module.PrivacyBroker,
+        "extract_structured_attributes",
+        lambda self, messages, task_type="capture_extraction": SimpleNamespace(
+            content=_mock_capture_response(attrs),
+            metadata=SimpleNamespace(task_type=task_type),
         ),
+    )
+
+
+def test_preview_capture_uses_privacy_broker(conn, config, monkeypatch):
+    calls: dict[str, object] = {}
+
+    def _mock_extract(self, messages, task_type="capture_extraction"):
+        calls["messages"] = messages
+        calls["task_type"] = task_type
+        return SimpleNamespace(
+            content=_mock_capture_response(
+                [
+                    {
+                        "domain": "patterns",
+                        "label": "morning_focus",
+                        "value": "I focus best in the morning.",
+                        "elaboration": None,
+                        "mutability": "evolving",
+                        "confidence": 0.7,
+                    }
+                ]
+            ),
+            metadata=SimpleNamespace(task_type=task_type),
+        )
+
+    monkeypatch.setattr(capture_module.PrivacyBroker, "extract_structured_attributes", _mock_extract)
+
+    preview = capture_module.preview_capture("I focus best in the morning.", None, config)
+
+    assert preview[0]["label"] == "morning_focus"
+    assert calls["task_type"] == "capture_extraction"
+    assert isinstance(calls["messages"], list)
+
+
+def test_capture_non_interactive_writes_attributes(conn, config, monkeypatch):
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "morning_focus",
+                "value": "I feel more focused in the morning.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
     saved = capture_module.capture(
         "I focus better in the morning",
@@ -94,21 +134,18 @@ def test_capture_non_interactive_writes_attributes(conn, config, monkeypatch):
 
 
 def test_capture_sets_routing_local_only(conn, config, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "goals",
-                    "label": "job_search",
-                    "value": "I want to land a role in Seattle by end of summer.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "goals",
+                "label": "job_search",
+                "value": "I want to land a role in Seattle by end of summer.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
     capture_module.capture("goal update", "goals", conn, config, confirm=False)
     routing = conn.execute(
@@ -118,21 +155,18 @@ def test_capture_sets_routing_local_only(conn, config, monkeypatch):
 
 
 def test_capture_sets_source_explicit(conn, config, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "values",
-                    "label": "asks_for_clarity",
-                    "value": "I care about naming tradeoffs clearly.",
-                    "elaboration": None,
-                    "mutability": "stable",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "values",
+                "label": "asks_for_clarity",
+                "value": "I care about naming tradeoffs clearly.",
+                "elaboration": None,
+                "mutability": "stable",
+                "confidence": 0.7,
+            }
+        ],
     )
     capture_module.capture("clarity matters", None, conn, config, confirm=False)
     source = conn.execute(
@@ -142,21 +176,18 @@ def test_capture_sets_source_explicit(conn, config, monkeypatch):
 
 
 def test_capture_clamps_confidence_to_point_75(conn, config, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "personality",
-                    "label": "response_to_change",
-                    "value": "I adapt steadily once I understand the new shape of things.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.92,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "personality",
+                "label": "response_to_change",
+                "value": "I adapt steadily once I understand the new shape of things.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.92,
+            }
+        ],
     )
     saved = capture_module.capture("I adapt steadily", None, conn, config, confirm=False)
     assert saved[0]["confidence"] == pytest.approx(0.75)
@@ -167,20 +198,17 @@ def test_capture_clamps_confidence_to_point_75(conn, config, monkeypatch):
 
 
 def test_capture_defaults_missing_confidence(conn, config, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "patterns",
-                    "label": "morning_focus",
-                    "value": "I focus best in the morning.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "morning_focus",
+                "value": "I focus best in the morning.",
+                "elaboration": None,
+                "mutability": "evolving",
+            }
+        ],
     )
 
     saved = capture_module.capture("Morning works well for me", None, conn, config, confirm=False)
@@ -189,19 +217,16 @@ def test_capture_defaults_missing_confidence(conn, config, monkeypatch):
 
 
 def test_capture_defaults_missing_mutability_and_elaboration(conn, config, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "values",
-                    "label": "clarity",
-                    "value": "I care about clear communication.",
-                    "confidence": 0.6,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "values",
+                "label": "clarity",
+                "value": "I care about clear communication.",
+                "confidence": 0.6,
+            }
+        ],
     )
 
     saved = capture_module.capture("Clarity matters to me", None, conn, config, confirm=False)
@@ -212,21 +237,18 @@ def test_capture_defaults_missing_mutability_and_elaboration(conn, config, monke
 
 def test_conflict_update_marks_old_superseded(conn, config, monkeypatch):
     old_id = _insert_active(conn, "personality", "response_to_change", "Old value")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "personality",
-                    "label": "response_to_change",
-                    "value": "New value",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "personality",
+                "label": "response_to_change",
+                "value": "New value",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
     responses = iter(["", "u"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -238,21 +260,18 @@ def test_conflict_update_marks_old_superseded(conn, config, monkeypatch):
 
 def test_conflict_update_writes_attribute_history(conn, config, monkeypatch):
     old_id = _insert_active(conn, "personality", "response_to_change", "Old value")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "personality",
-                    "label": "response_to_change",
-                    "value": "New value",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "personality",
+                "label": "response_to_change",
+                "value": "New value",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
     responses = iter(["", "u"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -265,21 +284,18 @@ def test_conflict_update_writes_attribute_history(conn, config, monkeypatch):
 
 def test_conflict_skip_leaves_existing_unchanged(conn, config, monkeypatch):
     old_id = _insert_active(conn, "patterns", "asks_for_help", "I avoid asking for help.")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "patterns",
-                    "label": "asks_for_help",
-                    "value": "I ask for help earlier now.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.6,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "asks_for_help",
+                "value": "I ask for help earlier now.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.6,
+            }
+        ],
     )
     responses = iter(["", "s"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -293,21 +309,18 @@ def test_conflict_skip_leaves_existing_unchanged(conn, config, monkeypatch):
 
 def test_conflict_keep_both_writes_with_suffix(conn, config, monkeypatch):
     _insert_active(conn, "patterns", "asks_for_help", "I avoid asking for help.")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "patterns",
-                    "label": "asks_for_help",
-                    "value": "I am getting better at asking for help.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.65,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "asks_for_help",
+                "value": "I am getting better at asking for help.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.65,
+            }
+        ],
     )
     responses = iter(["", "k"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -322,21 +335,18 @@ def test_conflict_keep_both_writes_with_suffix(conn, config, monkeypatch):
 def test_conflict_keep_both_uses_next_free_suffix(conn, config, monkeypatch):
     _insert_active(conn, "patterns", "asks_for_help", "v1")
     _insert_active(conn, "patterns", "asks_for_help_2", "v2")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "patterns",
-                    "label": "asks_for_help",
-                    "value": "v3",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.65,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "asks_for_help",
+                "value": "v3",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.65,
+            }
+        ],
     )
     responses = iter(["", "k"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -346,21 +356,18 @@ def test_conflict_keep_both_uses_next_free_suffix(conn, config, monkeypatch):
 
 def test_non_interactive_conflict_defaults_to_skip(conn, config, monkeypatch, caplog):
     _insert_active(conn, "goals", "job_search", "Existing goal")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "goals",
-                    "label": "job_search",
-                    "value": "New goal",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "goals",
+                "label": "job_search",
+                "value": "New goal",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
     saved = capture_module.capture("goal update", None, conn, config, confirm=False)
     assert saved == []
@@ -371,42 +378,39 @@ def test_non_interactive_conflict_defaults_to_skip(conn, config, monkeypatch, ca
 
 def test_capture_returns_only_written_attributes(conn, config, monkeypatch):
     _insert_active(conn, "goals", "job_search", "Existing goal")
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: _mock_capture_response(
-            [
-                {
-                    "domain": "goals",
-                    "label": "job_search",
-                    "value": "Conflicting goal",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                },
-                {
-                    "domain": "patterns",
-                    "label": "morning_focus",
-                    "value": "I think more clearly in the morning.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                },
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "goals",
+                "label": "job_search",
+                "value": "Conflicting goal",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            },
+            {
+                "domain": "patterns",
+                "label": "morning_focus",
+                "value": "I think more clearly in the morning.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            },
+        ],
     )
     saved = capture_module.capture("mixed capture", None, conn, config, confirm=False)
     assert [attr["label"] for attr in saved] == ["morning_focus"]
 
 
 def test_invalid_domain_name_raises_clear_error(conn, config, monkeypatch):
-    monkeypatch.setattr(capture_module, "generate_response", lambda *args: "[]")
+    _mock_capture_extraction(monkeypatch, [])
     with pytest.raises(ValueError, match="Invalid domain hint 'not-a-domain'"):
         capture_module.capture("text", "not-a-domain", conn, config, confirm=False)
 
 
 def test_capture_does_not_write_reflection_session(conn, config, monkeypatch):
-    monkeypatch.setattr(capture_module, "generate_response", lambda *args: "[]")
+    _mock_capture_extraction(monkeypatch, [])
     capture_module.capture("text", None, conn, config, confirm=False)
     count = conn.execute("SELECT count(*) FROM reflection_sessions").fetchone()[0]
     assert count == 0

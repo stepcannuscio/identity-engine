@@ -13,6 +13,7 @@ import uuid
 import datetime
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -640,7 +641,14 @@ def test_run_with_elapsed_clears_status_line(capsys):
 
 def test_interview_question_saves_on_confirm(conn, monkeypatch, mock_get_connection):
     """Answer + confirm-all writes one attribute to the DB."""
-    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
+    monkeypatch.setattr(
+        interview.PrivacyBroker,
+        "extract_interview_attributes",
+        lambda self, q, a, task_type="interview_extraction": SimpleNamespace(
+            content=[SAMPLE_ATTR],
+            metadata=SimpleNamespace(task_type=task_type),
+        ),
+    )
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["My answer.", ""])  # answer, then Enter to confirm
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
@@ -672,7 +680,14 @@ def test_interview_question_empty_answer_skips(conn, monkeypatch, mock_get_conne
 
 
 def test_interview_question_skip_at_preview_writes_nothing(conn, monkeypatch, mock_get_connection):
-    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
+    monkeypatch.setattr(
+        interview.PrivacyBroker,
+        "extract_interview_attributes",
+        lambda self, q, a, task_type="interview_extraction": SimpleNamespace(
+            content=[SAMPLE_ATTR],
+            metadata=SimpleNamespace(task_type=task_type),
+        ),
+    )
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["Some answer.", "s"])
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
@@ -688,7 +703,14 @@ def test_interview_question_supersedes_existing_on_update(conn, monkeypatch, moc
     domain_id = interview.get_domain_id(conn, "personality")
     _insert_raw_attribute(conn, domain_id, "recharge_style", value="old value")
 
-    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
+    monkeypatch.setattr(
+        interview.PrivacyBroker,
+        "extract_interview_attributes",
+        lambda self, q, a, task_type="interview_extraction": SimpleNamespace(
+            content=[SAMPLE_ATTR],
+            metadata=SimpleNamespace(task_type=task_type),
+        ),
+    )
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     # answer, then Enter (confirm all at preview), then 'y' to update existing
     responses = iter(["New answer.", "", "y"])
@@ -711,7 +733,14 @@ def test_interview_question_skip_existing_on_no(conn, monkeypatch, mock_get_conn
     domain_id = interview.get_domain_id(conn, "personality")
     _insert_raw_attribute(conn, domain_id, "recharge_style", value="original")
 
-    monkeypatch.setattr(interview, "extract_attributes", lambda q, a, c: [SAMPLE_ATTR])
+    monkeypatch.setattr(
+        interview.PrivacyBroker,
+        "extract_interview_attributes",
+        lambda self, q, a, task_type="interview_extraction": SimpleNamespace(
+            content=[SAMPLE_ATTR],
+            metadata=SimpleNamespace(task_type=task_type),
+        ),
+    )
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["New answer.", "", "n"])  # answer, confirm, don't update
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))
@@ -733,8 +762,13 @@ def test_interview_question_skip_existing_on_no(conn, monkeypatch, mock_get_conn
 def test_interview_question_extraction_error_writes_nothing(conn, monkeypatch, mock_get_connection):
     """If extraction raises ExtractionError, no attribute is written."""
     from config.llm_router import ExtractionError
-    monkeypatch.setattr(interview, "extract_attributes",
-                        lambda q, a, c: (_ for _ in ()).throw(ExtractionError("bad json: []")))
+    monkeypatch.setattr(
+        interview.PrivacyBroker,
+        "extract_interview_attributes",
+        lambda self, q, a, task_type="interview_extraction": (_ for _ in ()).throw(
+            ExtractionError("bad json: []")
+        ),
+    )
     monkeypatch.setattr(interview, "get_connection", mock_get_connection)
     responses = iter(["My answer.", "n"])  # answer, then 'n' to not retry
     monkeypatch.setattr("builtins.input", lambda _="": next(responses))

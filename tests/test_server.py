@@ -8,6 +8,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -75,6 +76,17 @@ def _insert_attribute(
     )
     conn.commit()
     return attribute_id
+
+
+def _mock_capture_extraction(monkeypatch, attrs: list[dict]) -> None:
+    monkeypatch.setattr(
+        capture_module.PrivacyBroker,
+        "extract_structured_attributes",
+        lambda self, messages, task_type="capture_extraction": SimpleNamespace(
+            content=json.dumps(attrs),
+            metadata=SimpleNamespace(task_type=task_type),
+        ),
+    )
 
 
 @pytest.fixture
@@ -243,21 +255,18 @@ def test_put_attribute_routing_guard_blocks_external_ok_on_protected_domains(cli
 
 
 def test_capture_preview_does_not_write_to_database(client: TestClient, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: json.dumps(
-            [
-                {
-                    "domain": "patterns",
-                    "label": "morning_focus",
-                    "value": "I focus best in the morning.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "morning_focus",
+                "value": "I focus best in the morning.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
 
     response = client.post(
@@ -299,21 +308,18 @@ def test_capture_preview_defaults_missing_confidence(client: TestClient, monkeyp
 
 
 def test_capture_writes_attributes_with_local_only_routing(client: TestClient, monkeypatch):
-    monkeypatch.setattr(
-        capture_module,
-        "generate_response",
-        lambda messages, provider_config: json.dumps(
-            [
-                {
-                    "domain": "goals",
-                    "label": "phase_three",
-                    "value": "I want the FastAPI backend live.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                }
-            ]
-        ),
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "goals",
+                "label": "phase_three",
+                "value": "I want the FastAPI backend live.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
     )
 
     response = client.post(
@@ -374,7 +380,7 @@ def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypat
         ),
     )
     monkeypatch.setattr(
-        "server.routes.query.generate_response",
+        "server.routes.query.PrivacyBroker.generate_grounded_response",
         lambda *args, **kwargs: (_ for _ in ()).throw(requests.exceptions.Timeout()),
     )
 

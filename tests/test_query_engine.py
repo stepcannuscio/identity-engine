@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
+from engine.privacy_broker import BrokeredResult, InferenceDecision
 from engine.prompt_builder import build_prompt
 from engine.query_classifier import classify_query
 from engine.query_engine import query
@@ -273,7 +274,20 @@ def test_query_returns_string(conn, domain_ids):
     session = Session()
     config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
 
-    with patch("engine.query_engine.generate_response", return_value="Focused and steady."):
+    with patch(
+        "engine.query_engine.PrivacyBroker.generate_grounded_response",
+        return_value=BrokeredResult(
+            content="Focused and steady.",
+            metadata=InferenceDecision(
+                provider="ollama",
+                model="llama3.1:8b",
+                is_local=True,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+            ),
+        ),
+    ):
         result = query("What is my main goal?", session, conn, config)
 
     assert isinstance(result, str)

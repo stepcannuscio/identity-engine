@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from config.llm_router import generate_response
+from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import build_prompt
 from engine.query_classifier import classify_query
 from engine.retriever import retrieve_attributes
@@ -84,7 +84,10 @@ def query(
 ) -> str:
     """Run one end-to-end query and update only in-memory session state."""
     context = prepare_query(user_query, session, conn, provider_config)
-    response = generate_response(context.messages, provider_config)
+    response = PrivacyBroker(provider_config).generate_grounded_response(
+        context.messages,
+        attributes=context.attributes,
+    ).content
     assert isinstance(response, str)
     record_query_result(session, context, response)
 

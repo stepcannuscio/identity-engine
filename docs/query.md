@@ -15,8 +15,9 @@ For each user question:
 1. Classify query as `simple` or `open_ended` (`engine/query_classifier.py`)
 2. Retrieve and score active attributes (`engine/retriever.py`)
 3. Build grounded prompt with identity context and capped history (`engine/prompt_builder.py`)
-4. Generate response through configured backend (`config/llm_router.py`)
-5. Update in-memory session state (`engine/session.py`)
+4. Route application-level inference through `engine/privacy_broker.py`
+5. Delegate the approved request to the configured backend (`config/llm_router.py`)
+6. Update in-memory session state (`engine/session.py`)
 
 ## Retrieval budgets
 
@@ -29,8 +30,8 @@ For each user question:
 ## Safety constraints
 
 - `retriever.py`, `query_classifier.py`, and `prompt_builder.py` perform no LLM calls
-- Only `query_engine.py` calls inference (`llm_router.generate_response`)
-- Prompt builder enforces routing: `local_only` attributes cannot be included for external backends (`RoutingViolationError`)
+- Query inference flows through `PrivacyBroker`, which centralizes application-level routing checks before calling `llm_router.py`
+- Prompt builder still retains a fail-closed guard: `local_only` attributes cannot be included for external backends (`RoutingViolationError`)
 - Session history is in-memory only during runtime
 
 ## Session commands

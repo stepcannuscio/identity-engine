@@ -6,7 +6,7 @@ A local-first identity system with controlled LLM augmentation.
 
 ## High-Level Flow
 
-User Input → Query Engine → Retrieval → Prompt Builder → LLM Router → Response
+User Input → Query Engine / Capture Flow → Retrieval / Extraction Prep → Prompt Builder → Privacy Broker → LLM Router → Response
 
 ## Core Components
 
@@ -23,6 +23,11 @@ User Input → Query Engine → Retrieval → Prompt Builder → LLM Router → 
 - Builds grounded prompts
 - Enforces routing constraints
 
+### Privacy Broker
+- Centralizes application-level inference decisions
+- Makes local vs external inference explicit
+- Enforces query routing before delegating to the router
+
 ### LLM Router
 - Handles model selection
 - Local-first fallback chain
@@ -36,6 +41,7 @@ User Input → Query Engine → Retrieval → Prompt Builder → LLM Router → 
 - Database
 - Retrieval
 - Prompt builder
+- Privacy broker
 
 ### Semi-trusted
 - Local LLM (Ollama)
@@ -46,3 +52,6 @@ User Input → Query Engine → Retrieval → Prompt Builder → LLM Router → 
 ## Key Constraint
 
 Raw identity data must never leave the system unless explicitly allowed.
+
+`config/llm_router.py` remains the low-level unified inference utility; the
+application now reaches it through `engine/privacy_broker.py`.

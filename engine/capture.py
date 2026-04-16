@@ -13,8 +13,8 @@ import json
 import logging
 import uuid
 
-from config.llm_router import generate_response
 from config.settings import EVOLVING, EXPLICIT, LOCAL_ONLY
+from engine.privacy_broker import PrivacyBroker
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +89,10 @@ def preview_capture(
 ) -> list[dict]:
     """Extract quick-capture attributes without writing them to the database."""
     _validate_domain_hint(domain_hint)
-    raw = generate_response(_build_messages(text, domain_hint), provider_config)
-    assert isinstance(raw, str)
+    raw = PrivacyBroker(provider_config).extract_structured_attributes(
+        _build_messages(text, domain_hint),
+        task_type="capture_extraction",
+    ).content
     return _parse_attributes(raw)
 
 

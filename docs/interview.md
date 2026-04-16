@@ -1,10 +1,10 @@
 # Identity Interview — Reference
 
 `scripts/seed_interview.py` is the primary way to populate the identity store
-before a full UI exists. It conducts a structured terminal interview, uses a
-local Ollama model to extract attributes from your answers, lets you review and
-edit before anything is written, then persists confirmed attributes directly to
-the encrypted database.
+before a full UI exists. It conducts a structured terminal interview, routes
+question/answer extraction through `engine/privacy_broker.py`, lets you review
+and edit before anything is written, then persists confirmed attributes
+directly to the encrypted database.
 
 ---
 
@@ -64,8 +64,8 @@ Enter 'all' or a comma-separated list of numbers (e.g. '1,3,5'):
 
 ### 3. Question loop
 
-Questions are asked one at a time. After each answer Ollama extracts one or
-more structured attributes and shows a numbered preview:
+Questions are asked one at a time. After each answer the privacy broker
+delegates extraction to the resolved backend and shows a numbered preview:
 
 ```
 --- Preview ---
@@ -86,7 +86,7 @@ Options:
 - **Enter** — confirm all extracted attributes and write them to the database
 - **`1,3`** — skip attributes 1 and 3, confirm the rest
 - **`e2`** — edit the value field of attribute 2 in-place, then re-confirm
-- **`r`** — discard the extraction, re-answer the question, re-run Ollama
+- **`r`** — discard the extraction, re-answer the question, and re-run extraction
 - **`s`** — skip the question entirely; nothing is written
 
 Each confirmed attribute is written **immediately** — progress is not lost if
@@ -152,7 +152,8 @@ fixed values regardless of Ollama's suggestion:
 | `status` | `active` | New rows are always active |
 
 The `label`, `value`, `elaboration`, `mutability`, and `confidence` fields
-come from Ollama's extraction and can be edited before confirming.
+come from the resolved backend's extraction and can be edited before
+confirming.
 
 When an existing active attribute is superseded, the old row's `status` is
 set to `superseded` and a row is appended to `attribute_history` with
@@ -162,11 +163,11 @@ set to `superseded` and a row is appended to `attribute_history` with
 
 ## Privacy guarantees
 
-- Ollama runs entirely on your machine; no answer text leaves the local network
-- `external_calls_made` is always recorded as `0` in the session log
 - The `routing` field is always `local_only` — it cannot be set to `external_ok`
   by the interview script
 - No answer text is persisted — only the extracted structured attributes
+- Application-level interview inference flows through `PrivacyBroker`, which
+  centralizes the seam before delegating to `config/llm_router.py`
 
 ---
 

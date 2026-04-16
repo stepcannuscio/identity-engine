@@ -21,12 +21,12 @@ from db.connection import get_connection
 from config.settings import LOCAL_ONLY, REFLECTION, STABLE
 from config.llm_router import (
     resolve_router,
-    extract_attributes,
     print_routing_report,
     ConfigurationError,
     ExtractionError,
     ProviderConfig,
 )
+from engine.privacy_broker import PrivacyBroker
 
 # ---------------------------------------------------------------------------
 # Domain definitions — questions must remain in this exact order
@@ -415,7 +415,10 @@ def interview_question(question: str, domain_name: str, config: ProviderConfig) 
         try:
             attributes = _run_with_elapsed(
                 "Extracting attributes...",
-                lambda: extract_attributes(question, answer, config),
+                lambda: PrivacyBroker(config).extract_interview_attributes(
+                    question,
+                    answer,
+                ).content,
             )
         except ExtractionError as exc:
             print(f"Could not parse a valid response: {exc}")

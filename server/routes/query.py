@@ -12,10 +12,10 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from config.llm_router import (
     ConfigurationError,
     ProviderConfig,
-    generate_response,
     resolve_external_router,
     resolve_local_router,
 )
+from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
 from engine.query_engine import prepare_query, record_query_result
 from server.db import get_db_connection
@@ -165,7 +165,10 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
                 conn,
                 provider_config,
             )
-        result = generate_response(context.messages, provider_config)
+        result = PrivacyBroker(provider_config).generate_grounded_response(
+            context.messages,
+            attributes=context.attributes,
+        ).content
         assert isinstance(result, str)
         duration_ms = int((time.monotonic() - started) * 1000)
         record_query_result(request.app.state.current_session, context, result)
@@ -222,7 +225,11 @@ def query_stream(
                     }
                 )
 
-            response_stream = generate_response(context.messages, provider_config, stream=True)
+            response_stream = PrivacyBroker(provider_config).generate_grounded_response(
+                context.messages,
+                attributes=context.attributes,
+                stream=True,
+            ).content
             assert not isinstance(response_stream, str)
             for token in response_stream:
                 collected.append(token)
