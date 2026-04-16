@@ -34,7 +34,14 @@ class Session:
         """Return the current session history as a chat messages array."""
         return list(self.history)
 
-    def log_query(self, query: str, query_type: str, backend: str, attribute_count: int) -> None:
+    def log_query(
+        self,
+        query: str,
+        query_type: str,
+        backend: str,
+        attribute_count: int,
+        domains_referenced: list[str],
+    ) -> None:
         """Record routing metadata for one query turn."""
         self.routing_log.append(
             {
@@ -42,6 +49,7 @@ class Session:
                 "query_type": query_type,
                 "backend": backend,
                 "attribute_count": attribute_count,
+                "domains_referenced": sorted(set(domains_referenced)),
                 "timestamp": datetime.now().isoformat(),
             }
         )

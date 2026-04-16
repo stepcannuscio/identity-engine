@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""HTTPS server entrypoint for the identity-engine FastAPI backend."""
+"""HTTPS server entrypoint for the identity-engine web app.
+
+Starts the FastAPI backend over HTTPS and mounts the built React frontend from
+frontend/dist when that production bundle exists.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +11,17 @@ import sys
 from pathlib import Path
 
 import uvicorn
+from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from server.main import app, assert_safe_bind_ip, ensure_tls_certs, get_bind_ip
+
+
+DIST_PATH = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if DIST_PATH.exists():
+    app.mount("/", StaticFiles(directory=str(DIST_PATH), html=True), name="static")
 
 
 if __name__ == "__main__":

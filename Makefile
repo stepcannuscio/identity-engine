@@ -5,7 +5,8 @@ PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
 .PHONY: help setup init test clean interview capture query view serve smoke \
-	add-anthropic-key add-groq-key set-ui-passphrase
+	add-anthropic-key add-groq-key set-ui-passphrase frontend-install \
+	frontend-dev frontend-build dev
 
 ## Show this help message
 help:
@@ -20,6 +21,10 @@ help:
 	@echo "  make serve   Start the HTTPS FastAPI backend server"
 	@echo "  make smoke   Run the Python smoke test against the backend"
 	@echo "  make view    Pretty-print the identity store grouped by domain"
+	@echo "  make frontend-install  Install frontend npm dependencies"
+	@echo "  make frontend-dev  Start the Vite frontend dev server"
+	@echo "  make frontend-build  Build the production frontend bundle"
+	@echo "  make dev     Start the backend and frontend together"
 	@echo "  make set-ui-passphrase  Update the web UI passphrase in the keychain"
 	@echo ""
 
@@ -78,6 +83,22 @@ query:
 ## Run the HTTPS FastAPI backend server
 serve:
 	.venv/bin/python scripts/serve.py
+
+## Install frontend npm dependencies
+frontend-install:
+	cd frontend && npm install
+
+## Start the Vite frontend dev server
+frontend-dev:
+	cd frontend && npm run dev
+
+## Build the production frontend bundle
+frontend-build:
+	cd frontend && npm run build
+
+## Start the backend and frontend together
+dev:
+	make serve & make frontend-dev
 
 ## Run the Python smoke test against the HTTPS backend
 smoke:

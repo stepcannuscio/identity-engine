@@ -291,6 +291,21 @@ def _resolve_conflict(conn, attr: dict, confirm: bool) -> dict | None:
     return _save_attribute(conn, attr, existing, announce=True)
 
 
+def save_preview_attributes(conn, attributes: list[dict]) -> list[dict]:
+    """Persist accepted quick-capture preview items.
+
+    Accepted preview items are treated as explicit approval, so any active
+    conflicting attribute is superseded rather than skipped.
+    """
+    saved: list[dict] = []
+    for attr in attributes:
+        normalized = _normalize_attribute(attr)
+        domain_id = _get_domain_id(conn, normalized["domain"])
+        existing = _find_existing_active(conn, domain_id, normalized["label"])
+        saved.append(_save_attribute(conn, normalized, existing, announce=False))
+    return saved
+
+
 def capture(
     text: str,
     domain_hint: str | None,

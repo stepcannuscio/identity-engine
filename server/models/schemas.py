@@ -44,6 +44,17 @@ class QueryMetadata(BaseModel):
     duration_ms: int
 
 
+class RoutingLogEntry(BaseModel):
+    """One routing decision made during a query session."""
+
+    query: str
+    query_type: str
+    backend: str
+    attribute_count: int
+    domains_referenced: list[str] = []
+    timestamp: datetime
+
+
 class QueryResponse(BaseModel):
     """Non-streaming query response."""
 
@@ -97,6 +108,7 @@ class CaptureRequest(BaseModel):
 
     text: str
     domain_hint: str | None = None
+    accepted: list["CapturePreviewWriteItem"] | None = None
 
 
 class CapturePreviewItem(BaseModel):
@@ -109,6 +121,17 @@ class CapturePreviewItem(BaseModel):
     mutability: str
     confidence: float
     conflicts_with: AttributeResponse | None
+
+
+class CapturePreviewWriteItem(BaseModel):
+    """One accepted preview item submitted for persistence."""
+
+    domain: str
+    label: str
+    value: str
+    elaboration: str | None
+    mutability: str
+    confidence: float
 
 
 class CapturePreviewResponse(BaseModel):
@@ -135,6 +158,7 @@ class SessionRecord(BaseModel):
     external_calls_made: int
     started_at: datetime
     ended_at: datetime | None
+    routing_log: list[RoutingLogEntry] = []
 
 
 class CurrentSessionStatus(BaseModel):

@@ -253,9 +253,9 @@ def test_session_add_exchange_never_drops_most_recent_exchange():
 
 def test_session_to_db_record_returns_correct_external_calls_count():
     session = Session()
-    session.log_query("q1", "simple", "local", 2)
-    session.log_query("q2", "open_ended", "anthropic", 4)
-    session.log_query("q3", "simple", "groq", 1)
+    session.log_query("q1", "simple", "local", 2, ["goals"])
+    session.log_query("q2", "open_ended", "anthropic", 4, ["goals", "values"])
+    session.log_query("q3", "simple", "groq", 1, [])
     session.query_count = 3
     record = session.to_db_record()
     assert record["external_calls_made"] == 2

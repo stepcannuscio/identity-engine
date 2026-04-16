@@ -3,10 +3,11 @@
 A privacy-first personal identity store. Models who you are — values, goals,
 personality, patterns — in a structured, queryable, encrypted local database.
 
-## Status: Phase 3a — FastAPI Backend
+## Status: Phase 3b — React Frontend
 
 Schema, security infrastructure, identity seeding, the interactive query/capture
-CLI flows, and an HTTPS FastAPI backend for the web UI.
+CLI flows, an HTTPS FastAPI backend, and a Vite-built React frontend served by
+the backend in production.
 
 ## Security model
 
@@ -30,7 +31,11 @@ make interview  # start the interactive identity interview
 make capture    # save a quick note directly as identity attributes
 make query      # start interactive freeform query mode
 make serve      # start the HTTPS FastAPI backend for the web UI
-make smoke  # run a quick API smoke test against the backend
+make frontend-install  # install frontend npm dependencies
+make frontend-dev      # start the Vite frontend dev server
+make frontend-build    # build the production frontend bundle
+make dev        # start backend + frontend together
+make smoke      # run a quick API smoke test against the backend
 make view       # pretty-print the identity store
 make set-ui-passphrase  # update the web UI passphrase
 ```
@@ -181,6 +186,29 @@ In-session commands:
 
 See [docs/query.md](docs/query.md) for details.
 
+## Web UI
+
+The frontend lives in `frontend/` and is built with Vite + React. It never
+touches the database or LLM providers directly; all reads and writes go
+through the FastAPI API.
+
+Development:
+
+```sh
+make frontend-install
+make dev
+```
+
+Production:
+
+```sh
+make frontend-build
+make serve
+```
+
+When `frontend/dist/` exists, `scripts/serve.py` mounts the built app at `/`
+so a single HTTPS server on port `8443` serves both the API and the React UI.
+
 ## FastAPI backend
 
 `make serve` starts the local HTTPS backend consumed by the React web UI.
@@ -208,8 +236,8 @@ Core routes:
 - `POST /query/stream`
 - `GET/POST/PUT/DELETE /attributes...`
 - `POST /capture/preview`
-- `POST /capture`
-- `GET /sessions`
+- `POST /capture` (also accepts approved preview items from the UI)
+- `GET /sessions` (includes routing-log detail for the History tab)
 
 See [docs/server.md](docs/server.md) for the full API reference.
 
@@ -255,6 +283,7 @@ server/auth.py              — passphrase login and in-memory session tokens
 server/routes/              — query, attributes, capture, and session endpoints
 server/middleware/          — auth enforcement, interface checks, security headers
 server/models/              — Pydantic request/response schemas
+frontend/                   — Vite React frontend for query, graph, and history tabs
 scripts/init_db.py          — one-time (idempotent) initialisation script
 scripts/seed_interview.py   — interactive identity interview (make interview)
 scripts/capture.py          — quick capture CLI (make capture)

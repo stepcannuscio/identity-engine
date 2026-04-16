@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import stat
 from contextlib import asynccontextmanager
@@ -37,6 +38,7 @@ TAILSCALE_WARNING = (
     "127.0.0.1 only. Mobile access will not be available.\n"
     "Install Tailscale for secure remote access."
 )
+logger = logging.getLogger(__name__)
 
 
 def get_bind_ip() -> str:
@@ -222,7 +224,7 @@ def create_app() -> FastAPI:
         request: Request,
         exc: RoutingViolationError,
     ) -> Response:
-        _ = (request, exc)
+        logger.warning("Routing violation on %s %s: %s", request.method, request.url.path, exc)
         response = JSONResponse({"error": "internal server error"}, status_code=500)
         return apply_security_headers(response)
 
@@ -231,7 +233,7 @@ def create_app() -> FastAPI:
         request: Request,
         exc: RoutingProtectedError,
     ) -> Response:
-        _ = (request, exc)
+        logger.warning("Routing protected on %s %s: %s", request.method, request.url.path, exc)
         response = JSONResponse(
             {
                 "error": "routing_protected",
@@ -246,7 +248,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception) -> Response:
-        _ = (request, exc)
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
         response = JSONResponse({"error": "internal server error"}, status_code=500)
         return apply_security_headers(response)
 

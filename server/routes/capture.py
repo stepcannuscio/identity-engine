@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 
 from engine.capture import capture as save_capture
 from engine.capture import preview_capture
+from engine.capture import save_preview_attributes
 from server.db import get_db_connection
 from server.models.schemas import (
     CapturePreviewItem,
@@ -73,13 +74,19 @@ def preview(payload: CaptureRequest, request: Request) -> CapturePreviewResponse
 def capture(payload: CaptureRequest, request: Request) -> CaptureResponse:
     """Persist quick-capture attributes in non-interactive mode."""
     with get_db_connection() as conn:
-        saved = save_capture(
-            payload.text,
-            payload.domain_hint,
-            conn,
-            request.app.state.llm_config,
-            confirm=False,
-        )
+        if payload.accepted is not None:
+            saved = save_preview_attributes(
+                conn,
+                [item.model_dump() for item in payload.accepted],
+            )
+        else:
+            saved = save_capture(
+                payload.text,
+                payload.domain_hint,
+                conn,
+                request.app.state.llm_config,
+                confirm=False,
+            )
         attributes = []
         for item in saved:
             row = _find_conflict(conn, item["domain"], item["label"])

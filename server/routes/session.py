@@ -2,15 +2,40 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Request
 
 from server.db import get_db_connection
-from server.models.schemas import CurrentSessionStatus, SessionRecord
+from server.models.schemas import CurrentSessionStatus, RoutingLogEntry, SessionRecord
 
 router = APIRouter(tags=["sessions"])
 
 
+def _parse_timestamp(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value)
+    raise ValueError("Invalid routing-log timestamp.")
+
+
 def _serialize_session(row) -> SessionRecord:
+    raw_log = row[8] or "[]"
+    parsed_log = json.loads(raw_log)
+    routing_log = [
+        RoutingLogEntry(
+            query=str(entry.get("query", "")),
+            query_type=str(entry.get("query_type", "")),
+            backend=str(entry.get("backend", "local")),
+            attribute_count=int(entry.get("attribute_count", 0)),
+            domains_referenced=list(entry.get("domains_referenced", [])),
+            timestamp=_parse_timestamp(entry.get("timestamp")),
+        )
+        for entry in parsed_log
+        if isinstance(entry, dict)
+    ]
     return SessionRecord(
         id=str(row[0]),
         session_type=str(row[1]),
@@ -20,6 +45,7 @@ def _serialize_session(row) -> SessionRecord:
         external_calls_made=int(row[5]),
         started_at=row[6],
         ended_at=row[7],
+        routing_log=routing_log,
     )
 
 
@@ -38,7 +64,8 @@ def list_sessions(request: Request) -> list[SessionRecord]:
                 attributes_updated,
                 external_calls_made,
                 started_at,
-                ended_at
+                ended_at,
+                routing_log
             FROM reflection_sessions
             ORDER BY started_at DESC
             LIMIT 20
@@ -78,7 +105,8 @@ def get_session(session_id: str, request: Request) -> SessionRecord:
                 attributes_updated,
                 external_calls_made,
                 started_at,
-                ended_at
+                ended_at,
+                routing_log
             FROM reflection_sessions
             WHERE id = ?
             """,

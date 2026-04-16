@@ -57,6 +57,13 @@ def prepare_query(
 
 def record_query_result(session: Session, context: QueryContext, response: str) -> None:
     """Persist in-memory session metadata after a completed query."""
+    domains_referenced = sorted(
+        {
+            str(attribute.get("domain", ""))
+            for attribute in context.attributes
+            if attribute.get("domain")
+        }
+    )
     session.add_exchange(context.query, response)
     session.query_count += 1
     session.attributes_retrieved += len(context.attributes)
@@ -65,6 +72,7 @@ def record_query_result(session: Session, context: QueryContext, response: str) 
         context.query_type,
         context.backend,
         len(context.attributes),
+        domains_referenced,
     )
 
 

@@ -16,6 +16,9 @@ On startup the server:
 
 The server only serves HTTPS on port `8443`.
 
+When `frontend/dist/` exists, `scripts/serve.py` mounts the built React app at
+`/` so the backend serves both static frontend assets and API routes.
+
 ## Authentication
 
 All routes except `POST /auth/login` and `GET /health` require a valid session
@@ -48,6 +51,8 @@ Supported token headers:
 
 - `POST /query`
 - `POST /query/stream` — SSE stream with `token`, `metadata`, `warning`, `error`, and `done` events
+  - query failures now distinguish privacy routing blocks, missing backend configuration,
+    and upstream provider failures
 
 ### Attributes
 
@@ -63,10 +68,12 @@ Supported token headers:
 
 - `POST /capture/preview`
 - `POST /capture`
+  - accepts the raw quick-capture text for non-interactive extraction
+  - also accepts an optional `accepted` array of user-approved preview items
 
 ### Sessions
 
-- `GET /sessions`
+- `GET /sessions` — includes stored `routing_log` entries used by the History tab
 - `GET /sessions/{id}`
 - `GET /sessions/current`
 

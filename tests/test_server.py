@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -20,6 +21,7 @@ import engine.capture as capture_module
 from config.llm_router import ProviderConfig
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
+from engine.prompt_builder import RoutingViolationError
 from server.main import assert_safe_bind_ip, create_app
 
 
@@ -326,6 +328,157 @@ def test_capture_writes_attributes_with_local_only_routing(client: TestClient, m
         "SELECT routing FROM attributes WHERE label = 'phase_three'"
     ).fetchone()[0]
     assert routing == "local_only"
+
+
+def test_query_returns_409_when_external_routing_violates_local_only_policy(
+    client: TestClient, monkeypatch
+):
+    monkeypatch.setattr(
+        "server.routes.query.resolve_external_router",
+        lambda: ProviderConfig(
+            provider="anthropic",
+            api_key="test-key",  # pragma: allowlist secret
+            model="claude-sonnet-4-6",
+            is_local=False,
+            arch="apple_silicon",
+            ram_gb=36.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.prepare_query",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RoutingViolationError("local_only attributes cannot be sent externally")
+        ),
+    )
+
+    response = client.post(
+        "/query",
+        json={"query": "Tell me about my fears", "backend_override": "external"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "routing_violation"
+
+
+def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.query.resolve_external_router",
+        lambda: ProviderConfig(
+            provider="anthropic",
+            api_key="test-key",  # pragma: allowlist secret
+            model="claude-sonnet-4-6",
+            is_local=False,
+            arch="apple_silicon",
+            ram_gb=36.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.generate_response",
+        lambda *args, **kwargs: (_ for _ in ()).throw(requests.exceptions.Timeout()),
+    )
+
+    response = client.post(
+        "/query/stream",
+        json={"query": "What matters most to me?", "backend_override": "external"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"type": "error"' in body
+    assert '"code": "upstream_error"' in body
+
+
+def test_capture_accepts_preview_items_and_supersedes_conflicts(client: TestClient):
+    existing_id = _insert_attribute(
+        _db(client),
+        "goals",
+        "phase_three",
+        "Old goal",
+    )
+
+    response = client.post(
+        "/capture",
+        json={
+            "text": "ignored when accepted items are supplied",
+            "accepted": [
+                {
+                    "domain": "goals",
+                    "label": "phase_three",
+                    "value": "New goal",
+                    "elaboration": None,
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                }
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["attributes_saved"] == 1
+
+    previous_status = _db(client).execute(
+        "SELECT status FROM attributes WHERE id = ?",
+        (existing_id,),
+    ).fetchone()[0]
+    assert previous_status == "superseded"
+
+    active_value = _db(client).execute(
+        "SELECT value FROM attributes WHERE label = ? AND status = 'active'",
+        ("phase_three",),
+    ).fetchone()[0]
+    assert active_value == "New goal"
+
+
+def test_sessions_include_routing_log_entries(client: TestClient):
+    _db(client).execute(
+        """
+        INSERT INTO reflection_sessions (
+            id,
+            session_type,
+            summary,
+            attributes_created,
+            attributes_updated,
+            external_calls_made,
+            routing_log,
+            started_at,
+            ended_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            "freeform",
+            "1 queries across session",
+            0,
+            0,
+            1,
+            json.dumps(
+                [
+                    {
+                        "query": "What matters most to me right now?",
+                        "query_type": "open_ended",
+                        "backend": "external",
+                        "attribute_count": 4,
+                        "domains_referenced": ["goals", "values"],
+                        "timestamp": "2026-04-08T12:00:00+00:00",
+                    }
+                ]
+            ),
+            "2026-04-08T12:00:00+00:00",
+            "2026-04-08T12:05:00+00:00",
+        ),
+    )
+    _db(client).commit()
+
+    response = client.get("/sessions", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    session = response.json()[0]
+    assert session["routing_log"][0]["backend"] == "external"
+    assert session["routing_log"][0]["domains_referenced"] == ["goals", "values"]
 
 
 def test_server_startup_asserts_bind_ip_is_not_zero_zero_zero_zero():
