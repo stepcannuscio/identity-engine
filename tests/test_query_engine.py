@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
+from engine.context_assembler import AssembledContext
 from engine.privacy_broker import BrokeredResult, InferenceDecision
 from engine.prompt_builder import build_prompt
 from engine.query_classifier import classify_query
@@ -178,46 +179,67 @@ def test_retrieve_attributes_domain_intent_fallback_includes_goals(conn, domain_
 
 
 def test_build_prompt_includes_system_message_first():
-    attributes = [
-        {
-            "domain": "goals",
-            "label": "priority",
-            "value": "Finish project",
-            "score": 0.8,
-            "routing": "external_ok",
-        }
-    ]
+    context = AssembledContext(
+        task_type="query",
+        input_text="What should I do?",
+        attributes=[
+            {
+                "domain": "goals",
+                "label": "priority",
+                "value": "Finish project",
+                "score": 0.8,
+                "routing": "external_ok",
+            }
+        ],
+        session_history=[],
+        domains_used=["goals"],
+        attribute_count=1,
+        retrieval_mode="simple",
+        was_trimmed=False,
+        contains_local_only=False,
+    )
     messages = build_prompt(
-        "What should I do?", attributes, [], "simple", target_backend="local"
+        context,
+        target_backend="local",
     )
     assert messages[0]["role"] == "system"
 
 
 def test_build_prompt_formats_attributes_grouped_by_domain():
-    attributes = [
-        {
-            "domain": "goals",
-            "label": "priority",
-            "value": "Finish project",
-            "score": 0.9,
-            "routing": "external_ok",
-        },
-        {
-            "domain": "goals",
-            "label": "timeline",
-            "value": "Next 2 months",
-            "score": 0.7,
-            "routing": "external_ok",
-        },
-        {
-            "domain": "values",
-            "label": "integrity",
-            "value": "Keep promises",
-            "score": 0.6,
-            "routing": "external_ok",
-        },
-    ]
-    messages = build_prompt("question", attributes, [], "simple", target_backend="local")
+    context = AssembledContext(
+        task_type="query",
+        input_text="question",
+        attributes=[
+            {
+                "domain": "goals",
+                "label": "priority",
+                "value": "Finish project",
+                "score": 0.9,
+                "routing": "external_ok",
+            },
+            {
+                "domain": "goals",
+                "label": "timeline",
+                "value": "Next 2 months",
+                "score": 0.7,
+                "routing": "external_ok",
+            },
+            {
+                "domain": "values",
+                "label": "integrity",
+                "value": "Keep promises",
+                "score": 0.6,
+                "routing": "external_ok",
+            },
+        ],
+        session_history=[],
+        domains_used=["goals", "values"],
+        attribute_count=3,
+        retrieval_mode="simple",
+        was_trimmed=False,
+        contains_local_only=False,
+    )
+    messages = build_prompt(context, target_backend="local")
     system = messages[0]["content"]
     assert "[goals] priority: Finish project" in system
     assert "[goals] timeline: Next 2 months" in system
@@ -229,7 +251,18 @@ def test_build_prompt_caps_history_at_six_exchanges():
     for i in range(7):
         history.append({"role": "user", "content": f"u{i}"})
         history.append({"role": "assistant", "content": f"a{i}"})
-    messages = build_prompt("current", [], history, "open_ended", target_backend="local")
+    context = AssembledContext(
+        task_type="query",
+        input_text="current",
+        attributes=[],
+        session_history=history[-12:],
+        domains_used=[],
+        attribute_count=0,
+        retrieval_mode="open_ended",
+        was_trimmed=True,
+        contains_local_only=False,
+    )
+    messages = build_prompt(context, target_backend="local")
     # 1 system + 12 capped history + 1 current query
     assert len(messages) == 14
     assert messages[1]["content"] == "u1"

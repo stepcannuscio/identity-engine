@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from engine.context_assembler import AssembledContext, assemble_query_context
 from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import build_prompt
 from engine.query_classifier import classify_query
-from engine.retriever import retrieve_attributes
 from engine.session import Session
 
 
@@ -21,6 +21,7 @@ class QueryContext:
 
     query: str
     query_type: str
+    assembled_context: AssembledContext
     attributes: list[dict]
     messages: list[dict[str, str]]
     backend: str
@@ -34,22 +35,22 @@ def prepare_query(
 ) -> QueryContext:
     """Prepare a query without generating a response yet."""
     query_type = classify_query(user_query)
-    attributes = retrieve_attributes(user_query, query_type, conn)
+    assembled_context = assemble_query_context(
+        user_query,
+        query_type,
+        session.get_history(),
+        conn,
+    )
 
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
 
-    messages = build_prompt(
-        user_query,
-        attributes,
-        session.get_history(),
-        query_type,
-        target_backend=backend,
-    )
+    messages = build_prompt(assembled_context, target_backend=backend)
 
     return QueryContext(
         query=user_query,
         query_type=query_type,
-        attributes=attributes,
+        assembled_context=assembled_context,
+        attributes=assembled_context.attributes,
         messages=messages,
         backend=backend,
     )
@@ -57,13 +58,6 @@ def prepare_query(
 
 def record_query_result(session: Session, context: QueryContext, response: str) -> None:
     """Persist in-memory session metadata after a completed query."""
-    domains_referenced = sorted(
-        {
-            str(attribute.get("domain", ""))
-            for attribute in context.attributes
-            if attribute.get("domain")
-        }
-    )
     session.add_exchange(context.query, response)
     session.query_count += 1
     session.attributes_retrieved += len(context.attributes)
@@ -72,7 +66,7 @@ def record_query_result(session: Session, context: QueryContext, response: str) 
         context.query_type,
         context.backend,
         len(context.attributes),
-        domains_referenced,
+        context.assembled_context.domains_used,
     )
 
 

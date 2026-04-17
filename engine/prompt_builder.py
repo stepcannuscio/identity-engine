@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from engine.context_assembler import AssembledContext
+
 
 class RoutingViolationError(Exception):
     """Raised when local-only attributes are included for an external backend."""
@@ -82,34 +84,21 @@ def _format_attributes(attributes: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _cap_history(history: list[dict]) -> list[dict]:
-    if not history:
-        return []
-    # Keep last 6 exchanges (12 messages).
-    return history[-12:]
-
-
 def build_prompt(
-    query: str,
-    attributes: list[dict],
-    history: list[dict],
-    query_type: str,
+    context: AssembledContext,
     target_backend: str = "local",
 ) -> list[dict]:
     """Build the final message array for response generation.
 
     Args:
-        query: Current user query.
-        attributes: Retrieved identity attributes.
-        history: Prior user/assistant messages from the session.
-        query_type: Query classification result (currently informational).
+        context: Structured assembled context for the current task.
         target_backend: "local" for local inference, otherwise provider name.
     """
-    _ = query_type  # reserved for future prompt variations
+    _ = context.retrieval_mode  # reserved for future prompt variations
 
-    _assert_routing(attributes, target_backend)
+    _assert_routing(context.attributes, target_backend)
 
-    formatted_attributes = _format_attributes(attributes)
+    formatted_attributes = _format_attributes(context.attributes)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
@@ -118,6 +107,6 @@ def build_prompt(
     }
 
     messages = [system_message]
-    messages.extend(_cap_history(history))
-    messages.append({"role": "user", "content": query})
+    messages.extend(context.session_history)
+    messages.append({"role": "user", "content": context.input_text})
     return messages

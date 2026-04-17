@@ -105,7 +105,7 @@ def score_attribute(query: str, attribute: dict) -> float:
     return (keyword_score * 0.5) + (domain_score * 0.3) + (confidence * 0.2)
 
 
-def _budget_for(query_type: str) -> dict:
+def budget_for_query_type(query_type: str) -> dict:
     return SIMPLE_BUDGET if query_type == "simple" else OPEN_ENDED_BUDGET
 
 
@@ -233,7 +233,7 @@ def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    budget = _budget_for(query_type)
+    budget = budget_for_query_type(query_type)
     threshold = float(budget["score_threshold"])
     filtered = [a for a in scored if a["score"] >= threshold]
 
