@@ -217,10 +217,12 @@ def _migrate_attribute_tables(conn) -> None:
         conn.execute(
             """
             INSERT INTO attribute_history (
-                id, attribute_id, previous_value, previous_confidence, reason, changed_at, changed_by
+                id, attribute_id, previous_value,
+                previous_confidence, reason, changed_at, changed_by
             )
             SELECT
-                id, attribute_id, previous_value, previous_confidence, reason, changed_at, changed_by
+                id, attribute_id, previous_value,
+                previous_confidence, reason, changed_at, changed_by
             FROM attribute_history_old
             """
         )

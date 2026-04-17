@@ -836,7 +836,9 @@ def test_post_artifacts_accepts_text_file_upload(client: TestClient):
     response = client.post(
         "/artifacts",
         data={"title": "Meeting transcript", "domain": "patterns"},
-        files={"file": ("transcript.md", b"Meetings drain me when they stack back to back.", "text/markdown")},
+        files={"file": (
+            "transcript.md", b"Meetings drain me when they stack back to back.", "text/markdown"
+        )},
         headers=_login_headers(client),
     )
 
@@ -1055,13 +1057,17 @@ def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
 
 
 def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypatch):
-    _insert_attribute(
-        _db(client),
-        "goals",
-        "priority",
-        "Ship the phase 3 milestone this quarter.",
-        routing="external_ok",
-    )
+    # Three confirmed, external_ok attributes in the goals domain to clear the
+    # 25-pt insufficient threshold (each confirmed + 0.8-conf = 13 pts; 3×13=39).
+    _db_conn = _db(client)
+    for label, value in [
+        ("priority", "Ship the phase 3 milestone this quarter."),
+        ("secondary_goal", "Read one technical book per month."),
+        ("long_term_goal", "Build a sustainable freelance practice."),
+    ]:
+        _insert_attribute(
+            _db_conn, "goals", label, value, routing="external_ok", status="confirmed"
+        )
     monkeypatch.setattr(
         "server.routes.query.resolve_external_router",
         lambda: ProviderConfig(

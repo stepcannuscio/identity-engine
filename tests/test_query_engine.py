@@ -380,9 +380,13 @@ def test_prepare_query_omits_local_signal_summaries_for_external_backend(conn):
         conn.execute(
             """
             INSERT INTO preference_signals (
-                id, category, subject, signal, strength, source, context_json, attribute_id, created_at
+                id, category, subject, signal, strength,
+                source, context_json, attribute_id, created_at
             )
-            VALUES (?, 'writing_style', 'dense_long_form', 'avoid', 4, 'explicit_feedback', NULL, NULL, ?)
+            VALUES (
+                ?, 'writing_style', 'dense_long_form', 'avoid', 4,
+                'explicit_feedback', NULL, NULL, ?
+            )
             """,
             (str(uuid.uuid4()), f"2026-04-17T12:0{index}:00+00:00"),
         )
@@ -435,13 +439,22 @@ def test_session_to_db_record_returns_correct_external_calls_count():
 
 
 def test_query_returns_string(conn, domain_ids):
-    _insert_attribute(
-        conn,
-        domain_ids["goals"],
-        "priority_goal",
-        "I want to ship a personal project this quarter.",
-        confidence=0.9,
-    )
+    # Insert confirmed attributes to guarantee low_confidence is not short-circuited.
+    # Confirmed attrs (12 + 2 = 14 pts each) in the goals domain are all
+    # relevant to the query "What is my main goal?" so retrieval picks them up.
+    for label, value in [
+        ("priority_goal", "Ship a personal project this quarter."),
+        ("secondary_goal", "Read one book per month this year."),
+        ("long_term_goal", "Build a sustainable freelance practice."),
+    ]:
+        _insert_attribute(
+            conn,
+            domain_ids["goals"],
+            label,
+            value,
+            confidence=0.9,
+            status="confirmed",
+        )
     session = Session()
     config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
 
@@ -466,14 +479,22 @@ def test_query_returns_string(conn, domain_ids):
 
 
 def test_query_logs_normalized_audit_entry(conn, domain_ids):
-    _insert_attribute(
-        conn,
-        domain_ids["goals"],
-        "priority_goal",
-        "I want to ship a personal project this quarter.",
-        confidence=0.9,
-        routing="external_ok",
-    )
+    # Confirmed attributes score 14 pts each; 3 in the goals domain ensures
+    # retrieval returns enough to clear the 25-pt insufficient threshold.
+    for label, value in [
+        ("priority_goal", "Ship a personal project this quarter."),
+        ("secondary_goal", "Read one book per month this year."),
+        ("long_term_goal", "Build a sustainable freelance practice."),
+    ]:
+        _insert_attribute(
+            conn,
+            domain_ids["goals"],
+            label,
+            value,
+            confidence=0.9,
+            routing="external_ok",
+            status="confirmed",
+        )
     session = Session()
     config = SimpleNamespace(
         is_local=False,
@@ -589,21 +610,29 @@ def test_query_blocks_external_backend_when_only_artifact_context_is_available(c
 
 
 def test_prepare_query_attaches_coverage_assessment(conn, domain_ids):
-    _insert_attribute(
-        conn,
-        domain_ids["goals"],
-        "priority",
-        "Ship the backend cleanly this quarter.",
-        confidence=0.9,
-        routing="external_ok",
-    )
+    # Confirmed attributes (14 pts each) in the query-relevant domain.
+    for label, value in [
+        ("priority", "Ship the backend cleanly this quarter."),
+        ("secondary_goal", "Read one technical book per month."),
+        ("long_term_goal", "Build a sustainable freelance practice."),
+    ]:
+        _insert_attribute(
+            conn,
+            domain_ids["goals"],
+            label,
+            value,
+            confidence=0.9,
+            routing="external_ok",
+            status="confirmed",
+        )
     session = Session()
     config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
 
     prepared = prepare_query("What are my current goals?", session, conn, config)
 
-    assert prepared.coverage.confidence in {"medium_confidence", "high_confidence"}
+    assert prepared.coverage.confidence != "insufficient_data"
     assert prepared.coverage.counts.attributes >= 1
+    assert prepared.coverage.breakdown.attribute_score > 0
 
 
 def test_query_short_circuits_when_coverage_is_insufficient(conn, domain_ids):

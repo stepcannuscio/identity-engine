@@ -285,7 +285,8 @@ def _format_signal_summary(summary, direction: str) -> str:
     if direction == "negative":
         return (
             f"Avoid {subject}. "
-            f"Observed {summary.negative_count} negative and {summary.positive_count} positive signals."
+            f"Observed {summary.negative_count} negative and "
+            f"{summary.positive_count} positive signals."
         )
     return (
         f"Prefer {subject}. "

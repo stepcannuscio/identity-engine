@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from config.llm_router import ProviderConfig
 from engine.privacy_broker import InferenceDecision
@@ -66,7 +66,9 @@ def blocked_privacy_state(
 
 def unavailable_privacy_state(provider_config: ProviderConfig) -> PrivacyState:
     """Return a safe fallback when execution details are unavailable."""
-    execution_mode = "local" if provider_config.is_local else "external"
+    execution_mode: Literal["local", "external"] = (
+        "local" if provider_config.is_local else "external"
+    )
     return PrivacyState(
         execution_mode=execution_mode,
         routing_enforced=True,
@@ -86,7 +88,9 @@ def privacy_state_from_decision(decision: InferenceDecision) -> PrivacyState:
             routing_enforced=decision.routing_enforced,
         )
 
-    execution_mode = "local" if decision.is_local else "external"
+    execution_mode: Literal["local", "external"] = (
+        "local" if decision.is_local else "external"
+    )
     summary = (
         _local_summary(decision.routing_enforced, decision.contains_local_only_context)
         if decision.is_local
@@ -104,7 +108,9 @@ def privacy_state_from_decision(decision: InferenceDecision) -> PrivacyState:
 
 def privacy_state_from_provider(provider_config: ProviderConfig) -> PrivacyState:
     """Return the best available privacy summary before inference completes."""
-    execution_mode = "local" if provider_config.is_local else "external"
+    execution_mode: Literal["local", "external"] = (
+        "local" if provider_config.is_local else "external"
+    )
     summary = (
         "Processing locally with privacy rules applied."
         if provider_config.is_local
@@ -133,6 +139,7 @@ def privacy_state_from_routing_log(entry: Mapping[str, Any]) -> PrivacyState:
             routing_enforced=routing_enforced or True,
         )
 
+    execution_mode: Literal["local", "external", "unknown"]
     if is_local is True:
         execution_mode = "local"
         summary = _local_summary(

@@ -31,8 +31,18 @@ Retrieval / Extraction Prep → Prompt Builder → Privacy Broker → LLM Router
 ### Coverage Evaluator
 - Deterministic reasoning-control layer that runs between context assembly
   and inference
-- Classifies the assembled context as high, medium, low, or insufficient
-  confidence using weighted counts and small quality bonuses
+- Scores context on a 100-point style model: attribute score (cap 50),
+  preference score (cap 25), artifact score (cap 20), consistency adjustment
+  (±5); components weighted by quality (confirmed > active > inferred) and
+  per-attribute confidence modifiers
+- Applies query-type-aware classification thresholds: narrow preference
+  questions require less evidence than broad self-model questions; artifact-
+  grounded questions apply a dedicated artifact-emphasis profile
+- Enforces structural guardrails: no high confidence without identity
+  support (attributes or confirmed preferences), artifact-only evidence
+  capped below high unless 2+ sources are present
+- Exposes a ScoreBreakdown for testing and future calibration without
+  surfacing internal scores to end users
 - Adds a short hedging instruction to the prompt for low and medium cases
 - Short-circuits the LLM call and returns a canned message when no grounded
   context is available (while still deferring to the privacy broker if

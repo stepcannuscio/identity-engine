@@ -176,7 +176,8 @@ def _confirm_attribute(conn, *, attribute_id: str, current) -> AttributeResponse
         changed_at=now,
     )
     conn.execute(
-        "UPDATE attributes SET status = 'confirmed', last_confirmed = ?, updated_at = ? WHERE id = ?",
+        "UPDATE attributes SET status = 'confirmed', "
+        "last_confirmed = ?, updated_at = ? WHERE id = ?",
         (now, now, attribute_id),
     )
     conn.commit()

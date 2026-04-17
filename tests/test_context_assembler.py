@@ -253,7 +253,7 @@ def test_assemble_query_context_includes_artifact_chunks_for_open_ended_queries(
     assert context.contains_local_only is True
 
 
-def test_assemble_query_context_skips_artifact_chunks_for_strong_simple_structured_context(conn, domain_ids):
+def test_assemble_query_context_skips_artifact_chunks_for_strong_simple_context(conn, domain_ids):
     for index in range(4):
         _insert_attribute(
             conn,

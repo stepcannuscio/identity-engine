@@ -98,7 +98,9 @@ def test_preview_capture_uses_privacy_broker(conn, config, monkeypatch):
             metadata=SimpleNamespace(task_type=task_type),
         )
 
-    monkeypatch.setattr(capture_module.PrivacyBroker, "extract_structured_attributes", _mock_extract)
+    monkeypatch.setattr(
+        capture_module.PrivacyBroker, "extract_structured_attributes", _mock_extract
+    )
 
     preview = capture_module.preview_capture("I focus best in the morning.", None, config)
 

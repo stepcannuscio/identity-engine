@@ -73,6 +73,8 @@ def _base_weight(item: PreferenceSummaryItem) -> float:
     if source == "attribute":
         return 2.0
     return 1.0
+
+
 def score_candidate_against_preferences(
     candidate: Mapping[str, object],
     preference_summary: PreferenceSummaryPayload,
@@ -114,7 +116,9 @@ def score_candidate_against_preferences(
             score += 1.0
             reasons.append(f"matched context tag: {context_tag}")
 
-    label = str(candidate.get("name") or candidate.get("subject") or candidate.get("category") or "")
+    label = str(
+        candidate.get("name") or candidate.get("subject") or candidate.get("category") or ""
+    )
     return {
         "candidate": candidate,
         "label": label,

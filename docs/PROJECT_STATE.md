@@ -119,10 +119,16 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 
 ### 15. Coverage & Answer Confidence Layer
 - deterministic evaluator inspects the assembled context before inference runs
-- scores weighted counts of retrieved attributes, preferences, and artifacts,
-  with small bonuses for confirmed and high-confidence attributes
-- classifies the query as `high_confidence`, `medium_confidence`,
-  `low_confidence`, or `insufficient_data`
+- scores context on a 100-point style model: attribute score (cap 50) weighted
+  by status and per-attribute confidence; preference score (cap 25) tiered by
+  attribute type and signal cluster strength; artifact score (cap 20) scored by
+  source diversity; consistency adjustment (±5)
+- applies query-type-aware threshold profiles: narrow preference (high ≥ 55),
+  recommendation (high ≥ 60), broad self-model (high ≥ 70), artifact-grounded
+  (high ≥ 60), default (high ≥ 65)
+- enforces structural guardrails: no high confidence without identity support;
+  artifact-only evidence capped below high unless 2+ sources present
+- exposes a ScoreBreakdown dataclass for testing and calibration
 - low and medium confidence append a brief hedge to the system prompt so the
   model acknowledges limitations
 - `insufficient_data` short-circuits the LLM call and returns a canned message

@@ -58,7 +58,10 @@ async def create_artifact(request: Request) -> ArtifactIngestResponse:
         source = payload.get("source")
         domain = payload.get("domain")
         metadata = payload.get("metadata")
-    elif "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+    elif (
+        "multipart/form-data" in content_type
+        or "application/x-www-form-urlencoded" in content_type
+    ):
         form = await request.form()
         upload = form.get("file")
         text = str(form.get("text") or "").strip() or None

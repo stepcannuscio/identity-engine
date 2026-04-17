@@ -102,16 +102,41 @@ ranking.
 ## Coverage and Confidence
 
 Answer confidence is a *runtime* signal, not stored state. The coverage
-evaluator derives it from the assembled context on every query:
+evaluator derives it from the assembled context on every query using a
+deterministic 100-point style model:
 
-- counts visible attributes, preferences, and artifacts for the target backend
-- applies fixed weights and caps so no single signal can dominate
-- adds small bonuses for confirmed and high-confidence attributes
-- classifies the result into `high_confidence`, `medium_confidence`,
-  `low_confidence`, or `insufficient_data`
+- **Attribute score** (cap 50): confirmed attributes score highest (12 pts),
+  then explicit active (10), then inferred (6), with per-attribute confidence
+  modifiers (+2 / +1 / −2) that reward high-quality beliefs and penalise
+  low-confidence ones
+- **Preference score** (cap 25): confirmed preference attributes score 8 pts,
+  active 5 pts; signal clusters from the preference runtime layer contribute
+  4 pts (strong) or 2 pts (weak), with a 3-pt bonus for negative signals that
+  confirm what to avoid
+- **Artifact score** (cap 20): scored by source diversity — first chunk per
+  source is worth 4 pts; second and third distinct sources each add a bonus;
+  multi-source agreement adds 3 pts; a single weak chunk is penalised
+- **Consistency adjustment** (±5): +5 when all three evidence types contribute;
+  −5 when there is a strong split in preference signals
+
+Classification bands (global defaults; per-profile overrides for narrow
+preference, recommendation, broad self-model, and artifact-grounded queries):
+
+- `high_confidence`: score ≥ 65
+- `medium_confidence`: 45–64
+- `low_confidence`: 25–44
+- `insufficient_data`: score < 25 or no signals of any kind
+
+Structural guardrails prevent artifacts from overriding identity absence:
+no query can reach `high_confidence` without at least one active attribute
+or confirmed preference attribute, and artifact-only single-source evidence
+is capped below `medium_confidence`.
 
 The label is attached to the query response metadata so clients can render it,
 and drives how the prompt hedges or whether the LLM is called at all.
+Broad self-model questions require stronger evidence (high ≥ 70) than narrow
+preference questions (high ≥ 55), reflecting the system's preference for
+honesty over overconfident answers.
 
 ## Key Idea
 
