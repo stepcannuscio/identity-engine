@@ -69,11 +69,24 @@ def retrieve_artifact_chunk_candidates(
             a.type,
             a.source,
             a.metadata,
-            d.name
+            d.name,
+            GROUP_CONCAT(t.tag, ' ')
         FROM artifact_chunks c
         JOIN artifacts a ON a.id = c.artifact_id
         LEFT JOIN domains d ON d.id = a.domain_id
+        LEFT JOIN artifact_tags t ON t.artifact_id = a.id
         WHERE 1 = 1 {type_clause}
+        GROUP BY
+            c.id,
+            c.artifact_id,
+            c.chunk_index,
+            c.content,
+            c.metadata,
+            a.title,
+            a.type,
+            a.source,
+            a.metadata,
+            d.name
         ORDER BY a.created_at DESC, c.chunk_index ASC
         """,
         params,
@@ -85,14 +98,16 @@ def retrieve_artifact_chunk_candidates(
         content = str(row[3])
         title = str(row[5])
         domain = str(row[9]) if row[9] is not None else None
-        haystack_tokens = _tokenize(f"{title} {content}")
+        tags = str(row[10]) if row[10] is not None else ""
+        haystack_tokens = _tokenize(f"{title} {content} {tags}")
         overlap = len(query_tokens.intersection(haystack_tokens))
         if overlap <= 0:
             continue
 
         domain_bonus = 1 if domain and domain in matched_domains else 0
         title_bonus = 1 if any(token in _tokenize(title) for token in query_tokens) else 0
-        score = overlap + domain_bonus + title_bonus
+        tag_bonus = 1 if tags and any(token in _tokenize(tags) for token in query_tokens) else 0
+        score = overlap + domain_bonus + title_bonus + tag_bonus
         scored.append(
             {
                 "id": str(row[0]),

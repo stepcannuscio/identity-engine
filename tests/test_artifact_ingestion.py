@@ -100,3 +100,21 @@ def test_retrieve_artifact_chunks_respects_limit(conn):
     results = retrieve_artifact_chunks(conn, "planning next steps roadmap", limit=2)
 
     assert len(results) == 2
+
+
+def test_ingest_artifact_stores_normalized_tags(conn):
+    result = ingest_artifact(
+        conn,
+        text="Notes about launch planning.",
+        title="Launch",
+        artifact_type="document",
+        source="upload",
+        tags=["Roadmap", " planning ", "roadmap"],
+    )
+
+    tags = conn.execute(
+        "SELECT tag FROM artifact_tags WHERE artifact_id = ? ORDER BY tag ASC",
+        (result.artifact_id,),
+    ).fetchall()
+
+    assert [row[0] for row in tags] == ["planning", "roadmap"]

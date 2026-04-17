@@ -24,6 +24,12 @@ export function AppStateProvider({ children }) {
   const [messages, setMessages] = useState([])
   const [isStreaming, setStreaming] = useState(false)
   const [toasts, setToasts] = useState([])
+  const [onboardingCompleted, setOnboardingCompleted] = useState(false)
+  const [activeProfile, setActiveProfile] = useState(null)
+  const [providerStatuses, setProviderStatuses] = useState([])
+  const [securityPosture, setSecurityPosture] = useState(null)
+  const [teachQuestions, setTeachQuestions] = useState([])
+  const [teachCards, setTeachCards] = useState([])
 
   const setAuthState = useCallback((nextToken, nextExpiresAt) => {
     setToken(nextToken)
@@ -66,6 +72,24 @@ export function AppStateProvider({ children }) {
     [removeToast],
   )
 
+  const setTeachState = useCallback((payload) => {
+    if (!payload) {
+      setOnboardingCompleted(false)
+      setActiveProfile(null)
+      setProviderStatuses([])
+      setSecurityPosture(null)
+      setTeachQuestions([])
+      setTeachCards([])
+      return
+    }
+    setOnboardingCompleted(Boolean(payload.onboarding_completed))
+    setActiveProfile(payload.active_profile ?? null)
+    setProviderStatuses(payload.providers ?? [])
+    setSecurityPosture(payload.security_posture ?? null)
+    setTeachQuestions(payload.questions ?? [])
+    setTeachCards(payload.cards ?? [])
+  }, [])
+
   const value = useMemo(
     () => ({
       token,
@@ -83,19 +107,33 @@ export function AppStateProvider({ children }) {
       toasts,
       addToast,
       removeToast,
+      onboardingCompleted,
+      activeProfile,
+      providerStatuses,
+      securityPosture,
+      teachQuestions,
+      teachCards,
+      setTeachState,
     }),
     [
       addMessage,
       addToast,
+      activeProfile,
       backend,
       clearAuthState,
       clearMessages,
       expiresAt,
+      onboardingCompleted,
       isAuthenticated,
       isStreaming,
       messages,
+      providerStatuses,
       removeToast,
+      securityPosture,
       setAuthState,
+      setTeachState,
+      teachCards,
+      teachQuestions,
       toasts,
       token,
     ],

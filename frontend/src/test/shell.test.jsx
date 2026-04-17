@@ -11,10 +11,43 @@ function LocationDisplay() {
 }
 
 describe('Header', () => {
+  it('keeps external disabled until a provider is configured', async () => {
+    renderWithProviders(<Header />)
+
+    const button = screen.getByRole('button', { name: 'local' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute(
+      'title',
+      'Configure an external provider in Teach before switching',
+    )
+  })
+
   it('toggles between local and external backends', async () => {
     const user = userEvent.setup()
 
-    renderWithProviders(<Header />)
+    renderWithProviders(<Header />, {
+      appState: {
+        teachState: {
+          onboarding_completed: false,
+          active_profile: null,
+          preferred_backend: 'local',
+          providers: [
+            {
+              provider: 'anthropic',
+              label: 'Anthropic',
+              configured: true,
+              available: true,
+              validated: true,
+              is_local: false,
+              model: 'claude-sonnet-4-6',
+            },
+          ],
+          security_posture: null,
+          cards: [],
+          questions: [],
+        },
+      },
+    })
 
     const button = screen.getByRole('button', { name: 'local' })
     expect(button).toHaveAttribute('title', 'Queries processed on your device')
@@ -23,7 +56,7 @@ describe('Header', () => {
 
     expect(screen.getByRole('button', { name: 'external' })).toHaveAttribute(
       'title',
-      'Queries sent to Claude API (ZDR enabled)',
+      'Queries sent to your configured external provider',
     )
   })
 })
@@ -66,5 +99,11 @@ describe('TabBar', () => {
 
     expect(screen.getByText('/graph')).toBeInTheDocument()
     expect(graphLink).toHaveClass('active')
+  })
+
+  it('includes the Teach tab', () => {
+    renderWithProviders(<TabBar isAuthenticated />)
+
+    expect(screen.getByRole('link', { name: 'Teach' })).toBeInTheDocument()
   })
 })

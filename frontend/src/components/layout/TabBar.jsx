@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { NavLink } from 'react-router-dom'
 
 const TABS = [
+  { label: 'Teach', to: '/teach' },
   { label: 'Query', to: '/query' },
   { label: 'Identity Graph', to: '/graph' },
   { label: 'History', to: '/history' },

@@ -33,7 +33,9 @@ from server.routes import (
     interview_router,
     preferences_router,
     query_router,
+    setup_router,
     session_router,
+    teach_router,
 )
 
 VERSION = "0.1.0"
@@ -225,6 +227,8 @@ def create_app() -> FastAPI:
     app.include_router(interview_router)
     app.include_router(preferences_router)
     app.include_router(session_router)
+    app.include_router(setup_router)
+    app.include_router(teach_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

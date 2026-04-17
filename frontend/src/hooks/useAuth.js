@@ -16,13 +16,15 @@ export function useAuth() {
     setAuthState,
     clearAuthState,
     clearMessages,
+    setTeachState,
   } = useAppState()
   const [isChecking, setIsChecking] = useState(Boolean(token))
 
   const clearSession = useCallback(() => {
     clearAuthState()
     clearMessages()
-  }, [clearAuthState, clearMessages])
+    setTeachState(null)
+  }, [clearAuthState, clearMessages, setTeachState])
 
   const validateToken = useCallback(
     async (candidateToken = sessionStorage.getItem('session_token')) => {

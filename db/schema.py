@@ -95,6 +95,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_chunks_position
     ON artifact_chunks(artifact_id, chunk_index);
 """
 
+ARTIFACT_TAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS artifact_tags (
+    id          TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    tag         TEXT NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+ARTIFACT_TAGS_UNIQUE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_tag_per_artifact
+    ON artifact_tags(artifact_id, tag);
+"""
+
 REFLECTION_SESSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS reflection_sessions (
     id                  TEXT PRIMARY KEY,
@@ -134,6 +148,74 @@ CREATE INDEX IF NOT EXISTS ix_preference_signals_lookup
     ON preference_signals(category, subject, created_at DESC);
 """
 
+APP_SETTINGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS app_settings (
+    id                    INTEGER PRIMARY KEY CHECK(id = 1),
+    onboarding_completed  INTEGER NOT NULL DEFAULT 0 CHECK(onboarding_completed IN (0, 1)),
+    active_profile        TEXT,
+    preferred_backend     TEXT NOT NULL DEFAULT 'local'
+                             CHECK(preferred_backend IN ('local', 'external')),
+    created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+PROVIDER_STATUS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS provider_status (
+    provider          TEXT PRIMARY KEY CHECK(provider IN ('ollama', 'anthropic', 'groq')),
+    configured        INTEGER NOT NULL DEFAULT 0 CHECK(configured IN (0, 1)),
+    validated         INTEGER NOT NULL DEFAULT 0 CHECK(validated IN (0, 1)),
+    last_validated_at TIMESTAMP,
+    last_error        TEXT,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+TEACH_QUESTIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS teach_questions (
+    id               TEXT PRIMARY KEY,
+    prompt           TEXT NOT NULL,
+    domain           TEXT REFERENCES domains(name) ON DELETE SET NULL,
+    intent_key       TEXT NOT NULL,
+    source           TEXT NOT NULL CHECK(source IN ('catalog', 'generated')),
+    status           TEXT NOT NULL DEFAULT 'pending'
+                         CHECK(status IN ('pending', 'answered', 'dismissed')),
+    priority         REAL NOT NULL DEFAULT 0.0,
+    onboarding_stage TEXT NOT NULL DEFAULT 'teaching'
+                         CHECK(onboarding_stage IN ('welcome', 'privacy', 'security', 'teaching')),
+    asked_count      INTEGER NOT NULL DEFAULT 0,
+    answer_count     INTEGER NOT NULL DEFAULT 0,
+    last_presented_at TIMESTAMP,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+TEACH_QUESTIONS_LOOKUP_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_teach_questions_status_priority
+    ON teach_questions(status, onboarding_stage, priority DESC, updated_at DESC);
+"""
+
+TEACH_FEEDBACK_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS teach_question_feedback (
+    id          TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES teach_questions(id) ON DELETE CASCADE,
+    feedback    TEXT NOT NULL CHECK(feedback IN (
+                    'skip',
+                    'not_relevant',
+                    'duplicate',
+                    'already_covered',
+                    'too_personal'
+                 )),
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+TEACH_FEEDBACK_LOOKUP_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_teach_feedback_question_created
+    ON teach_question_feedback(question_id, created_at DESC);
+"""
+
 SCHEMA_SQL = "\n\n".join(
     [
         DOMAINS_TABLE_SQL,
@@ -144,9 +226,17 @@ SCHEMA_SQL = "\n\n".join(
         ARTIFACTS_TABLE_SQL,
         ARTIFACT_CHUNKS_TABLE_SQL,
         ARTIFACT_CHUNKS_ORDER_INDEX_SQL,
+        ARTIFACT_TAGS_TABLE_SQL,
+        ARTIFACT_TAGS_UNIQUE_INDEX_SQL,
         REFLECTION_SESSIONS_TABLE_SQL,
         PREFERENCE_SIGNALS_TABLE_SQL,
         PREFERENCE_SIGNALS_LOOKUP_INDEX_SQL,
+        APP_SETTINGS_TABLE_SQL,
+        PROVIDER_STATUS_TABLE_SQL,
+        TEACH_QUESTIONS_TABLE_SQL,
+        TEACH_QUESTIONS_LOOKUP_INDEX_SQL,
+        TEACH_FEEDBACK_TABLE_SQL,
+        TEACH_FEEDBACK_LOOKUP_INDEX_SQL,
     ]
 )
 
@@ -249,6 +339,19 @@ def create_tables(conn) -> None:
     conn.executescript(SCHEMA_SQL)
     if _attributes_schema_needs_migration(conn):
         _migrate_attribute_tables(conn)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO app_settings (id, onboarding_completed, active_profile, preferred_backend)
+        VALUES (1, 0, NULL, 'local')
+        """
+    )
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO provider_status (provider, configured, validated, last_error)
+        VALUES (?, 0, 0, NULL)
+        """,
+        [("ollama",), ("anthropic",), ("groq",)],
+    )
     conn.commit()
 
 

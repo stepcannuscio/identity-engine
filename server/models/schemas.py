@@ -133,6 +133,126 @@ class ArtifactIngestResponse(BaseModel):
 
     artifact_id: str
     chunk_count: int
+    tags: list[str] = []
+
+
+class ProviderStatusResponse(BaseModel):
+    """One provider readiness summary."""
+
+    provider: Literal["ollama", "anthropic", "groq"]
+    label: str
+    configured: bool
+    available: bool
+    validated: bool
+    is_local: bool
+    model: str | None = None
+    reason: str | None = None
+
+
+class PrivacyProfileOption(BaseModel):
+    """One selectable onboarding privacy/model profile."""
+
+    code: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    label: str
+    description: str
+    default_backend: Literal["local", "external"]
+    requires_external_provider: bool
+    available: bool
+    recommended: bool
+
+
+class SecurityCheckResponse(BaseModel):
+    """One inspected machine-security recommendation."""
+
+    code: str
+    label: str
+    status: Literal["enabled", "disabled", "unknown"]
+    summary: str
+    recommendation: str
+
+
+class SecurityPostureResponse(BaseModel):
+    """Machine security posture summary."""
+
+    platform: str
+    supported: bool
+    checks: list[SecurityCheckResponse]
+
+
+class SetupOptionsResponse(BaseModel):
+    """Current provider readiness and recommended profiles."""
+
+    providers: list[ProviderStatusResponse]
+    profiles: list[PrivacyProfileOption]
+    active_profile: str | None
+    preferred_backend: Literal["local", "external"]
+
+
+class SetupProfileRequest(BaseModel):
+    """Persisted onboarding profile selection."""
+
+    profile: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    preferred_backend: Literal["local", "external"] | None = None
+    onboarding_completed: bool | None = None
+
+
+class ProviderCredentialRequest(BaseModel):
+    """Credential payload for a supported external provider."""
+
+    api_key: str
+
+
+class TeachQuestionResponse(BaseModel):
+    """One teach-question card."""
+
+    id: str
+    prompt: str
+    domain: str | None
+    intent_key: str
+    source: Literal["catalog", "generated"]
+    status: str
+    priority: float
+
+
+class TeachCard(BaseModel):
+    """One Teach/onboarding card returned to the frontend."""
+
+    type: Literal["welcome", "privacy_setup", "security_setup", "question"]
+    title: str
+    body: str
+    payload: dict[str, object] = {}
+
+
+class TeachBootstrapResponse(BaseModel):
+    """Combined onboarding/bootstrap payload for the Teach tab."""
+
+    onboarding_completed: bool
+    active_profile: str | None
+    preferred_backend: Literal["local", "external"]
+    providers: list[ProviderStatusResponse]
+    profiles: list[PrivacyProfileOption]
+    security_posture: SecurityPostureResponse
+    cards: list[TeachCard]
+    questions: list[TeachQuestionResponse]
+
+
+class TeachQuestionsResponse(BaseModel):
+    """List of planned Teach questions."""
+
+    questions: list[TeachQuestionResponse]
+
+
+class TeachQuestionAnswerRequest(BaseModel):
+    """Answer payload for a Teach question."""
+
+    answer: str
+    accepted: list["CapturePreviewWriteItem"] | None = None
+
+
+class TeachQuestionFeedbackRequest(BaseModel):
+    """Feedback payload for a Teach question."""
+
+    feedback: Literal["skip", "not_relevant", "duplicate", "already_covered", "too_personal"]
 
 
 class AttributeResponse(BaseModel):

@@ -3,11 +3,11 @@
 A privacy-first personal identity store. Models who you are — values, goals,
 personality, patterns — in a structured, queryable, encrypted local database.
 
-## Status: Phase 3b — React Frontend
+## Status: Phase 4 — Unified Onboarding + Teach
 
-Schema, security infrastructure, identity seeding, the interactive query/capture
-CLI flows, an HTTPS FastAPI backend, and a Vite-built React frontend served by
-the backend in production.
+Schema, security infrastructure, unified onboarding/Teach flows, interactive
+query/capture tooling, an HTTPS FastAPI backend, and a Vite-built React
+frontend served by the backend in production.
 
 ## Security model
 
@@ -27,7 +27,6 @@ the backend in production.
 make setup      # create venv, install deps, install pre-commit hooks
 make init       # generate key, create database, seed domains
 make test       # run backend + frontend tests
-make interview  # start the interactive identity interview
 make capture    # save a quick note directly as identity attributes
 make query      # start interactive freeform query mode
 make serve      # start the HTTPS FastAPI backend for the web UI
@@ -66,8 +65,8 @@ Under the hood:
 
 ## LLM backend
 
-The interview script automatically selects the best available backend at
-startup and prints a one-line summary so you always know what's running:
+The router automatically selects the best available backend at startup and
+prints a one-line summary so you always know what's running:
 
 ```
 ──────────────────────────────────────────────────────────────
@@ -97,35 +96,39 @@ make add-groq-key KEY=gsk_...
 
 See [docs/llm_routing.md](docs/llm_routing.md) for the full routing reference.
 
-## Seeding your identity store
+## Teach and onboarding
 
-`make interview` launches a guided terminal interview across eight identity
-domains: personality, values, goals, patterns, voice, relationships, fears,
-and beliefs.
+The primary intake flow now lives in the web UI under the `Teach` tab.
+On first login, the app opens Teach automatically until onboarding is complete.
+After that, Teach stays available any time you want to add more context.
 
-**How it works:**
+What Teach supports:
 
-1. The router detects your hardware and selects a backend automatically
-2. You answer one question at a time in plain English
-3. `PrivacyBroker` routes extraction to the resolved backend and shows you a
-   numbered preview
-4. You confirm, skip, edit, or retry before anything is written
-5. Confirmed attributes are written to the database immediately — nothing is
-   batched or written without your explicit approval
-6. A `reflection_sessions` record is saved at the end of every session,
-   including interrupted ones
+- Guided questions seeded from the canonical interview catalog
+- Dynamically generated follow-up questions that use sanitized metadata only
+- Skip and feedback controls such as `not relevant`, `duplicate`, and `too personal`
+- Quick-note capture for low-friction teaching
+- Tagged file uploads (`.txt`, `.md`, `.pdf`, `.docx`) parsed locally only
+- Privacy/profile setup with recommended local/external model configurations
+- macOS security recommendations for FileVault, recovery, lock behavior, and boot login
 
-**Before your first interview:**
+The underlying privacy guarantees remain the same:
+
+- all LLM work still goes through `PrivacyBroker` and `config/llm_router.py`
+- `local_only` data never leaves the system
+- teach answers are extracted into structured attributes before persistence
+- artifact bodies stay local and are used only as bounded local evidence
+
+**Getting started:**
 
 ```sh
 make setup      # if you haven't already
 make init
-make interview  # Ollama is started and the model pulled automatically if needed
+make serve
+make frontend-dev
 ```
 
-You can run the interview as many times as you like. Re-answering a question
-whose label already exists prompts you to update (supersede) the old value or
-skip — the full history is preserved in `attribute_history`.
+Then log in to the UI and complete the Teach flow.
 
 ## Quick capture
 
@@ -166,7 +169,7 @@ atomic writes intended for “Post-it note” style ingestion.
 ## Artifact ingestion
 
 `POST /artifacts` adds a first-pass knowledge intake layer for longer local
-content such as notes, journals, transcripts, and simple text uploads.
+content such as notes, journals, transcripts, and tagged text/document uploads.
 
 What it does:
 
@@ -175,6 +178,7 @@ What it does:
 3. Keeps artifacts separate from canonical attributes
 4. Lets the query system pull in a few bounded local chunks when structured
    attributes are not enough
+5. Stores normalized tags that can improve Teach recommendations and retrieval
 
 Privacy constraints:
 
@@ -239,9 +243,12 @@ See [docs/query.md](docs/query.md) for details.
 
 The frontend lives in `frontend/` and is built with Vite + React. It never
 touches the database or LLM providers directly; all reads and writes go
-through the FastAPI API. Query responses and session history now surface a
-small privacy state summary so the UI can show whether an inference stayed
-local, used an external model, or was blocked to protect local-only data.
+through the FastAPI API. The UI now includes:
+
+- `Teach` for onboarding, provider setup, security recommendations, guided teaching, and uploads
+- `Query` for grounded self-querying
+- `Identity Graph` for reviewing and correcting attributes
+- `History` for session and routing summaries
 
 Development:
 
@@ -333,14 +340,16 @@ engine/prompt_builder.py    — grounded system prompt + message assembly
 engine/session.py           — in-memory session state and routing log
 engine/query_engine.py      — end-to-end query orchestration
 engine/capture.py           — quick-capture extraction, confirmation, and writes
+engine/teach_planner.py     — teach question planning and feedback-aware queueing
+engine/setup_state.py       — persisted onboarding/profile state and provider readiness
+engine/security_posture.py  — local machine security recommendation checks
 server/main.py              — FastAPI app, lifecycle, bind/TLS startup
 server/auth.py              — passphrase login and in-memory session tokens
-server/routes/              — query, artifacts, attributes, capture, and session endpoints
+server/routes/              — query, teach, setup, artifacts, attributes, capture, and session endpoints
 server/middleware/          — auth enforcement, interface checks, security headers
 server/models/              — Pydantic request/response schemas
-frontend/                   — Vite React frontend for query, graph, and history tabs
+frontend/                   — Vite React frontend for Teach, query, graph, and history tabs
 scripts/init_db.py          — one-time (idempotent) initialisation script
-scripts/seed_interview.py   — interactive identity interview (make interview)
 scripts/capture.py          — quick capture CLI (make capture)
 scripts/query.py            — interactive freeform query engine (make query)
 scripts/serve.py            — HTTPS server entrypoint (make serve)
@@ -348,7 +357,6 @@ scripts/smoke_api.py        — Python API smoke test helper (make smoke)
 scripts/view_db.py          — terminal viewer for the identity store (make view)
 tests/test_capture.py       — quick capture flow, conflicts, and write-path tests
 tests/test_schema.py        — schema and constraint tests
-tests/test_interview.py     — interview logic, DB helpers, and UI flow tests
 tests/test_llm_router.py    — hardware detection, router resolution, and inference tests
 tests/test_query_engine.py  — classifier, retriever, prompts, session, query flow tests
 tests/test_server.py        — FastAPI auth, security, CRUD, and capture endpoint tests
@@ -356,7 +364,6 @@ tests/test_view_db.py       — viewer output and filtering tests
 docs/capture.md             — quick capture command reference
 docs/server.md              — FastAPI backend reference
 docs/schema.md              — full schema reference
-docs/interview.md           — interview script reference
 docs/llm_routing.md         — LLM routing reference and key setup guide
 docs/query.md               — query engine and interactive session reference
 docs/view_db.md             — viewer output format reference
@@ -364,7 +371,6 @@ docs/view_db.md             — viewer output format reference
 
 See [docs/schema.md](docs/schema.md) for the full schema reference.
 See [docs/capture.md](docs/capture.md) for the quick capture reference.
-See [docs/interview.md](docs/interview.md) for the interview script reference.
 See [docs/llm_routing.md](docs/llm_routing.md) for the LLM routing reference.
 See [docs/query.md](docs/query.md) for the query engine reference.
 See [docs/server.md](docs/server.md) for the backend server reference.

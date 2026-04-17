@@ -16,6 +16,9 @@ This document captures the current system state after completing:
 - Artifact Ingestion and Retrieval
 - Coverage and Answer Confidence
 - Targeted Data Acquisition
+- Unified Onboarding + Teach Flow
+- Profile-Based Model Setup
+- Machine Security Recommendations
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -34,9 +37,12 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - tracks inference decisions (audit)
 - tracks why beliefs exist (provenance)
 - surfaces privacy behavior to the user
+- guides first-run onboarding through the web UI
+- provides an ongoing `Teach` workflow for structured and unstructured intake
 - allows users to confirm, reject, and refine beliefs
 - stores lightweight local preference signals for future planning/recommendation use
 - stores local artifacts as retrievable evidence without turning them into source-of-truth attributes
+- recommends privacy/model configurations and local machine security posture
 
 ---
 
@@ -143,8 +149,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   `metadata.confidence` and `metadata.coverage`
 
 ### 15. Artifact Ingestion Layer
-- `POST /artifacts` accepts JSON text or simple text-file uploads
+- `POST /artifacts` accepts JSON text plus tagged `.txt`, `.md`, `.pdf`, and
+  `.docx` uploads
 - artifacts are stored locally with raw content plus ordered chunks
+- upload tags are normalized into `artifact_tags` and can influence Teach
+  planning and retrieval
 - chunk retrieval is deterministic keyword matching, not embeddings
 - query context can blend artifact evidence with structured identity and
   preference signals instead of only using artifacts as a thin-coverage fallback
@@ -199,6 +208,57 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - targeted acquisition remains local planning logic only; it does not add any
   new direct LLM path outside `PrivacyBroker` / `llm_router.py`
 
+### 18. Unified Onboarding + Teach Layer
+- the web UI now includes a first-class `Teach` tab that is also the default
+  destination after first login until onboarding is complete
+- Teach supports:
+  - guided questions
+  - quick-note capture
+  - tagged file uploads
+  - profile/provider setup
+  - security recommendations
+- onboarding is resumable and skippable; completion state is stored in
+  `app_settings`
+- Teach question planning is stored explicitly in:
+  - `teach_questions`
+  - `teach_question_feedback`
+- Teach questions are seeded from the canonical interview catalog and then
+  refreshed dynamically from coverage gaps, artifact tags, and feedback history
+- generated questions use a sanitized metadata-only prompt:
+  - domain names
+  - coverage counts
+  - artifact tags
+  - feedback counts
+- generated questions never send raw attribute values, raw answers, or raw
+  artifact content to external providers
+- Teach answer extraction reuses interview-style persistence semantics:
+  - extracted attributes are preview/save capable
+  - writes create or supersede canonical attributes
+  - writes preserve audit/history behavior
+
+### 19. Profile / Provider / Security Setup Layer
+- setup state is stored explicitly, not as a generic blob:
+  - `app_settings`
+  - `provider_status`
+- the backend now recommends three model/privacy profiles:
+  - `private_local_first`
+  - `balanced_hybrid`
+  - `external_assist`
+- recommendations are derived from local hardware plus currently configured
+  providers
+- external provider credentials are stored in the system keychain only and are
+  managed through setup routes, not the database
+- setup APIs now expose:
+  - `GET /setup/model-options`
+  - `POST /setup/providers/{provider}/credentials`
+  - `POST /setup/profile`
+  - `GET /setup/security-posture`
+- macOS security posture checks are read-only and recommendation-first:
+  - FileVault
+  - personal recovery key availability when detectable
+  - immediate password after sleep/screensaver
+  - auto-login disabled / login required at boot
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -212,6 +272,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - no supporting evidence text exposed via API/UI
 - no raw artifact content exposed via API/UI except bounded local prompt context
 - external inference must always be explicitly allowed
+- external Teach question generation may only use sanitized metadata and must
+  fail closed if sanitization cannot produce an external-safe prompt
 
 ## Architecture
 
@@ -220,6 +282,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - PromptBuilder controls formatting only
 - Router executes inference only
 - PrivacyBroker enforces all rules
+- Teach question generation still flows through `PrivacyBroker`
+- onboarding/profile state must remain server-owned and explicit
 
 ## Data Model
 
@@ -234,6 +298,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - only one current `(domain, label)` may exist at a time
 - preference signals are separate from attributes and represent lower-level evidence
 - preference promotion must not recreate rejected attributes or overwrite refined values
+- onboarding/profile/provider state must live in explicit tables, not a generic
+  JSON blob
 
 ---
 
@@ -279,3 +345,12 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - artifact upload
 - answer guided interview questions from the web UI using preview/save flows
   that preserve interview write semantics and audit trail rules
+- guide first-run onboarding through the Teach tab instead of relying on the
+  terminal interview as the primary UX
+- recommend local/external model profiles based on hardware and configured providers
+- persist the selected profile and use it to hydrate the frontend's default query backend
+- collect structured feedback on Teach questions so irrelevant or duplicate
+  prompts are downranked over time
+- parse tagged local `.pdf` and `.docx` uploads without introducing OCR or an
+  external document service
+- inspect and surface macOS security recommendations without blocking the user

@@ -14,6 +14,7 @@ function AppStateInitializer({ appState }) {
     addMessage,
     setStreaming,
     addToast,
+    setTeachState,
   } = useAppState()
 
   useEffect(() => {
@@ -36,6 +37,10 @@ function AppStateInitializer({ appState }) {
 
     if ('backend' in appState) {
       setBackend(appState.backend ?? 'local')
+    }
+
+    if ('teachState' in appState) {
+      setTeachState(appState.teachState ?? null)
     }
 
     if ('messages' in appState) {
@@ -67,6 +72,7 @@ function AppStateInitializer({ appState }) {
     setAuthState,
     setBackend,
     setStreaming,
+    setTeachState,
   ])
 
   return null

@@ -1,14 +1,22 @@
 import { useAppState } from '../../store/appState.js'
 
 export default function Header() {
-  const { backend, setBackend } = useAppState()
+  const { backend, setBackend, providerStatuses } = useAppState()
   const nextBackend = backend === 'local' ? 'external' : 'local'
+  const externalReady = providerStatuses.some(
+    (provider) => !provider.is_local && provider.available,
+  )
   const tooltip =
-    backend === 'local'
-      ? 'Queries processed on your device'
-      : 'Queries sent to Claude API (ZDR enabled)'
+    backend === 'local' && !externalReady
+      ? 'Configure an external provider in Teach before switching'
+      : backend === 'local'
+        ? 'Queries processed on your device'
+        : 'Queries sent to your configured external provider'
 
   const handleToggle = () => {
+    if (backend === 'local' && !externalReady) {
+      return
+    }
     setBackend(nextBackend)
   }
 
@@ -20,6 +28,7 @@ export default function Header() {
         className={`backend-pill ${backend}`}
         onClick={handleToggle}
         title={tooltip}
+        disabled={backend === 'local' && !externalReady}
       >
         <span className="backend-dot" aria-hidden="true" />
         <span className="backend-label">{backend}</span>

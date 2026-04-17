@@ -56,6 +56,30 @@ def get_api_key(provider: str) -> str | None:
         return None
 
 
+def has_api_key(provider: str) -> bool:
+    """Return True when a provider key exists in the system keychain."""
+    return bool(get_api_key(provider))
+
+
+def set_api_key(provider: str, api_key: str) -> None:
+    """Store an API key for a supported provider in the system keychain."""
+    keyring_username = _PROVIDER_KEY_MAP.get(provider)
+    if keyring_username is None:
+        raise ValueError(f"Unsupported provider: {provider}")
+    keyring.set_password(_KEYRING_SERVICE, keyring_username, api_key)
+
+
+def delete_api_key(provider: str) -> None:
+    """Delete an API key for a supported provider from the system keychain."""
+    keyring_username = _PROVIDER_KEY_MAP.get(provider)
+    if keyring_username is None:
+        raise ValueError(f"Unsupported provider: {provider}")
+    try:
+        keyring.delete_password(_KEYRING_SERVICE, keyring_username)
+    except KeyringError:
+        return
+
+
 def get_db_key() -> str:
     """Retrieve the database encryption key from the system keychain.
 

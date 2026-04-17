@@ -106,6 +106,7 @@ export const uploadArtifact = async ({
   source,
   domain,
   metadata,
+  tags,
 }) => {
   if (file) {
     const formData = new FormData()
@@ -125,6 +126,9 @@ export const uploadArtifact = async ({
     if (metadata) {
       formData.append('metadata', JSON.stringify(metadata))
     }
+    if (tags?.length) {
+      formData.append('tags', JSON.stringify(tags))
+    }
     const { data } = await client.post('/artifacts', formData)
     return data
   }
@@ -136,6 +140,7 @@ export const uploadArtifact = async ({
     source: source || null,
     domain: domain || null,
     metadata: metadata ?? null,
+    tags: tags ?? [],
   })
   return data
 }
@@ -147,5 +152,47 @@ export const getSessions = async () => {
 
 export const getCurrentSession = async () => {
   const { data } = await client.get('/sessions/current')
+  return data
+}
+
+export const getTeachBootstrap = async () => {
+  const { data } = await client.get('/teach/bootstrap')
+  return data
+}
+
+export const getTeachQuestions = async () => {
+  const { data } = await client.get('/teach/questions')
+  return data
+}
+
+export const answerTeachQuestion = async (questionId, payload) => {
+  const { data } = await client.post(`/teach/questions/${questionId}/answer`, payload)
+  return data
+}
+
+export const feedbackTeachQuestion = async (questionId, feedback) => {
+  const { data } = await client.post(`/teach/questions/${questionId}/feedback`, { feedback })
+  return data
+}
+
+export const getSetupModelOptions = async () => {
+  const { data } = await client.get('/setup/model-options')
+  return data
+}
+
+export const saveProviderCredentials = async (provider, apiKey) => {
+  const { data } = await client.post(`/setup/providers/${provider}/credentials`, {
+    api_key: apiKey,
+  })
+  return data
+}
+
+export const saveSetupProfile = async (payload) => {
+  const { data } = await client.post('/setup/profile', payload)
+  return data
+}
+
+export const getSecurityPosture = async () => {
+  const { data } = await client.get('/setup/security-posture')
   return data
 }

@@ -12,7 +12,7 @@ APP ?= all
 BACKEND_ARGS ?=
 FRONTEND_ARGS ?=
 
-.PHONY: help setup init test test-backend test-frontend typecheck verify-backend clean interview \
+.PHONY: help setup init test test-backend test-frontend typecheck verify-backend clean \
 	capture query view serve smoke add-anthropic-key add-groq-key \
 	set-ui-passphrase frontend-install frontend-dev frontend-build dev
 
@@ -119,10 +119,6 @@ clean:
 ## Phase 2 placeholder
 run:
 	@echo "Application layer not yet implemented."
-
-## Run the interactive identity interview
-interview:
-	.venv/bin/python scripts/seed_interview.py
 
 ## Write a quick capture directly to the identity store
 capture:

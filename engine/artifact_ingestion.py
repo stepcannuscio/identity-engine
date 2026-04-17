@@ -101,6 +101,7 @@ def ingest_artifact(
     domain: str | None = None,
     filename: str | None = None,
     metadata: dict[str, object] | None = None,
+    tags: list[str] | None = None,
 ) -> ArtifactIngestResult:
     """Store an artifact and its ordered chunks locally."""
     content = normalize_artifact_text(text)
@@ -167,5 +168,23 @@ def ingest_artifact(
         """,
         chunk_rows,
     )
+    normalized_tags = sorted(
+        {
+            tag.strip().lower()
+            for tag in (tags or [])
+            if isinstance(tag, str) and tag.strip()
+        }
+    )
+    if normalized_tags:
+        conn.executemany(
+            """
+            INSERT INTO artifact_tags (id, artifact_id, tag, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (str(uuid.uuid4()), artifact_id, tag, created_at)
+                for tag in normalized_tags
+            ],
+        )
     conn.commit()
     return ArtifactIngestResult(artifact_id=artifact_id, chunk_count=len(chunks))

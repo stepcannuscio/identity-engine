@@ -196,27 +196,21 @@ model may use it. If the user later decides this is safe to share, they update
 
 ## How attributes are created
 
-The primary ingestion path is `scripts/seed_interview.py` (run via
-`make interview`). The interview:
+The main user-facing ingestion path now lives in the web UI `Teach` flow.
+Teach questions and quick-note capture both extract structured attributes,
+then persist them into the canonical store with the same write invariants:
 
-1. Asks questions across the eight domains, one at a time
-2. Sends each answer to a local Ollama model, which returns a JSON array of
-   extracted attributes
-3. Lets the user preview, edit, and confirm before any write occurs
-4. Writes each confirmed attribute with `source = 'reflection'` and
-   `routing = 'local_only'` — these values are fixed by the script regardless
-   of what the model suggests
-5. If a label already exists as an active attribute in the same domain,
-   supersedes the old row (sets `status = 'superseded'`), appends a row to
-   `attribute_history` with `changed_by = 'reflection'`, then inserts the new
-   active row
-6. Writes a `reflection_sessions` row at session end (or on Ctrl+C)
+1. The user answers a guided question or adds a quick note
+2. The application routes extraction through `PrivacyBroker`
+3. The extracted preview is reviewed/accepted before persistence
+4. Accepted Teach question answers write attributes with `source = 'reflection'`
+   and `routing = 'local_only'`
+5. If a label already exists as an active/current attribute in the same domain,
+   the old row is superseded and a matching `attribute_history` row is written
+6. Teach state and question feedback are stored separately from canonical attributes
 
-The `external_calls_made` counter on `reflection_sessions` is always `0` for
-interview sessions because Ollama is local.
-
-The secondary ingestion path is `scripts/capture.py` (run via `make capture`).
-Quick capture:
+Quick capture is still available from the CLI via `scripts/capture.py`
+(run with `make capture`). Quick capture:
 
 1. Accepts a short free-text note instead of a guided question/answer exchange
 2. Uses the LLM to extract one or more structured attributes, including domain
@@ -226,5 +220,3 @@ Quick capture:
 5. Detects active label conflicts in the same domain and requires
    `update`, `skip`, or `keep both`
 6. Does not create a `reflection_sessions` row
-
-See [interview.md](interview.md) for the full operational reference.

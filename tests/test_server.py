@@ -7,9 +7,11 @@ import sys
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from zipfile import ZipFile
 
 import pytest
 import requests
@@ -126,6 +128,11 @@ def client(monkeypatch):
     monkeypatch.setattr("server.routes.interview.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.preferences.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.session.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("server.routes.setup.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("server.routes.teach.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("engine.setup_state._ollama_is_running", lambda: False)
+    monkeypatch.setattr("engine.setup_state._ollama_has_model", lambda model: False)
+    monkeypatch.setattr("engine.setup_state.has_api_key", lambda provider: False)
 
     app = create_app()
     app.state.test_db = conn
@@ -147,6 +154,35 @@ def _app(client: TestClient) -> FastAPI:
 
 def _db(client: TestClient):
     return _app(client).state.test_db
+
+
+def _simple_pdf_bytes(text: str) -> bytes:
+    content = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("latin-1")
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n"
+        b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n"
+        b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>endobj\n"
+        + f"4 0 obj<< /Length {len(content)} >>stream\n".encode("latin-1")
+        + content
+        + b"\nendstream endobj\ntrailer<< /Root 1 0 R >>\n%%EOF"
+    )
+
+
+def _simple_docx_bytes(text: str) -> bytes:
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>"
+                f"{text}"
+                "</w:t></w:r></w:p></w:body></w:document>"
+            ),
+        )
+    return buffer.getvalue()
 
 
 def test_health_returns_200_without_authentication(client: TestClient):
@@ -1398,3 +1434,253 @@ def test_security_headers_present_on_all_responses(client: TestClient):
     assert response.headers["X-XSS-Protection"] == "1; mode=block"
     assert response.headers["Strict-Transport-Security"] == "max-age=31536000"
     assert response.headers["Content-Security-Policy"] == "default-src 'self'"
+
+
+def test_setup_model_options_returns_profiles_and_provider_statuses(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.setup.get_provider_statuses",
+        lambda conn: [
+            SimpleNamespace(
+                provider="ollama",
+                label="Local model",
+                configured=True,
+                available=True,
+                validated=True,
+                is_local=True,
+                model="llama3.1:8b",
+                reason=None,
+            ),
+            SimpleNamespace(
+                provider="anthropic",
+                label="Anthropic",
+                configured=False,
+                available=False,
+                validated=False,
+                is_local=False,
+                model="claude-sonnet-4-6",
+                reason="API key not configured.",
+            ),
+        ],
+    )
+
+    response = client.get("/setup/model-options", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["profiles"]
+    assert body["providers"][0]["provider"] == "ollama"
+    assert body["preferred_backend"] == "local"
+
+
+def test_setup_profile_persists_backend_preference(client, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.setup.get_provider_statuses",
+        lambda conn: [
+            SimpleNamespace(
+                provider="ollama",
+                label="Local model",
+                configured=True,
+                available=True,
+                validated=True,
+                is_local=True,
+                model="llama3.1:8b",
+                reason=None,
+            )
+        ],
+    )
+
+    response = client.post(
+        "/setup/profile",
+        json={
+            "profile": "private_local_first",
+            "preferred_backend": "local",
+            "onboarding_completed": True,
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    stored = _db(client).execute(
+        "SELECT onboarding_completed, active_profile, preferred_backend FROM app_settings WHERE id = 1"
+    ).fetchone()
+    assert stored == (1, "private_local_first", "local")
+
+
+def test_setup_provider_credentials_validates_and_saves(client, monkeypatch):
+    saved = {}
+
+    monkeypatch.setattr("server.routes.setup.set_api_key", lambda provider, api_key: saved.update({provider: api_key}))
+    monkeypatch.setattr(
+        "server.routes.setup.get_provider_statuses",
+        lambda conn: [
+            SimpleNamespace(
+                provider="anthropic",
+                label="Anthropic",
+                configured=True,
+                available=True,
+                validated=True,
+                is_local=False,
+                model="claude-sonnet-4-6",
+                reason=None,
+            )
+        ],
+    )
+
+    response = client.post(
+        "/setup/providers/anthropic/credentials",
+        json={"api_key": "sk-ant-valid-example"},  # pragma: allowlist secret
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert saved["anthropic"] == "sk-ant-valid-example"
+    assert response.json()["available"] is True
+
+
+def test_security_posture_route_returns_inspected_checks(client, monkeypatch):
+    posture = {
+        "platform": "macos",
+        "supported": True,
+        "checks": [
+            {
+                "code": "filevault",
+                "label": "FileVault",
+                "status": "enabled",
+                "summary": "Enabled.",
+                "recommendation": "Keep it on.",
+            }
+        ],
+    }
+    monkeypatch.setattr("server.routes.setup.inspect_security_posture", lambda: posture)
+
+    response = client.get("/setup/security-posture", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    assert response.json()["checks"][0]["status"] == "enabled"
+
+
+def test_teach_bootstrap_returns_cards_and_questions(client, monkeypatch):
+    posture = {
+        "platform": "macos",
+        "supported": True,
+        "checks": [],
+    }
+    monkeypatch.setattr("server.routes.teach.inspect_security_posture", lambda: posture)
+    monkeypatch.setattr(
+        "server.routes.teach.get_provider_statuses",
+        lambda conn: [
+            SimpleNamespace(
+                provider="ollama",
+                label="Local model",
+                configured=True,
+                available=True,
+                validated=True,
+                is_local=True,
+                model="llama3.1:8b",
+                reason=None,
+            )
+        ],
+    )
+
+    response = client.get("/teach/bootstrap", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cards"][0]["type"] == "welcome"
+    assert body["questions"]
+
+
+def test_teach_answer_saves_attributes_and_marks_question_answered(client):
+    question_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO teach_questions (
+            id, prompt, domain, intent_key, source, status, priority, onboarding_stage
+        )
+        VALUES (?, ?, ?, ?, 'catalog', 'pending', 10.0, 'teaching')
+        """,
+        (question_id, "What matters most to you at work?", "values", "values_priority"),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/questions/{question_id}/answer",
+        json={
+            "answer": "Clear priorities.",
+            "accepted": [
+                {
+                    "domain": "values",
+                    "label": "work_priority",
+                    "value": "I value clear priorities at work.",
+                    "elaboration": None,
+                    "mutability": "stable",
+                    "confidence": 0.9,
+                }
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    stored = _db(client).execute(
+        "SELECT status FROM teach_questions WHERE id = ?",
+        (question_id,),
+    ).fetchone()
+    assert stored == ("answered",)
+
+
+def test_teach_feedback_dismisses_question(client):
+    question_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO teach_questions (
+            id, prompt, domain, intent_key, source, status, priority, onboarding_stage
+        )
+        VALUES (?, ?, ?, ?, 'catalog', 'pending', 10.0, 'teaching')
+        """,
+        (question_id, "What helps you focus?", "patterns", "patterns_focus"),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/questions/{question_id}/feedback",
+        json={"feedback": "duplicate"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    status = _db(client).execute(
+        "SELECT status FROM teach_questions WHERE id = ?",
+        (question_id,),
+    ).fetchone()[0]
+    assert status == "dismissed"
+
+
+def test_post_artifacts_accepts_pdf_docx_and_tags(client):
+    headers = _login_headers(client)
+
+    pdf_response = client.post(
+        "/artifacts",
+        files={"file": ("notes.pdf", _simple_pdf_bytes("Planning roadmap"), "application/pdf")},
+        data={"tags": '["roadmap","planning"]'},
+        headers=headers,
+    )
+    assert pdf_response.status_code == 200
+
+    docx_response = client.post(
+        "/artifacts",
+        files={
+            "file": (
+                "notes.docx",
+                _simple_docx_bytes("Voice notes for onboarding"),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        headers=headers,
+    )
+    assert docx_response.status_code == 200
+
+    tags = _db(client).execute(
+        "SELECT tag FROM artifact_tags ORDER BY tag ASC"
+    ).fetchall()
+    assert [row[0] for row in tags] == ["planning", "roadmap"]
