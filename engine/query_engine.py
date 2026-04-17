@@ -19,7 +19,7 @@ from engine.coverage_evaluator import (
 )
 from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
-from engine.query_classifier import classify_query
+from engine.query_classifier import build_query_plan
 from engine.session import Session
 
 
@@ -29,6 +29,7 @@ class QueryContext:
 
     query: str
     query_type: str
+    source_profile: str
     assembled_context: AssembledContext
     attributes: list[dict]
     messages: list[dict[str, str]]
@@ -56,10 +57,11 @@ def prepare_query(
     provider_config,
 ) -> QueryContext:
     """Prepare a query without generating a response yet."""
-    query_type = classify_query(user_query)
+    query_plan = build_query_plan(user_query)
     assembled_context = assemble_query_context(
         user_query,
-        query_type,
+        query_plan.retrieval_mode,
+        query_plan.source_profile,
         session.get_history(),
         conn,
     )
@@ -77,7 +79,8 @@ def prepare_query(
 
     return QueryContext(
         query=user_query,
-        query_type=query_type,
+        query_type=query_plan.retrieval_mode,
+        source_profile=query_plan.source_profile,
         assembled_context=assembled_context,
         attributes=assembled_context.attributes + preference_attributes,
         messages=messages,

@@ -117,17 +117,21 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - promotion respects user corrections by not recreating recently rejected matches
 - rerunning promotion refreshes existing inferred attributes instead of duplicating them
 
-### 15. Coverage & Answer Confidence Layer
+### 14. Coverage & Answer Confidence Layer
 - deterministic evaluator inspects the assembled context before inference runs
 - scores context on a 100-point style model: attribute score (cap 50) weighted
   by status and per-attribute confidence; preference score (cap 25) tiered by
   attribute type and signal cluster strength; artifact score (cap 20) scored by
   source diversity; consistency adjustment (±5)
-- applies query-type-aware threshold profiles: narrow preference (high ≥ 55),
-  recommendation (high ≥ 60), broad self-model (high ≥ 70), artifact-grounded
-  (high ≥ 60), default (high ≥ 65)
-- enforces structural guardrails: no high confidence without identity support;
-  artifact-only evidence capped below high unless 2+ sources present
+- uses internal source profiles for scoring and guardrails:
+  - `self_question` (high ≥ 70)
+  - `evidence_based` (high ≥ 60)
+  - `preference_sensitive` (high ≥ 60)
+  - `general` (high ≥ 65)
+- enforces structural guardrails:
+  - no high confidence without identity support for self-questions and general queries
+  - evidence-based queries can lean harder on artifacts, but single-source
+    artifact evidence stays below high confidence unless structured support is present
 - exposes a ScoreBreakdown dataclass for testing and calibration
 - low and medium confidence append a brief hedge to the system prompt so the
   model acknowledges limitations
@@ -137,12 +141,35 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - classification and counts are surfaced on query responses as
   `metadata.confidence` and `metadata.coverage`
 
-### 14. Artifact Ingestion Layer
+### 15. Artifact Ingestion Layer
 - `POST /artifacts` accepts JSON text or simple text-file uploads
 - artifacts are stored locally with raw content plus ordered chunks
 - chunk retrieval is deterministic keyword matching, not embeddings
-- query context can fall back to bounded artifact evidence when structured coverage is thin
-- artifact evidence is prompt-bounded and treated as local-only context
+- query context can blend artifact evidence with structured identity and
+  preference signals instead of only using artifacts as a thin-coverage fallback
+- artifact evidence is prompt-bounded, treated as local-only context, and
+  ranked below canonical identity for self-questions
+
+### 16. Dynamic Source Weighting Layer
+- query planning now keeps public `query_type` as `simple|open_ended` while
+  adding an internal `source_profile`
+- source profiles are:
+  - `self_question`
+  - `evidence_based`
+  - `preference_sensitive`
+  - `general`
+- context assembly now gathers scored candidates from identity attributes,
+  learned preferences, and artifacts before doing final selection
+- final prompt grounding uses a blended ranked evidence list with explicit
+  source labels instead of separate identity/preference/artifact sections
+- selection is deterministic and uses:
+  - per-source normalization
+  - source weights by profile
+  - trust bonuses for confirmed or active structured signals
+  - domain/profile bonuses
+  - artifact diversity bonuses
+  - duplicate-artifact penalties
+- artifacts remain supporting evidence only; they never become canonical truth
 
 ---
 
@@ -207,8 +234,12 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - summarize preference tendencies into bounded runtime guidance instead of dumping signal history
 - deterministically score future candidates against learned preferences with transparent weights
 - ingest local notes, documents, and uploads into retrievable artifact storage
-- retrieve bounded artifact chunks during deeper reasoning when attributes alone are insufficient
+- blend bounded artifact chunks with identity and preference signals using
+  query-specific source weighting
 - keep raw artifact bodies local while still grounding local answers in uploaded content
 - assess whether enough grounded context exists to answer a query before calling the LLM
 - explicitly acknowledge partial or low coverage in prompts instead of generating generic answers
 - skip LLM calls and return a helpful explanation when no relevant context is available
+- rank grounded prompt context across sources so self-questions favor identity,
+  evidence-based questions favor artifacts, and drafting/planning questions
+  favor learned preferences

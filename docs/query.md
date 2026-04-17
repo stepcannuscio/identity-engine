@@ -12,12 +12,13 @@ Phase 3 also exposes the same query engine over the FastAPI backend:
 
 For each user question:
 
-1. Classify query as `simple` or `open_ended` (`engine/query_classifier.py`)
-2. Retrieve and score active attributes (`engine/retriever.py`)
-3. Build grounded prompt with identity context and capped history (`engine/prompt_builder.py`)
-4. Route application-level inference through `engine/privacy_broker.py`
-5. Delegate the approved request to the configured backend (`config/llm_router.py`)
-6. Update in-memory session state (`engine/session.py`)
+1. Classify query as public `simple|open_ended` plus an internal `source_profile` (`engine/query_classifier.py`)
+2. Gather scored candidates from identity attributes, learned preferences, and artifacts (`engine/retriever.py`, `engine/preference_summary.py`, `engine/artifact_retrieval.py`)
+3. Merge and rank those candidates deterministically in the context assembler (`engine/context_assembler.py`)
+4. Build a blended grounded prompt with explicit source labels and capped history (`engine/prompt_builder.py`)
+5. Route application-level inference through `engine/privacy_broker.py`
+6. Delegate the approved request to the configured backend (`config/llm_router.py`)
+7. Update in-memory session state (`engine/session.py`)
 
 ## Retrieval budgets
 
@@ -27,11 +28,26 @@ For each user question:
   fallback that injects top attributes from the requested domain(s) even when
   lexical overlap is weak.
 
+## Source Profiles
+
+Internal source profiles drive blending and confidence behavior without changing
+the public `query_type` field:
+
+- `self_question`: favor canonical identity attributes
+- `evidence_based`: favor artifact evidence while still checking structured support
+- `preference_sensitive`: favor learned preferences for drafting, planning, or selection work
+- `general`: balanced default
+
+The final prompt uses a single ranked `Grounded context:` block. Items are
+labeled as `[identity]`, `[preference]`, or `[artifact]`. Artifacts are always
+supporting evidence rather than canonical truth.
+
 ## Safety constraints
 
 - `retriever.py`, `query_classifier.py`, and `prompt_builder.py` perform no LLM calls
 - Query inference flows through `PrivacyBroker`, which centralizes application-level routing checks before calling `llm_router.py`
 - Prompt builder still retains a fail-closed guard: `local_only` attributes cannot be included for external backends (`RoutingViolationError`)
+- Selected artifact evidence is always treated as local-only context
 - Session history is in-memory only during runtime
 
 ## Session commands

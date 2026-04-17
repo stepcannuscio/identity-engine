@@ -1,9 +1,14 @@
-"""Deterministic query classification for retrieval budget routing.
+"""Deterministic query classification for retrieval and source routing.
 
 This module performs pure string analysis (no model calls) to classify user
-queries as either "simple" or "open_ended".
+queries along two axes:
+
+- retrieval budget: ``simple`` or ``open_ended``
+- source profile: ``self_question``, ``evidence_based``,
+  ``preference_sensitive``, or ``general``
 """
 
+from dataclasses import dataclass
 import re
 
 DIRECT_DOMAIN_KEYWORDS = {
@@ -40,8 +45,63 @@ SUBORDINATE_MARKERS = (
     "that ",
 )
 
+SELF_QUESTION_PATTERNS = (
+    "who am i",
+    "what am i like",
+    "how do i tend to",
+    "how do i usually",
+    "what are my",
+    "what is my",
+    "am i",
+    "do i",
+)
+
+EVIDENCE_BASED_TERMS = (
+    "artifact",
+    "artifacts",
+    "document",
+    "documents",
+    "evidence",
+    "file",
+    "files",
+    "journal",
+    "journals",
+    "note",
+    "notes",
+    "notebook",
+    "notebooks",
+    "prior material",
+    "prior materials",
+    "upload",
+    "uploaded",
+    "writing sample",
+    "writing samples",
+)
+
+PREFERENCE_SENSITIVE_TERMS = (
+    "choose",
+    "choices",
+    "draft",
+    "plan",
+    "planning",
+    "pick",
+    "recommend",
+    "recommendation",
+    "rewrite",
+    "select",
+    "selection",
+    "suggest",
+)
 
 _WORD_RE = re.compile(r"[a-zA-Z0-9']+")
+
+
+@dataclass(frozen=True)
+class QueryPlan:
+    """Deterministic query routing result."""
+
+    retrieval_mode: str
+    source_profile: str
 
 
 def _word_count(text: str) -> int:
@@ -88,3 +148,31 @@ def classify_query(query: str) -> str:
         return "simple"
 
     return "open_ended"
+
+
+def classify_source_profile(query: str) -> str:
+    """Return the internal source-mix profile for one query."""
+    normalized = query.strip().lower()
+    words = set(_WORD_RE.findall(normalized))
+
+    if any(term in normalized for term in EVIDENCE_BASED_TERMS):
+        return "evidence_based"
+
+    if any(term in normalized for term in PREFERENCE_SENSITIVE_TERMS):
+        return "preference_sensitive"
+
+    if any(pattern in normalized for pattern in SELF_QUESTION_PATTERNS):
+        return "self_question"
+
+    if words.intersection(DIRECT_DOMAIN_KEYWORDS):
+        return "self_question"
+
+    return "general"
+
+
+def build_query_plan(query: str) -> QueryPlan:
+    """Return both the public retrieval mode and the internal source profile."""
+    return QueryPlan(
+        retrieval_mode=classify_query(query),
+        source_profile=classify_source_profile(query),
+    )

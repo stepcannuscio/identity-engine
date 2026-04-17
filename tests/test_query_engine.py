@@ -18,7 +18,7 @@ from engine.artifact_ingestion import ingest_artifact
 from engine.context_assembler import AssembledContext
 from engine.privacy_broker import AuditedRoutingViolationError, BrokeredResult, InferenceDecision
 from engine.prompt_builder import RoutingViolationError, build_prompt
-from engine.query_classifier import classify_query
+from engine.query_classifier import build_query_plan, classify_query, classify_source_profile
 from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
 from engine.query_engine import prepare_query, query
 from engine.retriever import OPEN_ENDED_BUDGET, SIMPLE_BUDGET, retrieve_attributes, score_attribute
@@ -88,6 +88,26 @@ def test_classify_query_returns_simple_for_short_direct_query():
 def test_classify_query_returns_open_ended_for_complex_query():
     prompt = "Describe how competing priorities evolve across months under uncertainty."
     assert classify_query(prompt) == "open_ended"
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("Who am I when I am under pressure?", "self_question"),
+        ("What do my notes say about how I write?", "evidence_based"),
+        ("Rewrite this email so it sounds like me.", "preference_sensitive"),
+        ("Summarize the situation for me.", "general"),
+    ],
+)
+def test_classify_source_profile(prompt, expected):
+    assert classify_source_profile(prompt) == expected
+
+
+def test_build_query_plan_keeps_public_query_type_stable():
+    plan = build_query_plan("Rewrite this email.")
+
+    assert plan.retrieval_mode == "simple"
+    assert plan.source_profile == "preference_sensitive"
 
 
 def test_score_attribute_higher_for_direct_keyword_match():
@@ -276,9 +296,10 @@ def test_build_prompt_formats_attributes_grouped_by_domain():
     )
     messages = build_prompt(context, target_backend="local")
     system = messages[0]["content"]
-    assert "[goals] priority: Finish project" in system
-    assert "[goals] timeline: Next 2 months" in system
-    assert "[values] integrity: Keep promises" in system
+    assert "Grounded context:" in system
+    assert "[identity] priority: Finish project" in system
+    assert "[identity] timeline: Next 2 months" in system
+    assert "[identity] integrity: Keep promises" in system
 
 
 def test_build_prompt_includes_learned_preference_guidance():
@@ -316,9 +337,10 @@ def test_build_prompt_includes_learned_preference_guidance():
     messages = build_prompt(context, target_backend="local")
 
     system = messages[0]["content"]
-    assert "Learned preference guidance:" in system
-    assert "Prefer: I prefer concise responses." in system
-    assert "Avoid: Avoid dense long form content." in system
+    assert "Grounded context:" in system
+    assert "[preference]" in system
+    assert "I prefer concise responses." in system
+    assert "Avoid dense long form content." in system
 
 
 def test_build_prompt_includes_bounded_artifact_evidence_for_local_backend():
@@ -347,9 +369,41 @@ def test_build_prompt_includes_bounded_artifact_evidence_for_local_backend():
     messages = build_prompt(context, target_backend="local")
 
     system = messages[0]["content"]
-    assert "Relevant local artifact evidence:" in system
-    assert "Writing notebook [chunk 1]" in system
+    assert "Grounded context:" in system
+    assert "[artifact] Writing notebook [chunk 1]" in system
     assert "cut for clarity and rhythm" in system
+
+
+def test_build_prompt_trims_artifact_excerpt_length():
+    long_excerpt = "clarity and rhythm " * 50
+    context = AssembledContext(
+        task_type="query",
+        input_text="What patterns exist in my writing?",
+        attributes=[],
+        session_history=[],
+        domains_used=["voice"],
+        attribute_count=0,
+        retrieval_mode="open_ended",
+        source_profile="evidence_based",
+        was_trimmed=False,
+        contains_local_only=True,
+        artifact_chunks=[
+            {
+                "id": "chunk-1",
+                "title": "Writing notebook",
+                "chunk_index": 0,
+                "content": long_excerpt,
+                "routing": "local_only",
+            }
+        ],
+        artifact_count=1,
+        artifact_sources=["Writing notebook"],
+    )
+
+    system = build_prompt(context, target_backend="local")[0]["content"]
+
+    assert "..." in system
+    assert long_excerpt not in system
 
 
 def test_build_prompt_caps_history_at_six_exchanges():
@@ -407,7 +461,8 @@ def test_prepare_query_omits_local_signal_summaries_for_external_backend(conn):
         config,
     )
 
-    assert "Learned preference guidance:" not in prepared.messages[0]["content"]
+    assert prepared.source_profile == "preference_sensitive"
+    assert "Grounded context:\n(no grounded context retrieved)" in prepared.messages[0]["content"]
     assert prepared.attributes == []
 
 

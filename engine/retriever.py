@@ -207,8 +207,8 @@ def _apply_domain_cap(results: list[dict], max_domains: int, max_attributes: int
     return selected
 
 
-def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
-    """Retrieve and score active attributes for a query, then apply query budget rules."""
+def retrieve_attribute_candidates(query: str, query_type: str, conn) -> list[dict]:
+    """Return scored identity-attribute candidates before final prompt blending."""
     rows = conn.execute(
         """
         SELECT
@@ -252,6 +252,14 @@ def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
     if query_type == "open_ended":
         filtered = _apply_open_ended_domain_expansion(scored, filtered)
         filtered.sort(key=lambda x: x["score"], reverse=True)
+
+    return filtered
+
+
+def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
+    """Retrieve and score active attributes for a query, then apply query budget rules."""
+    filtered = retrieve_attribute_candidates(query, query_type, conn)
+    budget = budget_for_query_type(query_type)
 
     constrained = _apply_domain_cap(
         filtered,

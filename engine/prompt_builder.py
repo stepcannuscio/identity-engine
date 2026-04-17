@@ -6,9 +6,7 @@ conversation history. It performs no model calls.
 
 from __future__ import annotations
 
-from collections import defaultdict
-
-from engine.context_assembler import AssembledContext
+from engine.context_assembler import AssembledContext, EvidenceItem
 
 
 class RoutingViolationError(Exception):
@@ -29,14 +27,16 @@ Respond concisely. No preamble. No \"based on your profile\"
 or similar meta-commentary about using the identity model.
 Just answer as if you simply know the person.
 
-Identity model:
-{formatted_attributes}
-{preference_guidance}
-{artifact_evidence}
+Structured identity remains the canonical user model.
+Artifacts are supporting evidence only and should ground or
+corroborate answers rather than replace identity facts.
+
+Grounded context:
+{grounded_context}
 {confidence_guidance}
 """
 
-ARTIFACT_EXCERPT_MAX_CHARS = 700
+ARTIFACT_EXCERPT_MAX_CHARS = 350
 
 _MEDIUM_CONFIDENCE_HINT = (
     "Coverage note: grounded context is partial. Answer what you can and briefly "
@@ -62,110 +62,137 @@ def _visible_preference_attributes(
     ]
 
 
+def _visible_artifact_chunks(
+    artifact_chunks: list[dict],
+    target_backend: str,
+) -> list[dict]:
+    if target_backend == "local":
+        return artifact_chunks
+    return [chunk for chunk in artifact_chunks if chunk.get("routing") != "local_only"]
+
+
 def _assert_routing(
     attributes: list[dict],
     preference_attributes: list[dict],
+    artifact_chunks: list[dict],
     target_backend: str,
 ) -> None:
     if target_backend == "local":
         return
 
-    visible_preferences = _visible_preference_attributes(preference_attributes, target_backend)
     violations = [
         attribute
-        for attribute in attributes + visible_preferences
+        for attribute in attributes + preference_attributes + artifact_chunks
         if attribute.get("routing") == "local_only"
     ]
     if violations:
-        labels = ", ".join(str(v.get("label", "unknown")) for v in violations)
+        labels = ", ".join(
+            str(v.get("label", v.get("title", "unknown")))
+            for v in violations
+        )
         raise RoutingViolationError(
             "local_only attributes cannot be sent to external backends: "
             f"{labels}"
         )
 
 
-def _format_attributes(attributes: list[dict]) -> str:
-    if not attributes:
-        return "(no relevant attributes retrieved)"
-
-    by_domain: dict[str, list[dict]] = defaultdict(list)
-    domain_top_scores: dict[str, float] = {}
-
-    for attr in attributes:
-        domain = str(attr.get("domain", "unknown"))
-        by_domain[domain].append(attr)
-        score = float(attr.get("score", 0.0))
-        domain_top_scores[domain] = max(domain_top_scores.get(domain, 0.0), score)
-
-    ordered_domains = sorted(
-        domain_top_scores,
-        key=lambda domain: domain_top_scores[domain],
-        reverse=True,
-    )
-    lines: list[str] = []
-
-    for domain in ordered_domains:
-        domain_attrs = sorted(
-            by_domain[domain],
-            key=lambda a: float(a.get("score", 0.0)),
-            reverse=True,
+def _legacy_evidence_items(context: AssembledContext) -> list[EvidenceItem]:
+    items: list[EvidenceItem] = []
+    for index, attribute in enumerate(context.attributes):
+        label = str(attribute.get("label", "")).strip() or f"identity_{index}"
+        value = str(attribute.get("value", "")).strip()
+        elaboration = str(attribute.get("elaboration", "") or "").strip()
+        if value and elaboration:
+            content = f"{value} {elaboration}"
+        else:
+            content = value or elaboration
+        items.append(
+            EvidenceItem(
+                source_type="identity",
+                kind="attribute",
+                raw_score=float(attribute.get("score", 0.0) or 0.0),
+                normalized_score=0.0,
+                final_score=float(attribute.get("score", 0.0) or 0.0),
+                domain=str(attribute.get("domain", "")) or None,
+                routing=str(attribute.get("routing", "local_only")),
+                status=str(attribute.get("status", "active")),
+                title_or_label=label,
+                content=content,
+                item_id=f"legacy-identity:{label}:{index}",
+                source=str(attribute.get("source", "")) or None,
+            )
         )
-        for attr in domain_attrs:
-            label = str(attr.get("label", ""))
-            value = str(attr.get("value", ""))
-            lines.append(f"[{domain}] {label}: {value}")
-            elaboration = attr.get("elaboration")
-            if elaboration:
-                lines.append(f"         {elaboration}")
 
-    return "\n".join(lines)
+    for index, item in enumerate(context.preference_summary["positive"] + context.preference_summary["negative"]):
+        items.append(
+            EvidenceItem(
+                source_type="preference",
+                kind=str(item.get("source", "preference")),
+                raw_score=float(item.get("score", 0.0) or 0.0),
+                normalized_score=0.0,
+                final_score=float(item.get("score", 0.0) or 0.0),
+                domain=str(item.get("category", "")) or None,
+                routing=str(item.get("routing", "local_only")),
+                status=str(item.get("status", "summary")),
+                title_or_label=str(item.get("subject", item.get("summary", f"preference_{index}"))),
+                content=str(item.get("summary", "")).strip(),
+                item_id=f"legacy-preference:{index}",
+                source=str(item.get("source", "preference")),
+            )
+        )
 
+    for index, chunk in enumerate(context.artifact_chunks):
+        items.append(
+            EvidenceItem(
+                source_type="artifact",
+                kind="artifact_chunk",
+                raw_score=float(chunk.get("score", 0.0) or 0.0),
+                normalized_score=0.0,
+                final_score=float(chunk.get("score", 0.0) or 0.0),
+                domain=str(chunk.get("domain", "")) or None,
+                routing=str(chunk.get("routing", "local_only")),
+                status="supporting",
+                title_or_label=str(chunk.get("title", "Untitled artifact")),
+                content=str(chunk.get("content", "")).strip(),
+                item_id=f"legacy-artifact:{chunk.get('id', index)}",
+                source=str(chunk.get("title", "Untitled artifact")),
+                artifact_id=str(chunk.get("artifact_id", chunk.get("id", index))),
+            )
+        )
 
-def _format_preference_guidance(context: AssembledContext, target_backend: str) -> str:
-    summary = context.preference_summary or {}
-    positive_items = list(summary["positive"])
-    negative_items = list(summary["negative"])
-
-    if target_backend != "local":
-        positive_items = [
-            item
-            for item in positive_items
-            if item.get("routing") != "local_only"
-        ]
-        negative_items = [
-            item
-            for item in negative_items
-            if item.get("routing") != "local_only"
-        ]
-
-    if not positive_items and not negative_items:
-        return ""
-
-    lines = ["", "Learned preference guidance:"]
-    for item in positive_items:
-        summary_text = str(item.get("summary", ""))
-        source = str(item.get("status") or item.get("source") or "preference")
-        lines.append(f"- Prefer: {summary_text} [{source}]")
-    for item in negative_items:
-        summary_text = str(item.get("summary", ""))
-        source = str(item.get("status") or item.get("source") or "preference")
-        lines.append(f"- Avoid: {summary_text} [{source}]")
-    return "\n".join(lines)
+    return sorted(items, key=lambda item: (item.final_score, item.title_or_label), reverse=True)
 
 
-def _format_artifact_evidence(context: AssembledContext, target_backend: str) -> str:
-    if not context.artifact_chunks:
-        return ""
-    if target_backend != "local":
-        return ""
+def _visible_evidence_items(context: AssembledContext, target_backend: str) -> list[EvidenceItem]:
+    items = list(context.evidence_items) if context.evidence_items else _legacy_evidence_items(context)
+    if target_backend == "local":
+        return items
+    return [item for item in items if item.routing != "local_only" and item.source_type != "artifact"]
 
-    lines = ["", "Relevant local artifact evidence:"]
-    for chunk in context.artifact_chunks:
-        title = str(chunk.get("title", "Untitled artifact"))
-        excerpt = str(chunk.get("content", "")).strip()
-        if len(excerpt) > ARTIFACT_EXCERPT_MAX_CHARS:
-            excerpt = excerpt[: ARTIFACT_EXCERPT_MAX_CHARS - 3].rstrip() + "..."
-        lines.append(f"- {title} [chunk {int(chunk.get('chunk_index', 0)) + 1}]: {excerpt}")
+
+def _format_grounded_context(context: AssembledContext, target_backend: str) -> str:
+    visible_items = _visible_evidence_items(context, target_backend)
+    if not visible_items:
+        return "(no grounded context retrieved)"
+
+    lines: list[str] = []
+    for item in visible_items:
+        if item.source_type == "artifact":
+            excerpt = item.content.strip()
+            if len(excerpt) > ARTIFACT_EXCERPT_MAX_CHARS:
+                excerpt = excerpt[: ARTIFACT_EXCERPT_MAX_CHARS - 3].rstrip() + "..."
+            chunk_label = ""
+            if item.item_id.startswith("artifact:") or item.item_id.startswith("legacy-artifact:"):
+                for chunk in context.artifact_chunks:
+                    chunk_id = str(chunk.get("id", ""))
+                    if item.item_id.endswith(chunk_id):
+                        chunk_label = f" [chunk {int(chunk.get('chunk_index', 0)) + 1}]"
+                        break
+            lines.append(f"- [artifact] {item.title_or_label}{chunk_label}: {excerpt}")
+            continue
+
+        prefix = "identity" if item.source_type == "identity" else "preference"
+        lines.append(f"- [{prefix}] {item.title_or_label}: {item.content}")
     return "\n".join(lines)
 
 
@@ -184,34 +211,21 @@ def build_prompt(
     enforce_routing: bool = True,
     confidence: str | None = None,
 ) -> list[dict]:
-    """Build the final message array for response generation.
-
-    Args:
-        context: Structured assembled context for the current task.
-        target_backend: "local" for local inference, otherwise provider name.
-        enforce_routing: Keep the prompt-builder fail-closed guard enabled.
-        confidence: Optional confidence label used to append a brief hedging
-            instruction for ``low_confidence`` and ``medium_confidence`` cases.
-    """
-    _ = context.retrieval_mode  # reserved for future prompt variations
-
+    """Build the final message array for response generation."""
     if enforce_routing:
         _assert_routing(
             context.attributes,
             context.preference_attributes,
+            context.artifact_chunks,
             target_backend,
         )
 
-    formatted_attributes = _format_attributes(context.attributes)
-    preference_guidance = _format_preference_guidance(context, target_backend)
-    artifact_evidence = _format_artifact_evidence(context, target_backend)
+    grounded_context = _format_grounded_context(context, target_backend)
     confidence_guidance = _format_confidence_guidance(confidence)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
-            formatted_attributes=formatted_attributes,
-            preference_guidance=preference_guidance,
-            artifact_evidence=artifact_evidence,
+            grounded_context=grounded_context,
             confidence_guidance=confidence_guidance,
         ),
     }

@@ -91,13 +91,11 @@ MEDIUM_SCORE_THRESHOLD = 45
 LOW_SCORE_THRESHOLD = 25
 
 # Per-profile thresholds: (high, medium, low, insufficient)
-# Extend this table when the query classifier gains finer-grained types.
 _PROFILE_THRESHOLDS: dict[str, tuple[int, int, int, int]] = {
-    "default":           (65, 45, 25, 25),
-    "narrow_preference": (55, 40, 25, 25),
-    "recommendation":    (60, 42, 25, 25),
-    "broad_self_model":  (70, 50, 30, 30),
-    "artifact_grounded": (60, 40, 20, 20),
+    "general":              (65, 45, 25, 25),
+    "preference_sensitive": (60, 42, 25, 25),
+    "self_question":        (70, 50, 30, 30),
+    "evidence_based":       (60, 40, 20, 20),
 }
 
 _INFERRED_SOURCES = frozenset({"inferred", "system_inference"})
@@ -149,38 +147,6 @@ class CoverageAssessment:
     confidence: ConfidenceLabel
     notes: str | None
     breakdown: ScoreBreakdown
-
-
-# ---------------------------------------------------------------------------
-# Query-type profile detection
-# ---------------------------------------------------------------------------
-
-def _infer_query_type_profile(context: AssembledContext) -> str:
-    """Map available context signals to one of the scoring profiles.
-
-    Uses task_profiles from the preference runtime summary and a few simple
-    heuristics.  Extend this function when the query classifier gains richer
-    type labels.
-    """
-    task_profiles: list[str] = list(context.preference_summary["task_profiles"])
-    retrieval_mode = context.retrieval_mode
-
-    if "recommendation" in task_profiles:
-        return "recommendation"
-
-    # Artifact-grounded: query has chunk evidence but thin attribute coverage.
-    if context.artifact_chunks and len(context.attributes) <= 1:
-        return "artifact_grounded"
-
-    # Narrow preference: simple query with preference signals present.
-    if retrieval_mode == "simple" and context.preference_attributes:
-        return "narrow_preference"
-
-    # Broad self-model: open-ended, identity-focused.
-    if retrieval_mode == "open_ended":
-        return "broad_self_model"
-
-    return "default"
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +326,7 @@ def _score_consistency(
 
 def _apply_guardrails(
     score: float,
+    source_profile: str,
     attribute_score: float,
     has_pref_attr_support: bool,
     artifact_score: float,
@@ -367,21 +334,30 @@ def _apply_guardrails(
     profile_thresholds: tuple[int, int, int, int],
 ) -> tuple[float, str | None]:
     """Enforce structural guardrails and return (adjusted_score, cap_label)."""
-    high_t, _medium_t, low_t, _insuf_t = profile_thresholds
+    high_t, medium_t, _low_t, _insuf_t = profile_thresholds
+    has_identity_support = attribute_score > 0 or has_pref_attr_support
 
     # Guardrail 1: no high confidence without identity support.
-    # If no relevant active attributes AND no confirmed/promoted preference
-    # attributes, cap the score just below the high threshold.
-    if attribute_score == 0 and not has_pref_attr_support:
+    if source_profile in {"self_question", "general"} and not has_identity_support:
         cap = float(high_t - 1)
         if score > cap:
             return cap, "no_identity_support"
 
-    # Guardrail 2: artifact-only evidence usually caps at medium.
-    # Allow high only if 2+ distinct sources are present.
-    if attribute_score == 0 and not has_pref_attr_support and artifact_score > 0:
+    # Guardrail 2: evidence-based queries can lean on artifacts more, but only
+    # when the evidence is meaningfully grounded.
+    if source_profile == "evidence_based" and artifact_score > 0:
+        strong_single_source = artifact_score >= 8.0 and has_identity_support
+        if len(artifact_sources) < 2 and not strong_single_source:
+            high_cap = float(high_t - 1)
+            if score > high_cap:
+                return high_cap, "artifact_single_source_below_high"
+        return score, None
+
+    # Guardrail 3: outside evidence-based queries, artifact-only evidence stays
+    # capped below medium to prevent over-reliance on notes or uploads.
+    if not has_identity_support and artifact_score > 0:
         if len(artifact_sources) < 2:
-            medium_cap = float(_medium_t - 1)
+            medium_cap = float(medium_t - 1)
             if score > medium_cap:
                 return medium_cap, "artifact_only_single_source"
 
@@ -426,6 +402,11 @@ def _notes_for(
             "Artifact evidence present but no active identity attributes or "
             "preference attributes found — capped below high confidence."
         )
+    if cap_applied == "artifact_single_source_below_high":
+        return (
+            "Evidence relies on a single artifact source without enough "
+            "structured support — capped below high confidence."
+        )
     if cap_applied == "artifact_only_single_source":
         return (
             "Evidence comes from a single artifact source only — "
@@ -462,8 +443,8 @@ def evaluate_coverage(
     scores for testing and future calibration.  The breakdown is not surfaced
     in the public API response; only confidence, counts, and notes are.
     """
-    profile = _infer_query_type_profile(context)
-    thresholds = _PROFILE_THRESHOLDS.get(profile, _PROFILE_THRESHOLDS["default"])
+    profile = context.source_profile
+    thresholds = _PROFILE_THRESHOLDS.get(profile, _PROFILE_THRESHOLDS["general"])
 
     attribute_score = _score_attributes(context.attributes, backend)
     preference_score, has_pref_attr_support = _score_preferences(
@@ -487,6 +468,7 @@ def evaluate_coverage(
 
     raw_score, cap_applied = _apply_guardrails(
         raw_score,
+        profile,
         attribute_score,
         has_pref_attr_support,
         artifact_score,

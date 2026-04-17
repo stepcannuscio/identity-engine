@@ -29,6 +29,7 @@ def _context(
     artifact_chunks: list[dict] | None = None,
     artifact_sources: list[str] | None = None,
     retrieval_mode: str = "simple",
+    source_profile: str = "general",
     preference_summary: PreferenceSummaryPayload | None = None,
 ) -> AssembledContext:
     attributes = attributes or []
@@ -48,6 +49,7 @@ def _context(
         domains_used=[],
         attribute_count=len(attributes),
         retrieval_mode=retrieval_mode,
+        source_profile=source_profile,
         was_trimmed=False,
         contains_local_only=False,
         preference_attributes=preference_attributes,
@@ -389,6 +391,24 @@ def test_guardrail_artifact_only_single_source_never_reaches_medium():
     assert assessment.confidence != "medium_confidence"
 
 
+def test_self_question_artifact_heavy_context_still_cannot_dominate():
+    chunks = [
+        {"title": f"doc_{i}", "content": "content " * 30, "chunk_index": i, "routing": "local_only"}
+        for i in range(4)
+    ]
+    assessment = evaluate_coverage(
+        _context(
+            artifact_chunks=chunks,
+            retrieval_mode="open_ended",
+            source_profile="self_question",
+        ),
+        backend="local",
+    )
+
+    assert assessment.confidence != "high_confidence"
+    assert assessment.score <= 20.0
+
+
 def test_guardrail_does_not_fire_when_identity_present():
     # With strong attributes, guardrail 1 does not fire (cap_applied stays None).
     # 5 confirmed + high-conf attrs = 50 pts (cap) → medium_confidence.
@@ -400,58 +420,101 @@ def test_guardrail_does_not_fire_when_identity_present():
     assert assessment.confidence != "insufficient_data"
 
 
+def test_evidence_based_multi_source_artifacts_with_structure_can_reach_high():
+    attrs = [_confirmed_attr(confidence=0.90) for _ in range(4)]
+    chunks = [
+        {"title": "doc_a", "content": "content " * 20, "chunk_index": 0, "routing": "local_only"},
+        {"title": "doc_b", "content": "content " * 20, "chunk_index": 0, "routing": "local_only"},
+    ]
+    assessment = evaluate_coverage(
+        _context(
+            attributes=attrs,
+            artifact_chunks=chunks,
+            retrieval_mode="open_ended",
+            source_profile="evidence_based",
+        ),
+        backend="local",
+    )
+
+    assert assessment.confidence == "high_confidence"
+
+
+def test_evidence_based_single_source_without_structure_stays_below_high():
+    chunks = [
+        {"title": "doc_a", "content": "content " * 20, "chunk_index": i, "routing": "local_only"}
+        for i in range(3)
+    ]
+    assessment = evaluate_coverage(
+        _context(
+            artifact_chunks=chunks,
+            retrieval_mode="open_ended",
+            source_profile="evidence_based",
+        ),
+        backend="local",
+    )
+
+    assert assessment.confidence != "high_confidence"
+    assert assessment.score < 60.0
+
+
 # ---------------------------------------------------------------------------
 # Query-type profile thresholds
 # ---------------------------------------------------------------------------
 
 def test_narrow_preference_profile_has_lower_high_threshold():
-    # A simple query with preference attributes → narrow_preference profile.
-    # 2 confirmed pref attrs = 16; narrow_preference high=55.
-    # 16 < 55 → not high. But with more prefs: PREF_SCORE_CAP=25 < 55. Always < high alone.
-    # Test that profile is correctly detected and thresholds differ from default.
     pref = {"label": "preference_x", "value": "v", "routing": "local_only", "status": "confirmed"}
-    context = _context(preference_attributes=[pref], retrieval_mode="simple")
+    context = _context(
+        preference_attributes=[pref],
+        retrieval_mode="simple",
+        source_profile="preference_sensitive",
+    )
     assessment = evaluate_coverage(context, backend="local")
 
-    assert assessment.breakdown.query_type_profile == "narrow_preference"
+    assert assessment.breakdown.query_type_profile == "preference_sensitive"
 
 
 def test_broad_self_model_profile_detected_for_open_ended():
     attrs = [_active_attr()]
-    context = _context(attributes=attrs, retrieval_mode="open_ended")
+    context = _context(
+        attributes=attrs,
+        retrieval_mode="open_ended",
+        source_profile="self_question",
+    )
     assessment = evaluate_coverage(context, backend="local")
 
-    assert assessment.breakdown.query_type_profile == "broad_self_model"
+    assert assessment.breakdown.query_type_profile == "self_question"
 
 
 def test_artifact_grounded_profile_detected_when_few_attrs_many_chunks():
     chunks = [
         {"title": "notes", "content": "content", "chunk_index": 0, "routing": "local_only"}
     ]
-    # 0 or 1 attribute with chunks → artifact_grounded.
-    context = _context(artifact_chunks=chunks, retrieval_mode="simple")
+    context = _context(
+        artifact_chunks=chunks,
+        retrieval_mode="simple",
+        source_profile="evidence_based",
+    )
     assessment = evaluate_coverage(context, backend="local")
 
-    assert assessment.breakdown.query_type_profile == "artifact_grounded"
+    assert assessment.breakdown.query_type_profile == "evidence_based"
 
 
 def test_narrow_preference_high_threshold_is_lower_than_default():
-    # Verify the profile thresholds table is correctly wired.
     from engine.coverage_evaluator import _PROFILE_THRESHOLDS
 
-    narrow_high = _PROFILE_THRESHOLDS["narrow_preference"][0]
-    default_high = _PROFILE_THRESHOLDS["default"][0]
+    preference_high = _PROFILE_THRESHOLDS["preference_sensitive"][0]
+    default_high = _PROFILE_THRESHOLDS["general"][0]
 
-    assert narrow_high < default_high
+    assert preference_high < default_high
 
 
 def test_broad_self_model_high_threshold_is_higher_than_default():
     from engine.coverage_evaluator import _PROFILE_THRESHOLDS
 
-    broad_high = _PROFILE_THRESHOLDS["broad_self_model"][0]
-    default_high = _PROFILE_THRESHOLDS["default"][0]
+    self_high = _PROFILE_THRESHOLDS["self_question"][0]
+    default_high = _PROFILE_THRESHOLDS["general"][0]
 
-    assert broad_high > default_high
+    assert self_high > default_high
 
 
 # ---------------------------------------------------------------------------
@@ -491,11 +554,10 @@ def test_score_breakdown_fields_are_present():
     assert isinstance(bd.consistency_adjustment, float)
     assert isinstance(bd.total_score, float)
     assert bd.query_type_profile in {
-        "default",
-        "narrow_preference",
-        "recommendation",
-        "broad_self_model",
-        "artifact_grounded",
+        "general",
+        "preference_sensitive",
+        "self_question",
+        "evidence_based",
     }
     assert bd.total_score == (
         bd.attribute_score

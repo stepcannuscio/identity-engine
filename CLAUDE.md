@@ -1,112 +1,73 @@
-# Identity Engine — Claude Code Instructions
+# CLAUDE.md
 
-These instructions apply to every task in this project.
-Follow them without being asked.
+## Project Purpose
+This repository implements a **privacy-first personal identity engine**.
 
-## After every implementation task
+The system:
+- Models a user's identity (values, goals, preferences, voice, patterns)
+- Stores all data locally in an encrypted SQLCipher database
+- Uses LLMs only as reasoning tools — never as the source of truth
 
-When you finish implementing any feature, run these steps
-in order before declaring the task complete. Do not skip
-any step. Do not ask permission to run them.
+## Core Principles
+- Local-first architecture
+- User-owned data
+- Explicit consent for any external data sharing
+- Structured identity > raw text blobs
+- Deterministic privacy enforcement > LLM judgment
 
-### Step 1 — lint and type check
+## Critical Rules
 
-Run all of the following and fix every error and warning
-before proceeding. Do not proceed if any of these fail.
+### LLM Usage
+- ALL LLM calls MUST go through `llm_router.py`
+- No direct API calls elsewhere in the codebase
+- Local models are always preferred
+- External calls must respect attribute `routing`
 
-    .venv/bin/python -m flake8 . \
-        --exclude=.venv,__pycache__ \
-        --max-line-length=100
+### Privacy
+- `local_only` attributes MUST NEVER be sent externally
+- `external_ok` attributes may be used externally
+- Violations must raise errors (fail closed)
 
-    .venv/bin/python -m mypy . \
-        --ignore-missing-imports \
-        --exclude .venv
+### Data Integrity
+- Only one active `(domain, label)` allowed
+- Updates must create history entries
+- Never overwrite without audit trail
 
-    .venv/bin/pyright --pythonpath .venv/bin/python
+### Architecture Boundaries
+Core components:
+- Identity Store (DB)
+- Evidence (future)
+- Retrieval Engine
+- Prompt Builder
+- LLM Router
+- Query Engine
 
-If flake8, mypy, or pyright are not installed, install
-them into the venv first, add them to requirements.txt,
-then run.
+## Coding Guidelines
+- Small, composable modules
+- No business logic in routes
+- Explicit interfaces over implicit coupling
+- Prefer clarity over cleverness
 
-Fix all errors first, then all warnings. Do not suppress
-warnings with noqa or type: ignore comments unless there
-is a genuine false positive — explain why in a comment
-if you do.
+## Project State Source
+- `docs/PROJECT_STATE.md` is the canonical project state file
+- Root-level `PROJECT_STATE.md` should not be assumed to exist
+- When a task materially changes system capabilities or architecture, update `docs/PROJECT_STATE.md` before closing the task
 
-### Step 2 — tests
+## Testing Requirements
+Every feature must include:
+- Unit tests
+- Routing/privacy tests
+- Failure case tests
 
-Run the full test suite:
+## Python Environment
+- Always use the repo virtualenv for Python commands
+- Run Python tools as `./.venv/bin/python -m ...` instead of system `python`, `pytest`, or `pyright`
+- Before closing Python changes, run the relevant tests from the virtualenv
+- Treat Pylance/Pyright errors as real regressions and fix them before finishing
+- Prefer `make test-backend`, `make typecheck`, or `make verify-backend` for backend verification
 
-    make test
-
-All tests must pass. If any test fails because of your
-changes, fix the code, not the test, unless the test
-itself is wrong — in which case explain why before
-changing it.
-
-If you added new functionality, add tests for it before
-this step. New code without tests is not complete.
-
-### Step 3 — docs
-
-For every file you created or meaningfully changed:
-
-- If it is a new module: add a docstring at the top of
-  the file explaining what it does and how to use it
-- If it is an existing module: update the docstring if
-  the behaviour changed
-- If it adds or changes a public function or class:
-  update or add a docstring on that function/class
-- If it changes behaviour documented in docs/: update
-  the relevant .md file
-
-### Step 4 — README
-
-If your changes affect any of the following, update
-README.md accordingly:
-
-- How to set up the project
-- How to run the project
-- What the project can now do that it could not before
-- New make targets
-- New environment or keychain configuration required
-
-The README must always reflect the current state of the
-project. A developer (or future you) reading it cold
-should be able to get the project running.
-
-### Step 5 — completion report
-
-When all four steps are clean, report:
-
-  lint:   pass
-  types:  pass
-  tests:  N passed
-  docs:   updated (list files changed)
-  readme: updated | no changes needed
-
-Do not report complete until all five lines are green.
-
-## General coding standards
-
-- All database access through db/connection.py only
-- All keychain access through config/settings.py only
-- All LLM inference through config/llm_router.py only
-- Never hardcode model names, key names, or paths outside
-  their canonical definition files
-- Every new module gets a top-level docstring
-- Functions longer than 40 lines should be split unless
-  there is a clear reason not to
-- No print statements in library code — use logging
-- Scripts (scripts/) may use print for user-facing output
-- When committing, never add Co-authored-by, Generated-by, or any trailer
-lines to commit messages.
-
-## Security rules
-
-- Never write the database file inside the project directory
-- Never log or print key material of any kind
-- Never add a file containing real personal data to git
-- If you are unsure whether something is sensitive, treat
-  it as sensitive
-  
+## When Unsure
+Choose:
+- More privacy
+- Less data sent
+- More explicit control

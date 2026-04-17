@@ -151,6 +151,7 @@ class PreferenceContextResult:
     """Bounded preference context selected for one query."""
 
     attributes: list[dict]
+    signal_items: list[PreferenceSummaryItem]
     summary: PreferenceSummaryPayload
     categories_used: list[str]
     item_count: int
@@ -460,6 +461,10 @@ def get_relevant_preference_context(
 
     return PreferenceContextResult(
         attributes=selected_attributes,
+        signal_items=[
+            _build_signal_summary_item(summary, score, direction)
+            for score, summary, direction in selected_signals
+        ],
         summary={
             "task_profiles": task_profiles,
             "positive": positive_items,

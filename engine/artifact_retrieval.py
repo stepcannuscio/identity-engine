@@ -11,8 +11,23 @@ DEFAULT_ARTIFACT_LIMIT = 3
 _TOKEN_RE = re.compile(r"[a-z0-9']+")
 
 
+def _normalize_token(token: str) -> str:
+    normalized = token.lower()
+    if len(normalized) > 5 and normalized.endswith("ing"):
+        normalized = normalized[:-3]
+    elif len(normalized) > 4 and normalized.endswith("ed"):
+        normalized = normalized[:-2]
+    if len(normalized) > 4 and normalized.endswith("s"):
+        normalized = normalized[:-1]
+    return normalized
+
+
 def _tokenize(text: str) -> set[str]:
-    return {token for token in _TOKEN_RE.findall(text.lower()) if token not in STOPWORDS}
+    return {
+        _normalize_token(token)
+        for token in _TOKEN_RE.findall(text.lower())
+        if _normalize_token(token) not in STOPWORDS
+    }
 
 
 def _query_domains(query: str) -> set[str]:
@@ -24,14 +39,14 @@ def _query_domains(query: str) -> set[str]:
     return matched
 
 
-def retrieve_artifact_chunks(
+def retrieve_artifact_chunk_candidates(
     conn,
     query: str,
     *,
-    limit: int = DEFAULT_ARTIFACT_LIMIT,
+    limit: int | None = DEFAULT_ARTIFACT_LIMIT,
     artifact_type: str | None = None,
 ) -> list[dict]:
-    """Return the most relevant artifact chunks for a query."""
+    """Return scored artifact chunk candidates for a query."""
     query_tokens = _tokenize(query)
     if not query_tokens:
         return []
@@ -102,7 +117,25 @@ def retrieve_artifact_chunks(
         ),
         reverse=True,
     )
+    if limit is None:
+        return scored
     return scored[:limit]
+
+
+def retrieve_artifact_chunks(
+    conn,
+    query: str,
+    *,
+    limit: int = DEFAULT_ARTIFACT_LIMIT,
+    artifact_type: str | None = None,
+) -> list[dict]:
+    """Return the most relevant artifact chunks for a query."""
+    return retrieve_artifact_chunk_candidates(
+        conn,
+        query,
+        limit=limit,
+        artifact_type=artifact_type,
+    )
 
 
 def get_artifact_chunks_by_id(conn, artifact_id: str) -> list[dict]:
