@@ -16,6 +16,13 @@ function extractEventPayload(block) {
   return JSON.parse(payload)
 }
 
+function normalizeStreamError(message, privacy = null) {
+  return {
+    message: message || 'Unable to stream response.',
+    privacy,
+  }
+}
+
 export function useStream() {
   const controllerRef = useRef(null)
   const { token, addToast } = useAppState()
@@ -59,16 +66,21 @@ export function useStream() {
         })
 
         if (!response.ok || !response.body) {
-          let message = 'Unable to stream response.'
+          let errorPayload = normalizeStreamError('Unable to stream response.')
+          hadError = true
 
           try {
             const payload = await response.json()
-            message = payload.detail || payload.error || message
+            errorPayload = normalizeStreamError(
+              payload.message || payload.detail || payload.error,
+              payload.privacy ?? null,
+            )
           } catch {
-            message = response.statusText || message
+            errorPayload = normalizeStreamError(response.statusText)
           }
 
-          throw new Error(message)
+          onError?.(errorPayload)
+          return
         }
 
         const reader = response.body.getReader()
@@ -103,7 +115,12 @@ export function useStream() {
               break
             case 'error':
               hadError = true
-              onError?.(event.content || 'Unable to stream response.')
+              onError?.(
+                normalizeStreamError(
+                  event.content || 'Unable to stream response.',
+                  event.privacy ?? null,
+                ),
+              )
               break
             default:
               break
@@ -138,7 +155,7 @@ export function useStream() {
         }
 
         hadError = true
-        onError?.(error.message || 'Unable to stream response.')
+        onError?.(normalizeStreamError(error.message))
       } finally {
         if (controllerRef.current === controller) {
           controllerRef.current = null

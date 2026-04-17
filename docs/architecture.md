@@ -27,6 +27,9 @@ User Input → Query Engine / Capture Flow → Retrieval / Extraction Prep → P
 - Centralizes application-level inference decisions
 - Makes local vs external inference explicit
 - Enforces query routing before delegating to the router
+- Feeds privacy-safe execution summaries to the API so the frontend can show
+  local, external, blocked, or unavailable states without exposing raw prompts
+  or audit payloads
 
 ### LLM Router
 - Handles model selection

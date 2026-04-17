@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -34,6 +35,17 @@ class QueryRequest(BaseModel):
     backend_override: str | None = None
 
 
+class PrivacyState(BaseModel):
+    """Privacy-safe execution summary for frontend display."""
+
+    execution_mode: Literal["local", "external", "blocked", "unknown"]
+    routing_enforced: bool
+    warning_present: bool
+    provider_label: str | None = None
+    model_label: str | None = None
+    summary: str
+
+
 class QueryMetadata(BaseModel):
     """Metadata emitted for each query response."""
 
@@ -42,6 +54,7 @@ class QueryMetadata(BaseModel):
     backend_used: str
     domains_referenced: list[str]
     duration_ms: int
+    privacy: PrivacyState
 
 
 class RoutingLogEntry(BaseModel):
@@ -64,6 +77,7 @@ class RoutingLogEntry(BaseModel):
     decision: str | None = None
     warning: str | None = None
     reason: str | None = None
+    privacy: PrivacyState | None = None
 
 
 class QueryResponse(BaseModel):
@@ -170,6 +184,7 @@ class SessionRecord(BaseModel):
     started_at: datetime
     ended_at: datetime | None
     routing_log: list[RoutingLogEntry] = []
+    privacy: PrivacyState | None = None
 
 
 class CurrentSessionStatus(BaseModel):

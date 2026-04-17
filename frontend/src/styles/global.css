@@ -415,6 +415,65 @@ button {
   font-size: 11px;
 }
 
+.privacy-status {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.privacy-status.compact {
+  gap: 3px;
+  margin-top: 8px;
+}
+
+.privacy-status-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.privacy-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.privacy-badge.local {
+  background: rgba(61, 122, 94, 0.12);
+  color: var(--color-local);
+}
+
+.privacy-badge.external {
+  background: rgba(180, 83, 9, 0.12);
+  color: var(--color-external);
+}
+
+.privacy-badge.blocked {
+  background: rgba(185, 28, 28, 0.12);
+  color: var(--color-danger);
+}
+
+.privacy-badge.unknown {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-tertiary);
+}
+
+.privacy-inline-note,
+.privacy-summary {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.privacy-summary {
+  margin: 0;
+}
+
 .assistant-backend.local {
   color: var(--color-local);
 }

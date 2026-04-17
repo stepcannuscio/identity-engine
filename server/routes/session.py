@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from server.db import get_db_connection
 from server.models.schemas import CurrentSessionStatus, RoutingLogEntry, SessionRecord
+from server.privacy import privacy_state_from_routing_log, session_privacy_state
 
 router = APIRouter(tags=["sessions"])
 
@@ -33,6 +34,7 @@ def _backend_from_entry(entry: dict) -> str:
 def _serialize_session(row) -> SessionRecord:
     raw_log = row[8] or "[]"
     parsed_log = json.loads(raw_log)
+    safe_entries = [entry for entry in parsed_log if isinstance(entry, dict)]
     routing_log = [
         RoutingLogEntry(
             query=str(entry.get("query", "")),
@@ -52,11 +54,11 @@ def _serialize_session(row) -> SessionRecord:
             ),
             retrieval_mode=entry.get("retrieval_mode"),
             decision=entry.get("decision"),
-            warning=entry.get("warning"),
-            reason=entry.get("reason"),
+            warning=None,
+            reason=None,
+            privacy=privacy_state_from_routing_log(entry),
         )
-        for entry in parsed_log
-        if isinstance(entry, dict)
+        for entry in safe_entries
     ]
     return SessionRecord(
         id=str(row[0]),
@@ -68,6 +70,7 @@ def _serialize_session(row) -> SessionRecord:
         started_at=row[6],
         ended_at=row[7],
         routing_log=routing_log,
+        privacy=session_privacy_state(safe_entries),
     )
 
 

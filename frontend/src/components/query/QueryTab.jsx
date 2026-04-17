@@ -35,7 +35,7 @@ export default function QueryTab() {
 
       addMessage({ role: 'user', content: text })
       setDraft('')
-      updateStreamingMessage({ content: '', metadata: null, error: null })
+      updateStreamingMessage({ content: '', metadata: null, error: null, privacy: null })
       setStreaming(true)
 
       await streamQuery({
@@ -49,14 +49,15 @@ export default function QueryTab() {
         },
         onMetadata: (metadata) => {
           updateStreamingMessage((current) => ({
-            ...(current ?? { content: '', error: null }),
+            ...(current ?? { content: '', error: null, privacy: null }),
             metadata,
           }))
         },
         onError: (error) => {
           updateStreamingMessage((current) => ({
-            ...(current ?? { content: '', metadata: null }),
-            error,
+            ...(current ?? { content: '', metadata: null, privacy: null }),
+            error: error.message,
+            privacy: error.privacy ?? current?.metadata?.privacy ?? current?.privacy ?? null,
           }))
         },
         onAbort: () => {

@@ -21,6 +21,7 @@ Tier 2: Sensitive
 - Retrieval layer
 - Prompt builder
 - LLM router
+- Privacy broker and API response normalization
 
 ## Failure Mode
 
@@ -33,3 +34,7 @@ Every external call must record:
 - attributes used
 - provider
 - reason
+
+The frontend only receives high-level privacy state summaries such as
+`local`, `external`, `blocked`, or `unknown`. It does not receive raw prompts,
+raw evidence text, or internal audit reason strings.

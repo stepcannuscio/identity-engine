@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import PrivacyStatus from '../privacy/PrivacyStatus.jsx'
 
 function formatDuration(durationMs) {
   if (!durationMs && durationMs !== 0) {
@@ -51,6 +52,7 @@ export default function Message({ message }) {
             {message.content}
           </ReactMarkdown>
         </div>
+        <PrivacyStatus privacy={message.metadata?.privacy} />
         {renderMetadata(message.metadata)}
       </div>
     </article>

@@ -20,6 +20,12 @@ from engine.prompt_builder import RoutingViolationError
 from engine.query_engine import prepare_query, record_blocked_query, record_query_result
 from server.db import get_db_connection
 from server.models.schemas import QueryMetadata, QueryRequest, QueryResponse
+from server.privacy import (
+    blocked_privacy_state,
+    privacy_state_from_decision,
+    privacy_state_from_provider,
+    unavailable_privacy_state,
+)
 
 router = APIRouter(tags=["query"])
 logger = logging.getLogger(__name__)
@@ -60,7 +66,7 @@ def _is_sensitive_query(query_text: str, attributes: list[dict]) -> bool:
     return any(str(attr.get("domain")) in _SENSITIVE_DOMAINS for attr in attributes)
 
 
-def _metadata_from_context(context, duration_ms: int) -> QueryMetadata:
+def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
     domains = sorted(
         {
             str(attr.get("domain", ""))
@@ -74,6 +80,7 @@ def _metadata_from_context(context, duration_ms: int) -> QueryMetadata:
         backend_used=context.backend,
         domains_referenced=domains,
         duration_ms=duration_ms,
+        privacy=privacy,
     )
 
 
@@ -86,7 +93,7 @@ def _query_error_response(
     exc: Exception,
     provider_config: ProviderConfig,
     query_text: str,
-) -> tuple[int, dict[str, str]]:
+) -> tuple[int, dict[str, object]]:
     if isinstance(exc, RoutingViolationError):
         logger.warning(
             "Blocked external query because it would include local_only attributes. query=%r",
@@ -97,9 +104,10 @@ def _query_error_response(
             {
                 "error": "routing_violation",
                 "message": (
-                    "This query would include local-only attributes and cannot be sent "
-                    "to an external backend."
+                    "This request was blocked to protect local-only data from being "
+                    "sent to an external model."
                 ),
+                "privacy": blocked_privacy_state(provider_config).model_dump(mode="json"),
             },
         )
 
@@ -115,6 +123,7 @@ def _query_error_response(
             {
                 "error": "backend_unavailable",
                 "message": str(exc),
+                "privacy": unavailable_privacy_state(provider_config).model_dump(mode="json"),
             },
         )
 
@@ -131,6 +140,7 @@ def _query_error_response(
                 "message": (
                     f"External provider request failed for {provider_config.provider}."
                 ),
+                "privacy": unavailable_privacy_state(provider_config).model_dump(mode="json"),
             },
         )
 
@@ -144,6 +154,7 @@ def _query_error_response(
         {
             "error": "internal_server_error",
             "message": "internal server error",
+            "privacy": unavailable_privacy_state(provider_config).model_dump(mode="json"),
         },
     )
 
@@ -182,7 +193,11 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
         )
         return QueryResponse(
             response=result,
-            metadata=_metadata_from_context(context, duration_ms),
+            metadata=_metadata_from_context(
+                context,
+                duration_ms,
+                privacy_state_from_decision(brokered.metadata),
+            ),
         )
     except Exception as exc:
         if context is not None:
@@ -225,6 +240,16 @@ def query_stream(
         started = time.monotonic()
         collected: list[str] = []
         try:
+            yield _event(
+                {
+                    "type": "metadata",
+                    "content": _metadata_from_context(
+                        context,
+                        0,
+                        privacy_state_from_provider(provider_config),
+                    ).model_dump(mode="json"),
+                }
+            )
             if send_warning:
                 yield _event(
                     {
@@ -259,7 +284,11 @@ def query_stream(
             yield _event(
                 {
                     "type": "metadata",
-                    "content": _metadata_from_context(context, duration_ms).model_dump(mode="json"),
+                    "content": _metadata_from_context(
+                        context,
+                        duration_ms,
+                        privacy_state_from_decision(brokered.metadata),
+                    ).model_dump(mode="json"),
                 }
             )
         except Exception as exc:
@@ -270,6 +299,7 @@ def query_stream(
                     "type": "error",
                     "content": body["message"],
                     "code": body["error"],
+                    "privacy": body.get("privacy"),
                 }
             )
         finally:

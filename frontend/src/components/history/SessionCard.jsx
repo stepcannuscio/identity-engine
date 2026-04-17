@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import PrivacyStatus from '../privacy/PrivacyStatus.jsx'
 
 function formatSessionTitle(sessionType) {
   if (sessionType === 'interview') {
@@ -65,6 +66,7 @@ export default function SessionCard({ session }) {
           <p className="session-covered">
             Covered: {coveredDomains.length ? coveredDomains.join(', ') : 'none recorded'}
           </p>
+          <PrivacyStatus privacy={session.privacy} compact />
         </div>
         <span className="session-date">{formatDate(session.started_at)}</span>
       </div>
@@ -75,6 +77,11 @@ export default function SessionCard({ session }) {
             session.routing_log.map((entry, index) => (
               <div key={`${entry.timestamp}-${index}`} className="timeline-item">
                 <p className="timeline-query">{entry.query}</p>
+                <PrivacyStatus
+                  privacy={entry.privacy}
+                  compact
+                  showSummary={entry.privacy?.execution_mode === 'blocked'}
+                />
                 <p className="timeline-meta">
                   {entry.backend} &middot; {entry.query_type} &middot;{' '}
                   {entry.attribute_count} attributes &middot; {formatTime(entry.timestamp)}

@@ -22,6 +22,7 @@ import engine.capture as capture_module
 from config.llm_router import ProviderConfig
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
+from engine.privacy_broker import InferenceDecision
 from engine.prompt_builder import RoutingViolationError
 from server.main import assert_safe_bind_ip, create_app
 
@@ -365,6 +366,110 @@ def test_query_returns_409_when_external_routing_violates_local_only_policy(
 
     assert response.status_code == 409
     assert response.json()["error"] == "routing_violation"
+    assert response.json()["privacy"]["execution_mode"] == "blocked"
+    assert "local-only data" in response.json()["privacy"]["summary"]
+
+
+def test_query_response_includes_normalized_privacy_metadata(
+    client: TestClient, monkeypatch
+):
+    monkeypatch.setattr(
+        "server.routes.query.prepare_query",
+        lambda *args, **kwargs: SimpleNamespace(
+            query="What matters most to me right now?",
+            query_type="open_ended",
+            attributes=[
+                {"domain": "goals", "routing": "external_ok"},
+                {"domain": "values", "routing": "external_ok"},
+            ],
+            messages=[{"role": "user", "content": "What matters most to me right now?"}],
+            backend="local",
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.PrivacyBroker.generate_grounded_response",
+        lambda *args, **kwargs: SimpleNamespace(
+            content="Focus on long-term work and honest relationships.",
+            metadata=InferenceDecision(
+                provider="ollama",
+                model="llama3.1:8b",
+                is_local=True,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+                attribute_count=2,
+                domains_used=["goals", "values"],
+                retrieval_mode="open_ended",
+                contains_local_only_context=False,
+            ),
+        ),
+    )
+
+    response = client.post(
+        "/query",
+        json={"query": "What matters most to me right now?"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metadata"]["privacy"]["execution_mode"] == "local"
+    assert body["metadata"]["privacy"]["routing_enforced"] is True
+    assert body["metadata"]["privacy"]["summary"] == "Processed locally with privacy rules applied."
+
+
+def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.query.prepare_query",
+        lambda *args, **kwargs: SimpleNamespace(
+            query="What matters most to me right now?",
+            query_type="open_ended",
+            attributes=[{"domain": "goals", "routing": "external_ok"}],
+            messages=[{"role": "user", "content": "What matters most to me right now?"}],
+            backend="external",
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.resolve_external_router",
+        lambda: ProviderConfig(
+            provider="anthropic",
+            api_key="test-key",  # pragma: allowlist secret
+            model="claude-sonnet-4-6",
+            is_local=False,
+            arch="apple_silicon",
+            ram_gb=36.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.PrivacyBroker.generate_grounded_response",
+        lambda *args, **kwargs: SimpleNamespace(
+            content=iter(["Trust", " your", " own", " record."]),
+            metadata=InferenceDecision(
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                is_local=False,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+                attribute_count=1,
+                domains_used=["goals"],
+                retrieval_mode="open_ended",
+                contains_local_only_context=False,
+            ),
+        ),
+    )
+
+    response = client.post(
+        "/query/stream",
+        json={"query": "What matters most to me right now?", "backend_override": "external"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"type": "metadata"' in body
+    assert '"execution_mode": "external"' in body
+    assert '"summary": "Used an external model after privacy rules were applied."' in body
 
 
 def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypatch):
@@ -394,6 +499,38 @@ def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypat
     body = response.text
     assert '"type": "error"' in body
     assert '"code": "upstream_error"' in body
+
+
+def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.query.resolve_external_router",
+        lambda: ProviderConfig(
+            provider="anthropic",
+            api_key="test-key",  # pragma: allowlist secret
+            model="claude-sonnet-4-6",
+            is_local=False,
+            arch="apple_silicon",
+            ram_gb=36.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.PrivacyBroker.generate_grounded_response",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RoutingViolationError("local_only attributes cannot be sent externally")
+        ),
+    )
+
+    response = client.post(
+        "/query/stream",
+        json={"query": "Tell me about my fears", "backend_override": "external"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"type": "error"' in body
+    assert '"execution_mode": "blocked"' in body
+    assert '"summary": "Blocked to protect local-only data from being sent externally."' in body
 
 
 def test_capture_accepts_preview_items_and_supersedes_conflicts(client: TestClient):
@@ -469,6 +606,9 @@ def test_sessions_include_routing_log_entries(client: TestClient):
                         "backend": "external",
                         "attribute_count": 4,
                         "domains_referenced": ["goals", "values"],
+                        "routing_enforced": True,
+                        "warning": "internal detail should stay server-side",
+                        "reason": "local_only_context_blocked_for_external_inference",
                         "timestamp": "2026-04-08T12:00:00+00:00",
                     }
                 ]
@@ -485,6 +625,10 @@ def test_sessions_include_routing_log_entries(client: TestClient):
     session = response.json()[0]
     assert session["routing_log"][0]["backend"] == "external"
     assert session["routing_log"][0]["domains_referenced"] == ["goals", "values"]
+    assert session["routing_log"][0]["warning"] is None
+    assert session["routing_log"][0]["reason"] is None
+    assert session["routing_log"][0]["privacy"]["execution_mode"] == "external"
+    assert session["privacy"]["execution_mode"] == "external"
 
 
 def test_server_startup_asserts_bind_ip_is_not_zero_zero_zero_zero():

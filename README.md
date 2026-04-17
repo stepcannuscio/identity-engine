@@ -190,7 +190,9 @@ See [docs/query.md](docs/query.md) for details.
 
 The frontend lives in `frontend/` and is built with Vite + React. It never
 touches the database or LLM providers directly; all reads and writes go
-through the FastAPI API.
+through the FastAPI API. Query responses and session history now surface a
+small privacy state summary so the UI can show whether an inference stayed
+local, used an external model, or was blocked to protect local-only data.
 
 Development:
 
