@@ -3,10 +3,17 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
+NPM := npm
+FRONTEND_DIR := frontend
+FRONTEND_NODE_MODULES := $(FRONTEND_DIR)/node_modules/.package-lock.json
 
-.PHONY: help setup init test clean interview capture query view serve smoke \
-	add-anthropic-key add-groq-key set-ui-passphrase frontend-install \
-	frontend-dev frontend-build dev
+APP ?= all
+BACKEND_ARGS ?=
+FRONTEND_ARGS ?=
+
+.PHONY: help setup init test test-backend test-frontend clean interview \
+	capture query view serve smoke add-anthropic-key add-groq-key \
+	set-ui-passphrase frontend-install frontend-dev frontend-build dev
 
 ## Show this help message
 help:
@@ -14,7 +21,8 @@ help:
 	@echo ""
 	@echo "  make setup   Create .venv, install dependencies, install pre-commit hooks"
 	@echo "  make init    Run scripts/init_db.py to initialise the encrypted database"
-	@echo "  make test    Run the pytest test suite with verbose output"
+	@echo "  make test    Run backend + frontend tests by default"
+	@echo "               Use APP=backend|frontend|all BACKEND_ARGS='...' FRONTEND_ARGS='...'"
 	@echo "  make clean   Remove .venv and __pycache__ (never removes the database)"
 	@echo "  make capture Write a quick capture directly to the identity store"
 	@echo "  make query   Start an interactive freeform query session"
@@ -46,10 +54,38 @@ init: setup
 	@echo "--> Initialising database..."
 	$(PYTHON) scripts/init_db.py
 
-## Run the test suite (depends on setup)
-test: setup
-	@echo "--> Running tests..."
-	$(PYTEST) tests/ -v
+$(FRONTEND_NODE_MODULES): $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json
+	@echo "--> Installing frontend dependencies..."
+	cd $(FRONTEND_DIR) && $(NPM) install
+
+## Run the full test suite or a scoped app-specific subset
+test:
+	@case "$(APP)" in \
+		all) \
+			$(MAKE) test-backend BACKEND_ARGS="$(BACKEND_ARGS)"; \
+			$(MAKE) test-frontend FRONTEND_ARGS="$(FRONTEND_ARGS)"; \
+			;; \
+		backend) \
+			$(MAKE) test-backend BACKEND_ARGS="$(BACKEND_ARGS)"; \
+			;; \
+		frontend) \
+			$(MAKE) test-frontend FRONTEND_ARGS="$(FRONTEND_ARGS)"; \
+			;; \
+		*) \
+			echo "Unknown APP='$(APP)'. Use APP=all, APP=backend, or APP=frontend."; \
+			exit 1; \
+			;; \
+	esac
+
+## Run the backend pytest suite
+test-backend: setup
+	@echo "--> Running backend tests..."
+	$(PYTEST) tests/ -v $(BACKEND_ARGS)
+
+## Run the frontend Vitest suite
+test-frontend: $(FRONTEND_NODE_MODULES)
+	@echo "--> Running frontend tests..."
+	cd $(FRONTEND_DIR) && $(NPM) run test -- $(FRONTEND_ARGS)
 
 ## Remove .venv and __pycache__ (never removes the database or keychain entry)
 clean:
@@ -85,16 +121,15 @@ serve:
 	.venv/bin/python scripts/serve.py
 
 ## Install frontend npm dependencies
-frontend-install:
-	cd frontend && npm install
+frontend-install: $(FRONTEND_NODE_MODULES)
 
 ## Start the Vite frontend dev server
 frontend-dev:
-	cd frontend && npm run dev
+	cd $(FRONTEND_DIR) && $(NPM) run dev
 
 ## Build the production frontend bundle
 frontend-build:
-	cd frontend && npm run build
+	cd $(FRONTEND_DIR) && $(NPM) run build
 
 ## Start the backend and frontend together
 dev:

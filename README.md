@@ -26,7 +26,7 @@ the backend in production.
 ```sh
 make setup      # create venv, install deps, install pre-commit hooks
 make init       # generate key, create database, seed domains
-make test       # run the test suite
+make test       # run backend + frontend tests
 make interview  # start the interactive identity interview
 make capture    # save a quick note directly as identity attributes
 make query      # start interactive freeform query mode
@@ -39,6 +39,30 @@ make smoke      # run a quick API smoke test against the backend
 make view       # pretty-print the identity store
 make set-ui-passphrase  # update the web UI passphrase
 ```
+
+## Testing
+
+`make test` runs all backend and frontend tests by default:
+
+```sh
+make test
+```
+
+To scope the run, pass `APP=backend`, `APP=frontend`, or `APP=all` together
+with app-specific arguments:
+
+```sh
+make test APP=backend BACKEND_ARGS="-k llm_router"
+make test APP=frontend FRONTEND_ARGS="src/test/use-auth.test.jsx"
+make test APP=all BACKEND_ARGS="-k server" FRONTEND_ARGS="--coverage"
+```
+
+Under the hood:
+
+- backend tests run with `pytest`
+- frontend tests run with `vitest`
+- `make frontend-install` installs frontend dependencies explicitly, but
+  frontend test runs also install them automatically if needed
 
 ## LLM backend
 
