@@ -84,7 +84,12 @@ def test_all_tables_created(conn):
         ).fetchall()
     }
     expected = {
-        "domains", "attributes", "attribute_history", "inference_evidence", "reflection_sessions"
+        "domains",
+        "attributes",
+        "attribute_history",
+        "inference_evidence",
+        "reflection_sessions",
+        "preference_signals",
     }
     assert expected.issubset(tables)
 
@@ -180,6 +185,48 @@ def test_attribute_history_fk_rejects_missing_attribute(conn):
             """INSERT INTO attribute_history (id, attribute_id, previous_value, changed_by)
                VALUES (?, ?, ?, ?)""",
             (str(uuid.uuid4()), "nonexistent-id", "val", "user"),
+        )
+        conn.commit()
+
+
+def test_preference_signal_rejects_invalid_signal(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO preference_signals (
+                id, category, subject, signal, strength, source
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                "writing_style",
+                "concise_responses",
+                "maybe",
+                3,
+                "explicit_feedback",
+            ),
+        )
+        conn.commit()
+
+
+def test_preference_signal_rejects_invalid_strength(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO preference_signals (
+                id, category, subject, signal, strength, source
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                "writing_style",
+                "concise_responses",
+                "prefer",
+                7,
+                "explicit_feedback",
+            ),
         )
         conn.commit()
 

@@ -11,6 +11,7 @@ This document captures the current system state after completing:
 - Frontend Privacy States
 - Provenance Read API
 - Attribute Correction Loop
+- Preference Learning
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -30,6 +31,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - tracks why beliefs exist (provenance)
 - surfaces privacy behavior to the user
 - allows users to confirm, reject, and refine beliefs
+- stores lightweight local preference signals for future planning/recommendation use
 
 ---
 
@@ -96,6 +98,13 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - refinement supersedes the old version and creates a new current row
 - frontend graph view includes light confirm/reject controls
 
+### 12. Preference Signal Layer
+- `POST /preferences/signals` stores explicit local preference feedback
+- `GET /preferences/signals` lists raw signals with optional filters
+- `GET /preferences/signals/summary` provides deterministic grouped summaries
+- preference signals are stored separately from canonical attributes
+- raw signal history remains local data and is not routed through audit/privacy summaries
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -127,6 +136,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - current attribute states are `active` and `confirmed`
 - excluded/non-current states are `rejected`, `superseded`, and `retracted`
 - only one current `(domain, label)` may exist at a time
+- preference signals are separate from attributes and represent lower-level evidence
 
 ---
 
@@ -141,10 +151,12 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - surface privacy behavior to users
 - let users confirm beliefs they trust
 - let users reject beliefs they do not want used
-- let users refine beliefs without overwriting 
+- let users refine beliefs without overwriting history
 - users can confirm attributes to mark them as trusted current beliefs
 - users can reject attributes so they are excluded from retrieval
 - users can refine attributes by creating a new version instead of overwriting
 - provenance remains attached to the original inferred attribute version
 - retrieval favors confirmed attributes and ignores rejected ones
 - current listings and domain counts include both `active` and `confirmed`
+- record explicit likes, dislikes, accepts, rejects, prefers, and avoids as local preference signals
+- summarize preference tendencies without promoting them into attributes yet

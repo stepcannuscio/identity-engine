@@ -122,6 +122,7 @@ def client(monkeypatch):
     monkeypatch.setattr("server.routes.query.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.attributes.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.capture.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("server.routes.preferences.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.session.get_db_connection", _get_db_connection)
 
     app = create_app()
@@ -185,6 +186,12 @@ def test_protected_route_with_valid_token_returns_200(client: TestClient):
     assert response.status_code == 200
 
 
+def test_preference_route_without_token_returns_401(client: TestClient):
+    response = client.get("/preferences/signals")
+    assert response.status_code == 401
+    assert response.json() == {"error": "authentication required"}
+
+
 def test_protected_route_with_expired_token_returns_401(client: TestClient):
     _app(client).state.active_sessions["expired"] = (
         datetime.now(UTC) - timedelta(minutes=1)
@@ -208,6 +215,163 @@ def test_get_attributes_returns_list_of_active_attributes(client: TestClient):
     body = response.json()
     assert len(body) == 1
     assert body[0]["label"] == "priority"
+
+
+def test_post_preference_signal_creates_local_preference_record(client: TestClient):
+    response = client.post(
+        "/preferences/signals",
+        json={
+            "category": "writing_style",
+            "subject": "concise_responses",
+            "signal": "prefer",
+            "strength": 4,
+            "source": "explicit_feedback",
+            "context": {"audience": "work"},
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["category"] == "writing_style"
+    assert body["subject"] == "concise_responses"
+    assert body["signal"] == "prefer"
+    assert body["context"] == {"audience": "work"}
+
+    stored = _db(client).execute(
+        "SELECT category, subject, signal, strength, source FROM preference_signals"
+    ).fetchone()
+    assert stored == (
+        "writing_style",
+        "concise_responses",
+        "prefer",
+        4,
+        "explicit_feedback",
+    )
+
+
+def test_get_preference_signals_supports_filters(client: TestClient):
+    _db(client).execute(
+        """
+        INSERT INTO preference_signals (
+            id, category, subject, signal, strength, source, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            "writing_style",
+            "concise_responses",
+            "prefer",
+            4,
+            "explicit_feedback",
+            "2026-04-17T12:00:00+00:00",
+        ),
+    )
+    _db(client).execute(
+        """
+        INSERT INTO preference_signals (
+            id, category, subject, signal, strength, source, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            "books",
+            "history",
+            "like",
+            3,
+            "explicit_feedback",
+            "2026-04-17T12:05:00+00:00",
+        ),
+    )
+    _db(client).commit()
+
+    response = client.get(
+        "/preferences/signals",
+        params={"category": "writing_style"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["subject"] == "concise_responses"
+
+
+def test_get_preference_signal_summary_returns_net_scores(client: TestClient):
+    for signal, strength, created_at in [
+        ("prefer", 4, "2026-04-17T12:00:00+00:00"),
+        ("avoid", 2, "2026-04-17T12:01:00+00:00"),
+    ]:
+        _db(client).execute(
+            """
+            INSERT INTO preference_signals (
+                id, category, subject, signal, strength, source, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                "writing_style",
+                "concise_responses",
+                signal,
+                strength,
+                "explicit_feedback",
+                created_at,
+            ),
+        )
+    _db(client).commit()
+
+    response = client.get(
+        "/preferences/signals/summary",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "category": "writing_style",
+            "subject": "concise_responses",
+            "observations": 2,
+            "positive_count": 1,
+            "negative_count": 1,
+            "net_score": 2,
+            "latest_at": "2026-04-17T12:01:00Z",
+        }
+    ]
+
+
+def test_post_preference_signal_invalid_payload_fails_clearly(client: TestClient):
+    response = client.post(
+        "/preferences/signals",
+        json={
+            "category": "writing_style",
+            "subject": "concise_responses",
+            "signal": "prefer",
+            "strength": 9,
+            "source": "explicit_feedback",
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Preference signal strength must be between 1 and 5."
+
+
+def test_preference_signal_writes_do_not_touch_routing_logs(client: TestClient):
+    response = client.post(
+        "/preferences/signals",
+        json={
+            "category": "writing_style",
+            "subject": "concise_responses",
+            "signal": "prefer",
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert _app(client).state.current_session.routing_log == []
 
 
 def test_get_attribute_provenance_requires_authentication(client: TestClient):

@@ -41,6 +41,20 @@ consistent.
 `supporting_text` is provenance data for controlled evidence reads and review,
 not general prompt/context output.
 
+## Preference Signals
+
+Preference signals are separate from attributes.
+
+They represent small local observations such as:
+- a user preferring concise responses
+- a user liking a category of recommendation
+- a user avoiding a certain style or option
+
+Signals are not canonical identity beliefs on their own.
+They act as local evidence that future recommendation, planning, or inference
+features may consult when deciding whether to promote a pattern into an
+attribute.
+
 ## Key Idea
 
 Identity is composed of small, testable beliefs — not large summaries.

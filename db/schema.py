@@ -82,6 +82,29 @@ CREATE TABLE IF NOT EXISTS reflection_sessions (
 );
 """
 
+PREFERENCE_SIGNALS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS preference_signals (
+    id           TEXT PRIMARY KEY,
+    category     TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    signal       TEXT NOT NULL CHECK(signal IN (
+                     'like', 'dislike', 'accept', 'reject', 'prefer', 'avoid'
+                 )),
+    strength     INTEGER NOT NULL DEFAULT 3 CHECK(strength BETWEEN 1 AND 5),
+    source       TEXT NOT NULL CHECK(source IN (
+                     'explicit_feedback', 'behavior', 'correction', 'system_inference'
+                 )),
+    context_json TEXT,
+    attribute_id TEXT REFERENCES attributes(id) ON DELETE SET NULL,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+PREFERENCE_SIGNALS_LOOKUP_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_preference_signals_lookup
+    ON preference_signals(category, subject, created_at DESC);
+"""
+
 SCHEMA_SQL = "\n\n".join(
     [
         DOMAINS_TABLE_SQL,
@@ -90,6 +113,8 @@ SCHEMA_SQL = "\n\n".join(
         ATTRIBUTE_HISTORY_TABLE_SQL,
         INFERENCE_EVIDENCE_TABLE_SQL,
         REFLECTION_SESSIONS_TABLE_SQL,
+        PREFERENCE_SIGNALS_TABLE_SQL,
+        PREFERENCE_SIGNALS_LOOKUP_INDEX_SQL,
     ]
 )
 

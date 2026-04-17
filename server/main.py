@@ -26,7 +26,13 @@ from server.auth import ensure_ui_passphrase_exists, router as auth_router
 from server.db import get_db_connection
 from server.middleware import SecurityMiddleware, apply_security_headers
 from server.routes.attributes import RoutingProtectedError
-from server.routes import attributes_router, capture_router, query_router, session_router
+from server.routes import (
+    attributes_router,
+    capture_router,
+    preferences_router,
+    query_router,
+    session_router,
+)
 
 VERSION = "0.1.0"
 PORT = 8443
@@ -213,6 +219,7 @@ def create_app() -> FastAPI:
     app.include_router(query_router)
     app.include_router(attributes_router)
     app.include_router(capture_router)
+    app.include_router(preferences_router)
     app.include_router(session_router)
 
     @app.get("/health")

@@ -105,6 +105,49 @@ class AttributeResponse(BaseModel):
     last_confirmed: datetime | None
 
 
+class PreferenceSignalCreateRequest(BaseModel):
+    """Request body for creating one preference signal."""
+
+    category: str
+    subject: str
+    signal: Literal["like", "dislike", "accept", "reject", "prefer", "avoid"]
+    strength: int = 3
+    source: Literal[
+        "explicit_feedback",
+        "behavior",
+        "correction",
+        "system_inference",
+    ] = "explicit_feedback"
+    context: dict[str, str | int | float | bool] | None = None
+    attribute_id: str | None = None
+
+
+class PreferenceSignalResponse(BaseModel):
+    """Serialized stored preference signal."""
+
+    id: str
+    category: str
+    subject: str
+    signal: str
+    strength: int
+    source: str
+    context: dict[str, str | int | float | bool] | None
+    attribute_id: str | None
+    created_at: datetime
+
+
+class PreferenceSignalSummaryResponse(BaseModel):
+    """Simple aggregated preference summary for one subject."""
+
+    category: str
+    subject: str
+    observations: int
+    positive_count: int
+    negative_count: int
+    net_score: int
+    latest_at: datetime
+
+
 class ProvenanceEvidenceSummary(BaseModel):
     """Privacy-safe summary of one evidence record."""
 
