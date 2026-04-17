@@ -48,6 +48,11 @@ Core components:
 - Explicit interfaces over implicit coupling
 - Prefer clarity over cleverness
 
+## Project State Source
+- `docs/PROJECT_STATE.md` is the canonical project state file
+- Root-level `PROJECT_STATE.md` should not be assumed to exist
+- When a task materially changes system capabilities or architecture, update `docs/PROJECT_STATE.md` before closing the task
+
 ## Testing Requirements
 Every feature must include:
 - Unit tests

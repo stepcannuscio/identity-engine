@@ -388,6 +388,84 @@ def test_put_attribute_routing_guard_blocks_external_ok_on_protected_domains(cli
     assert response.json()["error"] == "routing_protected"
 
 
+def test_patch_attribute_confirm_marks_confirmed_and_writes_history(client: TestClient):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "values",
+        "honesty",
+        "Honesty matters most",
+    )
+
+    response = client.patch(
+        f"/attributes/{attribute_id}",
+        json={"action": "confirm"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "confirmed"
+    assert response.json()["last_confirmed"] is not None
+
+    history = _db(client).execute(
+        "SELECT attribute_id, previous_value, reason, changed_by FROM attribute_history"
+    ).fetchone()
+    assert history == (attribute_id, "Honesty matters most", "confirm", "user")
+
+
+def test_patch_attribute_reject_marks_rejected_and_removes_from_listing(client: TestClient):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "goals",
+        "priority",
+        "Finish phase 3",
+    )
+
+    response = client.patch(
+        f"/attributes/{attribute_id}",
+        json={"action": "reject"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+
+    listed = client.get("/attributes", headers=_login_headers(client))
+    assert listed.status_code == 200
+    assert listed.json() == []
+
+
+def test_patch_attribute_refine_creates_new_version_and_preserves_old_record(client: TestClient):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "goals",
+        "priority",
+        "Finish phase 3",
+    )
+
+    response = client.patch(
+        f"/attributes/{attribute_id}",
+        json={"action": "refine", "new_value": "Finish phase 3a"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] != attribute_id
+    assert body["status"] == "active"
+    assert body["value"] == "Finish phase 3a"
+
+    old_status = _db(client).execute(
+        "SELECT status FROM attributes WHERE id = ?",
+        (attribute_id,),
+    ).fetchone()[0]
+    assert old_status == "superseded"
+
+    history = _db(client).execute(
+        "SELECT attribute_id, previous_value, reason FROM attribute_history"
+    ).fetchone()
+    assert history == (attribute_id, "Finish phase 3", "refine")
+
+
 def test_capture_preview_does_not_write_to_database(client: TestClient, monkeypatch):
     _mock_capture_extraction(
         monkeypatch,

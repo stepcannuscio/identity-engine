@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getAttributes, getDomains } from '../api/endpoints.js'
+import { correctAttribute, getAttributes, getDomains } from '../api/endpoints.js'
 
 export function useAttributes() {
   const queryClient = useQueryClient()
@@ -31,12 +31,24 @@ export function useAttributes() {
     ])
   }, [queryClient])
 
+  const confirmAttribute = useCallback(async (attributeId) => {
+    await correctAttribute(attributeId, { action: 'confirm' })
+    await refreshAttributes()
+  }, [refreshAttributes])
+
+  const rejectAttribute = useCallback(async (attributeId) => {
+    await correctAttribute(attributeId, { action: 'reject' })
+    await refreshAttributes()
+  }, [refreshAttributes])
+
   return {
     domains: domainsQuery.data ?? [],
     attributes: attributesQuery.data ?? [],
     groupedAttributes,
     isLoading: domainsQuery.isLoading || attributesQuery.isLoading,
     isError: domainsQuery.isError || attributesQuery.isError,
+    confirmAttribute,
+    rejectAttribute,
     refreshAttributes,
   }
 }

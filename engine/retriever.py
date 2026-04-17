@@ -101,8 +101,9 @@ def score_attribute(query: str, attribute: dict) -> float:
         domain_score = 0.0
 
     confidence = float(attribute.get("confidence", 0.0) or 0.0)
+    confirmed_bonus = 0.1 if attribute.get("status") == "confirmed" else 0.0
 
-    return (keyword_score * 0.5) + (domain_score * 0.3) + (confidence * 0.2)
+    return (keyword_score * 0.5) + (domain_score * 0.3) + (confidence * 0.2) + confirmed_bonus
 
 
 def budget_for_query_type(query_type: str) -> dict:
@@ -210,10 +211,18 @@ def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
     """Retrieve and score active attributes for a query, then apply query budget rules."""
     rows = conn.execute(
         """
-        SELECT a.id, d.name, a.label, a.value, a.elaboration, a.confidence, a.routing
+        SELECT
+            a.id,
+            d.name,
+            a.label,
+            a.value,
+            a.elaboration,
+            a.confidence,
+            a.routing,
+            a.status
         FROM attributes a
         JOIN domains d ON d.id = a.domain_id
-        WHERE a.status = 'active'
+        WHERE a.status IN ('active', 'confirmed')
         """
     ).fetchall()
 
@@ -227,6 +236,7 @@ def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
             "elaboration": row[4],
             "confidence": float(row[5]),
             "routing": row[6],
+            "status": row[7],
         }
         attr["score"] = score_attribute(query, attr)
         scored.append(attr)

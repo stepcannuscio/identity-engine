@@ -5,26 +5,36 @@ import DomainSection from '../components/graph/DomainSection.jsx'
 import { createAttribute } from './fixtures.js'
 
 describe('AttributeCard', () => {
-  it('shows routing, relative confirmation time, and edit affordances', async () => {
+  it('shows routing, status, correction actions, and edit affordances', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-17T12:00:00Z'))
+    const onConfirm = vi.fn()
     const onEdit = vi.fn()
+    const onReject = vi.fn()
 
     render(
       <AttributeCard
         attribute={createAttribute({
           routing: 'external_ok',
+          status: 'confirmed',
           last_confirmed: '2026-04-16T12:00:00Z',
         })}
+        onConfirm={onConfirm}
         onEdit={onEdit}
+        onReject={onReject}
       />,
     )
 
     expect(screen.getByText('external ok')).toBeInTheDocument()
+    expect(screen.getByText('confirmed')).toBeInTheDocument()
     expect(screen.getByText('last confirmed 1 day ago')).toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole('button', { name: 'confirm' }))
+    fireEvent.click(screen.getByRole('button', { name: 'reject' }))
     fireEvent.click(screen.getByRole('button', { name: 'edit' }))
 
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onReject).toHaveBeenCalledTimes(1)
     expect(onEdit).toHaveBeenCalledTimes(1)
   })
 })
@@ -44,6 +54,8 @@ describe('DomainSection', () => {
         domain="values"
         attributes={[attribute]}
         expanded={false}
+        onConfirm={vi.fn()}
+        onReject={vi.fn()}
         onToggle={onToggle}
         onEdit={onEdit}
       />,
@@ -59,6 +71,8 @@ describe('DomainSection', () => {
         domain="values"
         attributes={[attribute]}
         expanded
+        onConfirm={vi.fn()}
+        onReject={vi.fn()}
         onToggle={onToggle}
         onEdit={onEdit}
       />,

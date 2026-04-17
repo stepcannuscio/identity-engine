@@ -45,6 +45,7 @@ def _insert_attribute(
     value: str,
     confidence: float = 0.9,
     routing: str = "local_only",
+    status: str = "active",
 ) -> None:
     conn.execute(
         """
@@ -52,9 +53,9 @@ def _insert_attribute(
             id, domain_id, label, value, elaboration, mutability, source, confidence,
             routing, status
         )
-        VALUES (?, ?, ?, ?, ?, 'stable', 'reflection', ?, ?, 'active')
+        VALUES (?, ?, ?, ?, ?, 'stable', 'reflection', ?, ?, ?)
         """,
-        (str(uuid.uuid4()), domain_id, label, value, None, confidence, routing),
+        (str(uuid.uuid4()), domain_id, label, value, None, confidence, routing, status),
     )
     conn.commit()
 
@@ -176,6 +177,38 @@ def test_retrieve_attributes_domain_intent_fallback_includes_goals(conn, domain_
     results = retrieve_attributes("What are my current goals?", "simple", conn)
     assert len(results) >= 1
     assert any(attr["domain"] == "goals" for attr in results)
+
+
+def test_retrieve_attributes_excludes_rejected_attributes(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "priority",
+        "Focus on phase 3 delivery.",
+        confidence=0.95,
+        status="rejected",
+    )
+
+    results = retrieve_attributes("What goals should I focus on next?", "simple", conn)
+
+    assert results == []
+
+
+def test_score_attribute_prefers_confirmed_status_when_other_signals_match():
+    query_text = "What matters most in my values?"
+    active = {
+        "label": "honesty",
+        "value": "Honesty matters most.",
+        "domain": "values",
+        "confidence": 0.7,
+        "status": "active",
+    }
+    confirmed = {
+        **active,
+        "status": "confirmed",
+    }
+
+    assert score_attribute(query_text, confirmed) > score_attribute(query_text, active)
 
 
 def test_build_prompt_includes_system_message_first():

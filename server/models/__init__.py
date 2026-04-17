@@ -1,6 +1,7 @@
 """Pydantic models exposed by the FastAPI server."""
 
 from server.models.schemas import (
+    AttributeCorrectionRequest,
     AttributeProvenanceResponse,
     AttributeResponse,
     AttributeUpdateRequest,
@@ -22,6 +23,7 @@ from server.models.schemas import (
 )
 
 __all__ = [
+    "AttributeCorrectionRequest",
     "AttributeProvenanceResponse",
     "AttributeResponse",
     "AttributeUpdateRequest",

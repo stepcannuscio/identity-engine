@@ -16,7 +16,7 @@ function relativeDate(value) {
   return `${diffDays} days ago`
 }
 
-export default function AttributeCard({ attribute, onEdit }) {
+export default function AttributeCard({ attribute, onConfirm, onEdit, onReject }) {
   return (
     <article className="attribute-card">
       <div className="attribute-card-top">
@@ -24,9 +24,17 @@ export default function AttributeCard({ attribute, onEdit }) {
           <h4 className="attribute-label">{attribute.label.replaceAll('_', ' ')}</h4>
           <p className="attribute-card-secondary">{attribute.domain}</p>
         </div>
-        <button type="button" className="text-button attribute-edit" onClick={onEdit}>
-          edit
-        </button>
+        <div className="attribute-meta">
+          <button type="button" className="text-button attribute-edit" onClick={onConfirm}>
+            confirm
+          </button>
+          <button type="button" className="text-button attribute-edit" onClick={onReject}>
+            reject
+          </button>
+          <button type="button" className="text-button attribute-edit" onClick={onEdit}>
+            edit
+          </button>
+        </div>
       </div>
       <p className="attribute-card-value">{attribute.value}</p>
       {attribute.elaboration ? (
@@ -42,6 +50,8 @@ export default function AttributeCard({ attribute, onEdit }) {
         <span>{attribute.mutability}</span>
         <span>&middot;</span>
         <span>{attribute.source}</span>
+        <span>&middot;</span>
+        <span>{attribute.status}</span>
       </div>
       <div className="attribute-footer">
         <span

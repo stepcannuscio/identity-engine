@@ -29,6 +29,7 @@ export function createAttribute(overrides = {}) {
     mutability: 'evolving',
     routing: 'local_only',
     source: 'reflection',
+    status: 'active',
     last_confirmed: '2026-04-16T12:00:00Z',
     ...overrides,
   }

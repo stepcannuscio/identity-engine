@@ -32,6 +32,11 @@ export const updateAttribute = async (id, payload) => {
   return data
 }
 
+export const correctAttribute = async (id, payload) => {
+  const { data } = await client.patch(`/attributes/${id}`, payload)
+  return data
+}
+
 export const retractAttribute = async (id) => {
   const { data } = await client.delete(`/attributes/${id}`)
   return data

@@ -8,6 +8,8 @@ function titleCase(value) {
 export default function DomainSection({
   domain,
   attributes,
+  onConfirm,
+  onReject,
   expanded,
   onToggle,
   onEdit,
@@ -27,7 +29,9 @@ export default function DomainSection({
             <AttributeCard
               key={attribute.id}
               attribute={attribute}
+              onConfirm={() => onConfirm(attribute)}
               onEdit={() => onEdit(attribute)}
+              onReject={() => onReject(attribute)}
             />
           ))}
         </div>

@@ -34,7 +34,7 @@ def view(conn):
                a.updated_at
         FROM domains d
         LEFT JOIN attributes a
-               ON a.domain_id = d.id AND a.status = 'active'
+               ON a.domain_id = d.id AND a.status IN ('active', 'confirmed')
         ORDER BY d.name, a.label
     """).fetchall()
 
@@ -83,7 +83,7 @@ def view(conn):
         print(_domain_header(domain_name, len(attrs)))
 
         if not attrs:
-            print("  (no active attributes)")
+            print("  (no current attributes)")
             continue
 
         # Align labels to the longest one in this domain

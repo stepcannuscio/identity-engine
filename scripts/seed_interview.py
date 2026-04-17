@@ -302,7 +302,7 @@ def get_domain_id(conn, domain_name: str) -> str:
 def find_existing_active(conn, domain_id: str, label: str):
     return conn.execute(
         "SELECT id, value, confidence FROM attributes "
-        "WHERE domain_id = ? AND label = ? AND status = 'active'",
+        "WHERE domain_id = ? AND label = ? AND status IN ('active', 'confirmed')",
         (domain_id, label),
     ).fetchone()
 

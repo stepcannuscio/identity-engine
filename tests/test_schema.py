@@ -143,7 +143,13 @@ def test_status_rejects_invalid(conn):
 
 
 def test_status_accepts_valid_values(conn):
-    for status, label in [("active", "s-active"), ("superseded", "s-sup"), ("retracted", "s-ret")]:
+    for status, label in [
+        ("active", "s-active"),
+        ("confirmed", "s-confirmed"),
+        ("superseded", "s-sup"),
+        ("rejected", "s-rejected"),
+        ("retracted", "s-ret"),
+    ]:
         aid = _insert_attribute(conn, status=status, id=str(uuid.uuid4()), label=label)
         row = conn.execute("SELECT status FROM attributes WHERE id = ?", (aid,)).fetchone()
         assert row[0] == status

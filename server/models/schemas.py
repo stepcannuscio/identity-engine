@@ -132,6 +132,17 @@ class AttributeUpdateRequest(BaseModel):
     mutability: str | None = None
 
 
+class AttributeCorrectionRequest(BaseModel):
+    """Action-based attribute correction payload."""
+
+    action: Literal["confirm", "reject", "refine"]
+    new_value: str | None = None
+    elaboration: str | None = None
+    confidence: float | None = None
+    routing: str | None = None
+    mutability: str | None = None
+
+
 class CreateAttributeRequest(BaseModel):
     """Request body for creating a new attribute."""
 

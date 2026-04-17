@@ -38,7 +38,7 @@ def _find_conflict(conn, domain: str, label: str):
             a.last_confirmed
         FROM attributes a
         JOIN domains d ON d.id = a.domain_id
-        WHERE d.name = ? AND a.label = ? AND a.status = 'active'
+        WHERE d.name = ? AND a.label = ? AND a.status IN ('active', 'confirmed')
         """,
         (domain, label),
     ).fetchone()

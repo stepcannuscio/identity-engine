@@ -6,7 +6,9 @@ import { useAttributes } from '../../hooks/useAttributes.js'
 
 export default function GraphTab() {
   const {
+    confirmAttribute,
     domains,
+    rejectAttribute,
     attributes,
     isLoading,
     isError,
@@ -56,6 +58,14 @@ export default function GraphTab() {
   const handleSaved = async () => {
     await refreshAttributes()
     setEditingAttribute(null)
+  }
+
+  const handleConfirm = async (attribute) => {
+    await confirmAttribute(attribute.id)
+  }
+
+  const handleReject = async (attribute) => {
+    await rejectAttribute(attribute.id)
   }
 
   return (
@@ -149,6 +159,8 @@ export default function GraphTab() {
                     key={domain.domain}
                     domain={domain.domain}
                     attributes={groupedAttributes[domain.domain]}
+                    onConfirm={handleConfirm}
+                    onReject={handleReject}
                     expanded={
                       search
                         ? true

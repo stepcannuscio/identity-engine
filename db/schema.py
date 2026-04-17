@@ -1,6 +1,6 @@
 """Database schema definitions and table creation."""
 
-SCHEMA_SQL = """
+DOMAINS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS domains (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS domains (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+"""
 
+ATTRIBUTES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS attributes (
     id             TEXT PRIMARY KEY,
     domain_id      TEXT NOT NULL REFERENCES domains(id) ON DELETE RESTRICT,
@@ -21,17 +23,26 @@ CREATE TABLE IF NOT EXISTS attributes (
     routing        TEXT NOT NULL DEFAULT 'local_only'
                        CHECK(routing IN ('local_only', 'external_ok')),
     status         TEXT NOT NULL DEFAULT 'active'
-                       CHECK(status IN ('active', 'superseded', 'retracted')),
+                       CHECK(status IN (
+                           'active',
+                           'confirmed',
+                           'superseded',
+                           'rejected',
+                           'retracted'
+                       )),
     created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_confirmed TIMESTAMP
 );
+"""
 
--- Only one active attribute per label per domain at a time
+ATTRIBUTES_CURRENT_INDEX_SQL = """
 CREATE UNIQUE INDEX IF NOT EXISTS uq_attributes_active_label
     ON attributes(domain_id, label)
-    WHERE status = 'active';
+    WHERE status IN ('active', 'confirmed');
+"""
 
+ATTRIBUTE_HISTORY_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS attribute_history (
     id                  TEXT PRIMARY KEY,
     attribute_id        TEXT NOT NULL REFERENCES attributes(id) ON DELETE RESTRICT,
@@ -41,7 +52,9 @@ CREATE TABLE IF NOT EXISTS attribute_history (
     changed_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     changed_by          TEXT NOT NULL CHECK(changed_by IN ('user', 'reflection', 'inferred'))
 );
+"""
 
+INFERENCE_EVIDENCE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS inference_evidence (
     id             TEXT PRIMARY KEY,
     attribute_id   TEXT NOT NULL REFERENCES attributes(id) ON DELETE RESTRICT,
@@ -51,7 +64,9 @@ CREATE TABLE IF NOT EXISTS inference_evidence (
     weight         REAL CHECK(weight BETWEEN 0.0 AND 1.0),
     created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+"""
 
+REFLECTION_SESSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS reflection_sessions (
     id                  TEXT PRIMARY KEY,
     session_type        TEXT NOT NULL CHECK(
@@ -67,6 +82,17 @@ CREATE TABLE IF NOT EXISTS reflection_sessions (
 );
 """
 
+SCHEMA_SQL = "\n\n".join(
+    [
+        DOMAINS_TABLE_SQL,
+        ATTRIBUTES_TABLE_SQL,
+        ATTRIBUTES_CURRENT_INDEX_SQL,
+        ATTRIBUTE_HISTORY_TABLE_SQL,
+        INFERENCE_EVIDENCE_TABLE_SQL,
+        REFLECTION_SESSIONS_TABLE_SQL,
+    ]
+)
+
 INITIAL_DOMAINS = [
     ("personality", "Core personality traits and characteristics"),
     ("values",      "Deeply held values and ethical commitments"),
@@ -79,9 +105,91 @@ INITIAL_DOMAINS = [
 ]
 
 
+def _read_schema_sql(conn, *, kind: str, name: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = ? AND name = ?",
+        (kind, name),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return ""
+    return str(row[0]).lower()
+
+
+def _attributes_schema_needs_migration(conn) -> bool:
+    attributes_sql = _read_schema_sql(conn, kind="table", name="attributes")
+    if not attributes_sql:
+        return False
+
+    index_sql = _read_schema_sql(conn, kind="index", name="uq_attributes_active_label")
+    return (
+        "confirmed" not in attributes_sql
+        or "rejected" not in attributes_sql
+        or "confirmed" not in index_sql
+    )
+
+
+def _migrate_attribute_tables(conn) -> None:
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("DROP INDEX IF EXISTS uq_attributes_active_label")
+        conn.execute("ALTER TABLE attributes RENAME TO attributes_old")
+        conn.execute("ALTER TABLE attribute_history RENAME TO attribute_history_old")
+        conn.execute("ALTER TABLE inference_evidence RENAME TO inference_evidence_old")
+        conn.executescript(
+            "\n\n".join(
+                [
+                    ATTRIBUTES_TABLE_SQL,
+                    ATTRIBUTES_CURRENT_INDEX_SQL,
+                    ATTRIBUTE_HISTORY_TABLE_SQL,
+                    INFERENCE_EVIDENCE_TABLE_SQL,
+                ]
+            )
+        )
+        conn.execute(
+            """
+            INSERT INTO attributes (
+                id, domain_id, label, value, elaboration, mutability, source, confidence,
+                routing, status, created_at, updated_at, last_confirmed
+            )
+            SELECT
+                id, domain_id, label, value, elaboration, mutability, source, confidence,
+                routing, status, created_at, updated_at, last_confirmed
+            FROM attributes_old
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO attribute_history (
+                id, attribute_id, previous_value, previous_confidence, reason, changed_at, changed_by
+            )
+            SELECT
+                id, attribute_id, previous_value, previous_confidence, reason, changed_at, changed_by
+            FROM attribute_history_old
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO inference_evidence (
+                id, attribute_id, source_type, source_ref, supporting_text, weight, created_at
+            )
+            SELECT
+                id, attribute_id, source_type, source_ref, supporting_text, weight, created_at
+            FROM inference_evidence_old
+            """
+        )
+        conn.execute("DROP TABLE inference_evidence_old")
+        conn.execute("DROP TABLE attribute_history_old")
+        conn.execute("DROP TABLE attributes_old")
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def create_tables(conn) -> None:
     """Execute the full schema DDL against the given connection."""
     conn.executescript(SCHEMA_SQL)
+    if _attributes_schema_needs_migration(conn):
+        _migrate_attribute_tables(conn)
     conn.commit()
 
 

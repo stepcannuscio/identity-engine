@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from config.settings import EXTERNAL_OK
 from server.db import get_db_connection
 from server.models.schemas import (
+    AttributeCorrectionRequest,
     AttributeProvenanceResponse,
     AttributeResponse,
     AttributeUpdateRequest,
@@ -22,6 +23,7 @@ from server.services import build_attribute_provenance_response
 router = APIRouter(tags=["attributes"])
 
 _PROTECTED_DOMAINS = {"beliefs", "fears", "patterns", "relationships"}
+_CURRENT_ATTRIBUTE_STATUSES = ("active", "confirmed")
 
 
 class RoutingProtectedError(Exception):
@@ -52,6 +54,155 @@ def _serialize_attribute(row) -> AttributeResponse:
         updated_at=row[11],
         last_confirmed=row[12],
     )
+
+
+def _is_current_status(status: str) -> bool:
+    return status in _CURRENT_ATTRIBUTE_STATUSES
+
+
+def _write_attribute_history(
+    conn,
+    *,
+    attribute_id: str,
+    previous_value: str,
+    previous_confidence: float,
+    reason: str,
+    changed_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO attribute_history (
+            id,
+            attribute_id,
+            previous_value,
+            previous_confidence,
+            reason,
+            changed_at,
+            changed_by
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'user')
+        """,
+        (
+            str(uuid.uuid4()),
+            attribute_id,
+            previous_value,
+            previous_confidence,
+            reason,
+            changed_at,
+        ),
+    )
+
+
+def _refine_attribute(
+    conn,
+    *,
+    attribute_id: str,
+    current,
+    reason: str,
+    new_value: str | None = None,
+    elaboration: str | None = None,
+    confidence: float | None = None,
+    routing: str | None = None,
+    mutability: str | None = None,
+) -> AttributeResponse:
+    now = _utcnow()
+    resolved_value = current[3] if new_value is None else new_value
+    resolved_routing = str(current[8]) if routing is None else routing
+
+    _routing_guard(str(current[1]), resolved_routing)
+
+    conn.execute(
+        "UPDATE attributes SET status = 'superseded', updated_at = ? WHERE id = ?",
+        (now, attribute_id),
+    )
+    _write_attribute_history(
+        conn,
+        attribute_id=attribute_id,
+        previous_value=str(current[3]),
+        previous_confidence=float(current[7]),
+        reason=reason,
+        changed_at=now,
+    )
+    new_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO attributes (
+            id, domain_id, label, value, elaboration, mutability, source, confidence,
+            routing, status, created_at, updated_at, last_confirmed
+        )
+        SELECT
+            ?,
+            a.domain_id,
+            a.label,
+            ?,
+            ?,
+            ?,
+            a.source,
+            ?,
+            ?,
+            'active',
+            ?,
+            ?,
+            NULL
+        FROM attributes a
+        WHERE a.id = ?
+        """,
+        (
+            new_id,
+            resolved_value,
+            current[4] if elaboration is None else elaboration,
+            str(current[5]) if mutability is None else mutability,
+            float(current[7]) if confidence is None else confidence,
+            resolved_routing,
+            now,
+            now,
+            attribute_id,
+        ),
+    )
+    conn.commit()
+    created = _fetch_attribute(conn, new_id)
+    assert created is not None
+    return _serialize_attribute(created)
+
+
+def _confirm_attribute(conn, *, attribute_id: str, current) -> AttributeResponse:
+    now = _utcnow()
+    _write_attribute_history(
+        conn,
+        attribute_id=attribute_id,
+        previous_value=str(current[3]),
+        previous_confidence=float(current[7]),
+        reason="confirm",
+        changed_at=now,
+    )
+    conn.execute(
+        "UPDATE attributes SET status = 'confirmed', last_confirmed = ?, updated_at = ? WHERE id = ?",
+        (now, now, attribute_id),
+    )
+    conn.commit()
+    updated = _fetch_attribute(conn, attribute_id)
+    assert updated is not None
+    return _serialize_attribute(updated)
+
+
+def _reject_attribute(conn, *, attribute_id: str, current) -> AttributeResponse:
+    now = _utcnow()
+    _write_attribute_history(
+        conn,
+        attribute_id=attribute_id,
+        previous_value=str(current[3]),
+        previous_confidence=float(current[7]),
+        reason="reject",
+        changed_at=now,
+    )
+    conn.execute(
+        "UPDATE attributes SET status = 'rejected', updated_at = ? WHERE id = ?",
+        (now, attribute_id),
+    )
+    conn.commit()
+    updated = _fetch_attribute(conn, attribute_id)
+    assert updated is not None
+    return _serialize_attribute(updated)
 
 
 def _fetch_attribute(conn, attribute_id: str):
@@ -95,7 +246,7 @@ def _routing_guard(domain: str, routing: str | None) -> None:
 def list_attributes(request: Request, domain: str | None = None) -> list[AttributeResponse]:
     """List active attributes, optionally filtered by domain."""
     params: tuple[object, ...] = ()
-    where = "WHERE a.status = 'active'"
+    where = "WHERE a.status IN ('active', 'confirmed')"
     if domain:
         where += " AND d.name = ?"
         params = (domain,)
@@ -222,85 +373,27 @@ def update_attribute(
             and payload.value != current[3]
         )
         if value_changed:
-            now = _utcnow()
-            conn.execute(
-                "UPDATE attributes SET status = 'superseded', updated_at = ? WHERE id = ?",
-                (now, attribute_id),
-            )
-            conn.execute(
-                """
-                INSERT INTO attribute_history (
-                    id,
-                    attribute_id,
-                    previous_value,
-                    previous_confidence,
-                    reason,
-                    changed_at,
-                    changed_by
-                )
-                VALUES (?, ?, ?, ?, ?, ?, 'user')
-                """,
-                (
-                    str(uuid.uuid4()),
-                    attribute_id,
-                    current[3],
-                    current[7],
-                    "api update",
-                    now,
+            return _refine_attribute(
+                conn,
+                attribute_id=attribute_id,
+                current=current,
+                reason="api update",
+                new_value=payload.value,
+                elaboration=(
+                    payload.elaboration if "elaboration" in fields_set else None
+                ),
+                confidence=(
+                    payload.confidence
+                    if "confidence" in fields_set and payload.confidence is not None
+                    else None
+                ),
+                routing=next_routing,
+                mutability=(
+                    payload.mutability
+                    if "mutability" in fields_set and payload.mutability
+                    else None
                 ),
             )
-            new_id = str(uuid.uuid4())
-            conn.execute(
-                """
-                INSERT INTO attributes (
-                    id, domain_id, label, value, elaboration, mutability, source, confidence,
-                    routing, status, created_at, updated_at, last_confirmed
-                )
-                SELECT
-                    ?,
-                    a.domain_id,
-                    a.label,
-                    ?,
-                    ?,
-                    ?,
-                    a.source,
-                    ?,
-                    ?,
-                    'active',
-                    ?,
-                    ?,
-                    a.last_confirmed
-                FROM attributes a
-                WHERE a.id = ?
-                """,
-                (
-                    new_id,
-                    payload.value,
-                    (
-                        payload.elaboration
-                        if "elaboration" in fields_set
-                        else current[4]
-                    ),
-                    (
-                        payload.mutability
-                        if "mutability" in fields_set and payload.mutability
-                        else current[5]
-                    ),
-                    (
-                        payload.confidence
-                        if "confidence" in fields_set and payload.confidence is not None
-                        else current[7]
-                    ),
-                    next_routing,
-                    now,
-                    now,
-                    attribute_id,
-                ),
-            )
-            conn.commit()
-            created = _fetch_attribute(conn, new_id)
-            assert created is not None
-            return _serialize_attribute(created)
 
         assignments: list[str] = []
         values: list[object] = []
@@ -332,6 +425,41 @@ def update_attribute(
     return _serialize_attribute(row)
 
 
+@router.patch("/attributes/{attribute_id}", response_model=AttributeResponse)
+def correct_attribute(
+    attribute_id: str,
+    payload: AttributeCorrectionRequest,
+    request: Request,
+) -> AttributeResponse:
+    """Apply confirm/reject/refine corrections to an attribute."""
+    _ = request
+    with get_db_connection() as conn:
+        current = _fetch_attribute(conn, attribute_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="attribute not found")
+        if not _is_current_status(str(current[9])):
+            raise HTTPException(status_code=409, detail="attribute is not editable")
+
+        if payload.action == "confirm":
+            return _confirm_attribute(conn, attribute_id=attribute_id, current=current)
+        if payload.action == "reject":
+            return _reject_attribute(conn, attribute_id=attribute_id, current=current)
+
+        if payload.new_value is not None and not payload.new_value.strip():
+            raise HTTPException(status_code=422, detail="new_value cannot be empty")
+        return _refine_attribute(
+            conn,
+            attribute_id=attribute_id,
+            current=current,
+            reason="refine",
+            new_value=payload.new_value.strip() if payload.new_value is not None else None,
+            elaboration=payload.elaboration,
+            confidence=payload.confidence,
+            routing=payload.routing,
+            mutability=payload.mutability,
+        )
+
+
 @router.delete("/attributes/{attribute_id}")
 def delete_attribute(attribute_id: str, request: Request) -> dict[str, str]:
     """Soft-delete an attribute by retracting it."""
@@ -353,18 +481,12 @@ def confirm_attribute(attribute_id: str, request: Request) -> AttributeResponse:
     """Update last_confirmed to now."""
     _ = request
     with get_db_connection() as conn:
-        row = _fetch_attribute(conn, attribute_id)
-        if row is None:
+        current = _fetch_attribute(conn, attribute_id)
+        if current is None:
             raise HTTPException(status_code=404, detail="attribute not found")
-        now = _utcnow()
-        conn.execute(
-            "UPDATE attributes SET last_confirmed = ?, updated_at = ? WHERE id = ?",
-            (now, now, attribute_id),
-        )
-        conn.commit()
-        updated = _fetch_attribute(conn, attribute_id)
-    assert updated is not None
-    return _serialize_attribute(updated)
+        if not _is_current_status(str(current[9])):
+            raise HTTPException(status_code=409, detail="attribute is not editable")
+        return _confirm_attribute(conn, attribute_id=attribute_id, current=current)
 
 
 @router.get("/domains", response_model=list[DomainSummary])
@@ -376,7 +498,8 @@ def list_domains(request: Request) -> list[DomainSummary]:
             """
             SELECT d.name, count(a.id)
             FROM domains d
-            LEFT JOIN attributes a ON a.domain_id = d.id AND a.status = 'active'
+            LEFT JOIN attributes a
+                ON a.domain_id = d.id AND a.status IN ('active', 'confirmed')
             GROUP BY d.id, d.name
             ORDER BY d.name
             """

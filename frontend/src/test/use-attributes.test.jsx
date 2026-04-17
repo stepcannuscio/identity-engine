@@ -3,9 +3,10 @@ import { vi } from 'vitest'
 import { useAttributes } from '../hooks/useAttributes.js'
 import { createAttribute, createDomain } from './fixtures.js'
 import { createTestQueryClient, createWrapper } from './renderWithProviders.jsx'
-import { getAttributes, getDomains } from '../api/endpoints.js'
+import { correctAttribute, getAttributes, getDomains } from '../api/endpoints.js'
 
 vi.mock('../api/endpoints.js', () => ({
+  correctAttribute: vi.fn(),
   getAttributes: vi.fn(),
   getDomains: vi.fn(),
 }))
@@ -77,6 +78,32 @@ describe('useAttributes', () => {
       await result.current.refreshAttributes()
     })
 
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['attributes'] })
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['domains'] })
+  })
+
+  it('applies confirm and reject corrections then refreshes queries', async () => {
+    const queryClient = createTestQueryClient()
+    const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries')
+    getDomains.mockResolvedValue([createDomain()])
+    getAttributes.mockResolvedValue([createAttribute()])
+    correctAttribute.mockResolvedValue(createAttribute({ status: 'confirmed' }))
+
+    const { result } = renderHook(() => useAttributes(), {
+      wrapper: createWrapper({ queryClient }),
+    })
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false)
+    })
+
+    await act(async () => {
+      await result.current.confirmAttribute('attribute-1')
+      await result.current.rejectAttribute('attribute-1')
+    })
+
+    expect(correctAttribute).toHaveBeenNthCalledWith(1, 'attribute-1', { action: 'confirm' })
+    expect(correctAttribute).toHaveBeenNthCalledWith(2, 'attribute-1', { action: 'reject' })
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['attributes'] })
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['domains'] })
   })

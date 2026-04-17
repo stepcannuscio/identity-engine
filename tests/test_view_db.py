@@ -93,7 +93,7 @@ def test_empty_store_shows_all_domains(conn, capsys):
 def test_empty_store_placeholder(conn, capsys):
     view(conn)
     out = capsys.readouterr().out
-    assert "(no active attributes)" in out
+    assert "(no current attributes)" in out
 
 
 def test_empty_store_no_last_updated(conn, capsys):
