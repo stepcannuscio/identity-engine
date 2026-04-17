@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from engine.context_assembler import AssembledContext, assemble_query_context
-from engine.privacy_broker import PrivacyBroker
-from engine.prompt_builder import build_prompt
+from engine.privacy_broker import InferenceDecision, PrivacyBroker
+from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import classify_query
 from engine.session import Session
 
@@ -44,7 +44,11 @@ def prepare_query(
 
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
 
-    messages = build_prompt(assembled_context, target_backend=backend)
+    messages = build_prompt(
+        assembled_context,
+        target_backend=backend,
+        enforce_routing=False,
+    )
 
     return QueryContext(
         query=user_query,
@@ -56,18 +60,24 @@ def prepare_query(
     )
 
 
-def record_query_result(session: Session, context: QueryContext, response: str) -> None:
+def record_query_result(
+    session: Session,
+    context: QueryContext,
+    response: str,
+    audit: InferenceDecision,
+) -> None:
     """Persist in-memory session metadata after a completed query."""
     session.add_exchange(context.query, response)
     session.query_count += 1
     session.attributes_retrieved += len(context.attributes)
-    session.log_query(
-        context.query,
-        context.query_type,
-        context.backend,
-        len(context.attributes),
-        context.assembled_context.domains_used,
-    )
+    session.log_query(context.query, audit, query_type=context.query_type)
+
+
+def record_blocked_query(session: Session, context: QueryContext, error: Exception) -> None:
+    """Persist privacy-blocked broker decisions without changing query behavior."""
+    audit = getattr(error, "audit", None)
+    if isinstance(audit, InferenceDecision):
+        session.log_query(context.query, audit, query_type=context.query_type)
 
 
 def query(
@@ -78,11 +88,17 @@ def query(
 ) -> str:
     """Run one end-to-end query and update only in-memory session state."""
     context = prepare_query(user_query, session, conn, provider_config)
-    response = PrivacyBroker(provider_config).generate_grounded_response(
-        context.messages,
-        attributes=context.attributes,
-    ).content
+    try:
+        result = PrivacyBroker(provider_config).generate_grounded_response(
+            context.messages,
+            attributes=context.attributes,
+            retrieval_mode=context.query_type,
+        )
+    except RoutingViolationError as exc:
+        record_blocked_query(session, context, exc)
+        raise
+    response = result.content
     assert isinstance(response, str)
-    record_query_result(session, context, response)
+    record_query_result(session, context, response, result.metadata)
 
     return response

@@ -53,6 +53,17 @@ class RoutingLogEntry(BaseModel):
     attribute_count: int
     domains_referenced: list[str] = []
     timestamp: datetime
+    task_type: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    is_local: bool | None = None
+    routing_enforced: bool | None = None
+    contains_local_only_context: bool | None = None
+    blocked_external_attributes_count: int = 0
+    retrieval_mode: str | None = None
+    decision: str | None = None
+    warning: str | None = None
+    reason: str | None = None
 
 
 class QueryResponse(BaseModel):

@@ -21,17 +21,39 @@ def _parse_timestamp(value: object) -> datetime:
     raise ValueError("Invalid routing-log timestamp.")
 
 
+def _backend_from_entry(entry: dict) -> str:
+    if entry.get("is_local") is True:
+        return "local"
+    provider = entry.get("provider")
+    if provider:
+        return str(provider)
+    return str(entry.get("backend", "local"))
+
+
 def _serialize_session(row) -> SessionRecord:
     raw_log = row[8] or "[]"
     parsed_log = json.loads(raw_log)
     routing_log = [
         RoutingLogEntry(
             query=str(entry.get("query", "")),
-            query_type=str(entry.get("query_type", "")),
-            backend=str(entry.get("backend", "local")),
+            query_type=str(entry.get("query_type", entry.get("retrieval_mode", ""))),
+            backend=_backend_from_entry(entry),
             attribute_count=int(entry.get("attribute_count", 0)),
             domains_referenced=list(entry.get("domains_referenced", [])),
             timestamp=_parse_timestamp(entry.get("timestamp")),
+            task_type=entry.get("task_type"),
+            provider=entry.get("provider"),
+            model=entry.get("model"),
+            is_local=entry.get("is_local"),
+            routing_enforced=entry.get("routing_enforced"),
+            contains_local_only_context=entry.get("contains_local_only_context"),
+            blocked_external_attributes_count=int(
+                entry.get("blocked_external_attributes_count", 0)
+            ),
+            retrieval_mode=entry.get("retrieval_mode"),
+            decision=entry.get("decision"),
+            warning=entry.get("warning"),
+            reason=entry.get("reason"),
         )
         for entry in parsed_log
         if isinstance(entry, dict)
@@ -80,7 +102,7 @@ def current_session(request: Request) -> CurrentSessionStatus:
     session = request.app.state.current_session
     backend = "local"
     if session.routing_log:
-        backend = str(session.routing_log[-1]["backend"])
+        backend = _backend_from_entry(session.routing_log[-1])
     return CurrentSessionStatus(
         id=session.id,
         query_count=session.query_count,

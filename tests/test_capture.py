@@ -107,6 +107,50 @@ def test_preview_capture_uses_privacy_broker(conn, config, monkeypatch):
     assert isinstance(calls["messages"], list)
 
 
+def test_preview_capture_with_audit_returns_privacy_safe_metadata(conn, config, monkeypatch):
+    monkeypatch.setattr(
+        capture_module.PrivacyBroker,
+        "extract_structured_attributes",
+        lambda self, messages, task_type="capture_extraction": SimpleNamespace(
+            content=_mock_capture_response(
+                [
+                    {
+                        "domain": "patterns",
+                        "label": "morning_focus",
+                        "value": "I focus best in the morning.",
+                        "elaboration": None,
+                        "mutability": "evolving",
+                        "confidence": 0.7,
+                    }
+                ]
+            ),
+            metadata=SimpleNamespace(
+                task_type=task_type,
+                provider="ollama",
+                model="llama3.1:8b",
+                is_local=True,
+                routing_enforced=False,
+                attribute_count=0,
+                domains_used=[],
+                contains_local_only_context=False,
+                blocked_external_attributes_count=0,
+                decision="allowed",
+            ),
+        ),
+    )
+
+    preview = capture_module.preview_capture_with_audit(
+        "I focus best in the morning.",
+        None,
+        config,
+    )
+
+    assert preview.content[0]["label"] == "morning_focus"
+    assert preview.metadata.task_type == "capture_extraction"
+    assert preview.metadata.provider == "ollama"
+    assert preview.metadata.decision == "allowed"
+
+
 def test_capture_non_interactive_writes_attributes(conn, config, monkeypatch):
     _mock_capture_extraction(
         monkeypatch,

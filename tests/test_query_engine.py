@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
 from engine.context_assembler import AssembledContext
-from engine.privacy_broker import BrokeredResult, InferenceDecision
-from engine.prompt_builder import build_prompt
+from engine.privacy_broker import AuditedRoutingViolationError, BrokeredResult, InferenceDecision
+from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import classify_query
 from engine.query_engine import query
 from engine.retriever import OPEN_ENDED_BUDGET, SIMPLE_BUDGET, retrieve_attributes, score_attribute
@@ -325,3 +325,94 @@ def test_query_returns_string(conn, domain_ids):
 
     assert isinstance(result, str)
     assert result == "Focused and steady."
+
+
+def test_query_logs_normalized_audit_entry(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "priority_goal",
+        "I want to ship a personal project this quarter.",
+        confidence=0.9,
+        routing="external_ok",
+    )
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+
+    with patch(
+        "engine.query_engine.PrivacyBroker.generate_grounded_response",
+        return_value=BrokeredResult(
+            content="Focused and steady.",
+            metadata=InferenceDecision(
+                provider="anthropic",
+                model="claude-sonnet-4-6",
+                is_local=False,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+                attribute_count=1,
+                domains_used=["goals"],
+                retrieval_mode="simple",
+                contains_local_only_context=False,
+            ),
+        ),
+    ):
+        result = query("What is my main goal?", session, conn, config)
+
+    assert result == "Focused and steady."
+    assert len(session.routing_log) == 1
+    entry = session.routing_log[0]
+    assert entry["query"] == "What is my main goal?"
+    assert entry["task_type"] == "query_generation"
+    assert entry["provider"] == "anthropic"
+    assert entry["is_local"] is False
+    assert entry["decision"] == "allowed"
+    assert entry["domains_referenced"] == ["goals"]
+
+
+def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn, domain_ids):
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+
+    blocked_audit = InferenceDecision(
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        is_local=False,
+        task_type="query_generation",
+        blocked_external_attributes_count=1,
+        routing_enforced=True,
+        attribute_count=1,
+        domains_used=["fears"],
+        retrieval_mode="simple",
+        contains_local_only_context=True,
+        decision="blocked",
+        reason="local_only_context_blocked_for_external_inference",
+        warning="local_only attributes cannot be sent to external backends",
+    )
+
+    with patch(
+        "engine.query_engine.PrivacyBroker.generate_grounded_response",
+        side_effect=AuditedRoutingViolationError(
+            "local_only attributes cannot be sent to external backends: fear_of_failure",
+            audit=blocked_audit,
+        ),
+    ), pytest.raises(RoutingViolationError):
+        query("Tell me about my fears", session, conn, config)
+
+    assert session.query_count == 0
+    assert len(session.routing_log) == 1
+    entry = session.routing_log[0]
+    assert entry["decision"] == "blocked"
+    assert entry["contains_local_only_context"] is True
+    assert entry["blocked_external_attributes_count"] >= 1
+    assert entry["reason"] == "local_only_context_blocked_for_external_inference"

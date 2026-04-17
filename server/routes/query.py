@@ -17,7 +17,7 @@ from config.llm_router import (
 )
 from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
-from engine.query_engine import prepare_query, record_query_result
+from engine.query_engine import prepare_query, record_blocked_query, record_query_result
 from server.db import get_db_connection
 from server.models.schemas import QueryMetadata, QueryRequest, QueryResponse
 
@@ -153,6 +153,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
     """Return a full query response as JSON."""
     started = time.monotonic()
     provider_config = request.app.state.llm_config
+    context = None
     try:
         provider_config = _resolve_provider(
             request.app.state.llm_config,
@@ -165,18 +166,27 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
                 conn,
                 provider_config,
             )
-        result = PrivacyBroker(provider_config).generate_grounded_response(
+        brokered = PrivacyBroker(provider_config).generate_grounded_response(
             context.messages,
             attributes=context.attributes,
-        ).content
+            retrieval_mode=context.query_type,
+        )
+        result = brokered.content
         assert isinstance(result, str)
         duration_ms = int((time.monotonic() - started) * 1000)
-        record_query_result(request.app.state.current_session, context, result)
+        record_query_result(
+            request.app.state.current_session,
+            context,
+            result,
+            brokered.metadata,
+        )
         return QueryResponse(
             response=result,
             metadata=_metadata_from_context(context, duration_ms),
         )
     except Exception as exc:
+        if context is not None:
+            record_blocked_query(request.app.state.current_session, context, exc)
         status_code, body = _query_error_response(exc, provider_config, payload.query)
         return JSONResponse(body, status_code=status_code)
 
@@ -188,6 +198,7 @@ def query_stream(
 ) -> Response:
     """Stream a query response as server-sent events."""
     provider_config = request.app.state.llm_config
+    context = None
     try:
         provider_config = _resolve_provider(
             request.app.state.llm_config,
@@ -225,11 +236,13 @@ def query_stream(
                     }
                 )
 
-            response_stream = PrivacyBroker(provider_config).generate_grounded_response(
+            brokered = PrivacyBroker(provider_config).generate_grounded_response(
                 context.messages,
                 attributes=context.attributes,
                 stream=True,
-            ).content
+                retrieval_mode=context.query_type,
+            )
+            response_stream = brokered.content
             assert not isinstance(response_stream, str)
             for token in response_stream:
                 collected.append(token)
@@ -237,7 +250,12 @@ def query_stream(
 
             full_response = "".join(collected)
             duration_ms = int((time.monotonic() - started) * 1000)
-            record_query_result(request.app.state.current_session, context, full_response)
+            record_query_result(
+                request.app.state.current_session,
+                context,
+                full_response,
+                brokered.metadata,
+            )
             yield _event(
                 {
                     "type": "metadata",
@@ -245,6 +263,7 @@ def query_stream(
                 }
             )
         except Exception as exc:
+            record_blocked_query(request.app.state.current_session, context, exc)
             _, body = _query_error_response(exc, provider_config, payload.query)
             yield _event(
                 {

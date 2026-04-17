@@ -5,9 +5,21 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Protocol
 
 HISTORY_CAP = 6
+
+
+class _RoutingLogSerializable(Protocol):
+    """Typed interface for broker audit records written into routing logs."""
+
+    def to_routing_log_entry(
+        self,
+        *,
+        query: str,
+        query_type: str | None = None,
+    ) -> dict[str, object]: ...
 
 
 @dataclass
@@ -37,26 +49,45 @@ class Session:
     def log_query(
         self,
         query: str,
-        query_type: str,
-        backend: str,
-        attribute_count: int,
-        domains_referenced: list[str],
+        query_type_or_audit: str | _RoutingLogSerializable,
+        backend: str | None = None,
+        attribute_count: int | None = None,
+        domains_referenced: list[str] | None = None,
+        *,
+        query_type: str | None = None,
     ) -> None:
-        """Record routing metadata for one query turn."""
+        """Record routing metadata for one query turn.
+
+        New call sites should pass an ``InferenceDecision``. The legacy scalar
+        signature is still supported to keep older tests and fixtures stable.
+        """
+        if not isinstance(query_type_or_audit, str):
+            self.routing_log.append(
+                query_type_or_audit.to_routing_log_entry(
+                    query=query,
+                    query_type=query_type,
+                )
+            )
+            return
+
         self.routing_log.append(
             {
                 "query": query,
-                "query_type": query_type,
-                "backend": backend,
-                "attribute_count": attribute_count,
-                "domains_referenced": sorted(set(domains_referenced)),
-                "timestamp": datetime.now().isoformat(),
+                "query_type": query_type_or_audit,
+                "backend": backend or "local",
+                "attribute_count": attribute_count or 0,
+                "domains_referenced": sorted(set(domains_referenced or [])),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         )
 
     def to_db_record(self) -> dict:
         """Return a reflection_sessions-compatible record for this session."""
-        external_calls = sum(1 for entry in self.routing_log if entry["backend"] != "local")
+        external_calls = sum(
+            1
+            for entry in self.routing_log
+            if entry.get("is_local") is False or entry.get("backend") != "local"
+        )
         return {
             "session_type": "freeform",
             "summary": f"{self.query_count} queries across session",

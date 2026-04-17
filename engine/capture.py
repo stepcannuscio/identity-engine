@@ -14,7 +14,7 @@ import logging
 import uuid
 
 from config.settings import EVOLVING, EXPLICIT, LOCAL_ONLY
-from engine.privacy_broker import PrivacyBroker
+from engine.privacy_broker import BrokeredResult, PrivacyBroker
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +88,24 @@ def preview_capture(
     provider_config,
 ) -> list[dict]:
     """Extract quick-capture attributes without writing them to the database."""
+    return preview_capture_with_audit(text, domain_hint, provider_config).content
+
+
+def preview_capture_with_audit(
+    text: str,
+    domain_hint: str | None,
+    provider_config,
+) -> BrokeredResult[list[dict]]:
+    """Extract quick-capture attributes without writing them to the database."""
     _validate_domain_hint(domain_hint)
-    raw = PrivacyBroker(provider_config).extract_structured_attributes(
+    result = PrivacyBroker(provider_config).extract_structured_attributes(
         _build_messages(text, domain_hint),
         task_type="capture_extraction",
-    ).content
-    return _parse_attributes(raw)
+    )
+    return BrokeredResult(
+        content=_parse_attributes(result.content),
+        metadata=result.metadata,
+    )
 
 
 def _normalize_attribute(attr: object) -> dict:

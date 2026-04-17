@@ -87,16 +87,20 @@ def _format_attributes(attributes: list[dict]) -> str:
 def build_prompt(
     context: AssembledContext,
     target_backend: str = "local",
+    *,
+    enforce_routing: bool = True,
 ) -> list[dict]:
     """Build the final message array for response generation.
 
     Args:
         context: Structured assembled context for the current task.
         target_backend: "local" for local inference, otherwise provider name.
+        enforce_routing: Keep the prompt-builder fail-closed guard enabled.
     """
     _ = context.retrieval_mode  # reserved for future prompt variations
 
-    _assert_routing(context.attributes, target_backend)
+    if enforce_routing:
+        _assert_routing(context.attributes, target_backend)
 
     formatted_attributes = _format_attributes(context.attributes)
     system_message = {
