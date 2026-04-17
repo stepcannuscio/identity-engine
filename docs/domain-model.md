@@ -36,6 +36,10 @@ Reflection sessions track:
 
 ## Inference Evidence
 Links inferred attributes to supporting data.
+Stored through a dedicated helper layer so evidence writes stay explicit and
+consistent.
+`supporting_text` is provenance data for controlled evidence reads and review,
+not general prompt/context output.
 
 ## Key Idea
 

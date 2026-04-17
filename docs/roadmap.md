@@ -11,6 +11,7 @@ Goals:
 - Add audit logging
 
 ## Phase 5 — Evidence Layer
+- helper layer for controlled `inference_evidence` writes/reads
 - inference_evidence population
 - attribution tracking
 
