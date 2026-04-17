@@ -46,6 +46,14 @@ class PrivacyState(BaseModel):
     summary: str
 
 
+class CoverageCounts(BaseModel):
+    """Counts of each signal type used in a coverage assessment."""
+
+    attributes: int
+    preferences: int
+    artifacts: int
+
+
 class QueryMetadata(BaseModel):
     """Metadata emitted for each query response."""
 
@@ -55,6 +63,14 @@ class QueryMetadata(BaseModel):
     domains_referenced: list[str]
     duration_ms: int
     privacy: PrivacyState
+    confidence: Literal[
+        "high_confidence",
+        "medium_confidence",
+        "low_confidence",
+        "insufficient_data",
+    ]
+    coverage: CoverageCounts
+    coverage_notes: str | None = None
 
 
 class RoutingLogEntry(BaseModel):

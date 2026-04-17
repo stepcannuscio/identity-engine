@@ -909,6 +909,15 @@ def test_query_response_includes_normalized_privacy_metadata(
             ],
             messages=[{"role": "user", "content": "What matters most to me right now?"}],
             backend="local",
+            assembled_context=SimpleNamespace(
+                contains_local_only=False,
+                domains_used=["goals", "values"],
+            ),
+            coverage=SimpleNamespace(
+                counts=SimpleNamespace(attributes=2, preferences=0, artifacts=0),
+                confidence="medium_confidence",
+                notes=None,
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -941,6 +950,45 @@ def test_query_response_includes_normalized_privacy_metadata(
     assert body["metadata"]["privacy"]["execution_mode"] == "local"
     assert body["metadata"]["privacy"]["routing_enforced"] is True
     assert body["metadata"]["privacy"]["summary"] == "Processed locally with privacy rules applied."
+    assert body["metadata"]["confidence"] == "medium_confidence"
+    assert body["metadata"]["coverage"] == {
+        "attributes": 2,
+        "preferences": 0,
+        "artifacts": 0,
+    }
+
+
+def test_query_returns_insufficient_data_message_without_calling_broker(
+    client: TestClient, monkeypatch
+):
+    """Coverage short-circuit returns canned message on an empty identity store."""
+    called = {"value": False}
+
+    def _unexpected_broker(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("broker should not be called for insufficient data")
+
+    monkeypatch.setattr(
+        "server.routes.query.PrivacyBroker.generate_grounded_response",
+        _unexpected_broker,
+    )
+
+    response = client.post(
+        "/query",
+        json={"query": "What should I do about nothing in particular?"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metadata"]["confidence"] == "insufficient_data"
+    assert body["metadata"]["coverage"] == {
+        "attributes": 0,
+        "preferences": 0,
+        "artifacts": 0,
+    }
+    assert "enough grounded context" in body["response"]
+    assert called["value"] is False
 
 
 def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
@@ -952,6 +1000,15 @@ def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
             attributes=[{"domain": "goals", "routing": "external_ok"}],
             messages=[{"role": "user", "content": "What matters most to me right now?"}],
             backend="external",
+            assembled_context=SimpleNamespace(
+                contains_local_only=False,
+                domains_used=["goals"],
+            ),
+            coverage=SimpleNamespace(
+                counts=SimpleNamespace(attributes=1, preferences=0, artifacts=0),
+                confidence="medium_confidence",
+                notes=None,
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -998,6 +1055,13 @@ def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
 
 
 def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypatch):
+    _insert_attribute(
+        _db(client),
+        "goals",
+        "priority",
+        "Ship the phase 3 milestone this quarter.",
+        routing="external_ok",
+    )
     monkeypatch.setattr(
         "server.routes.query.resolve_external_router",
         lambda: ProviderConfig(
@@ -1016,7 +1080,7 @@ def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypat
 
     response = client.post(
         "/query/stream",
-        json={"query": "What matters most to me?", "backend_override": "external"},
+        json={"query": "What are my goals?", "backend_override": "external"},
         headers=_login_headers(client),
     )
 
@@ -1027,6 +1091,13 @@ def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypat
 
 
 def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient, monkeypatch):
+    _insert_attribute(
+        _db(client),
+        "fears",
+        "fear_of_failure",
+        "I worry about missing major deadlines.",
+        routing="local_only",
+    )
     monkeypatch.setattr(
         "server.routes.query.resolve_external_router",
         lambda: ProviderConfig(
@@ -1047,7 +1118,7 @@ def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient
 
     response = client.post(
         "/query/stream",
-        json={"query": "Tell me about my fears", "backend_override": "external"},
+        json={"query": "What am I afraid of?", "backend_override": "external"},
         headers=_login_headers(client),
     )
 

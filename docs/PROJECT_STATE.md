@@ -14,6 +14,7 @@ This document captures the current system state after completing:
 - Preference Learning
 - Preference Promotion
 - Artifact Ingestion and Retrieval
+- Coverage and Answer Confidence
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -116,6 +117,20 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - promotion respects user corrections by not recreating recently rejected matches
 - rerunning promotion refreshes existing inferred attributes instead of duplicating them
 
+### 15. Coverage & Answer Confidence Layer
+- deterministic evaluator inspects the assembled context before inference runs
+- scores weighted counts of retrieved attributes, preferences, and artifacts,
+  with small bonuses for confirmed and high-confidence attributes
+- classifies the query as `high_confidence`, `medium_confidence`,
+  `low_confidence`, or `insufficient_data`
+- low and medium confidence append a brief hedge to the system prompt so the
+  model acknowledges limitations
+- `insufficient_data` short-circuits the LLM call and returns a canned message
+  suggesting next steps (unless privacy routing would otherwise force a
+  `blocked` decision — in that case the privacy broker still fires)
+- classification and counts are surfaced on query responses as
+  `metadata.confidence` and `metadata.coverage`
+
 ### 14. Artifact Ingestion Layer
 - `POST /artifacts` accepts JSON text or simple text-file uploads
 - artifacts are stored locally with raw content plus ordered chunks
@@ -188,3 +203,6 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - ingest local notes, documents, and uploads into retrievable artifact storage
 - retrieve bounded artifact chunks during deeper reasoning when attributes alone are insufficient
 - keep raw artifact bodies local while still grounding local answers in uploaded content
+- assess whether enough grounded context exists to answer a query before calling the LLM
+- explicitly acknowledge partial or low coverage in prompts instead of generating generic answers
+- skip LLM calls and return a helpful explanation when no relevant context is available

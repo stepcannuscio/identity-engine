@@ -33,9 +33,20 @@ Identity model:
 {formatted_attributes}
 {preference_guidance}
 {artifact_evidence}
+{confidence_guidance}
 """
 
 ARTIFACT_EXCERPT_MAX_CHARS = 700
+
+_MEDIUM_CONFIDENCE_HINT = (
+    "Coverage note: grounded context is partial. Answer what you can and briefly "
+    "acknowledge the gap rather than extrapolating."
+)
+
+_LOW_CONFIDENCE_HINT = (
+    "Coverage note: very little grounded context is available. Be cautious, "
+    "state what you don't know, and suggest what additional context would help."
+)
 
 
 def _visible_preference_attributes(
@@ -158,11 +169,20 @@ def _format_artifact_evidence(context: AssembledContext, target_backend: str) ->
     return "\n".join(lines)
 
 
+def _format_confidence_guidance(confidence: str | None) -> str:
+    if confidence == "medium_confidence":
+        return f"\n{_MEDIUM_CONFIDENCE_HINT}"
+    if confidence == "low_confidence":
+        return f"\n{_LOW_CONFIDENCE_HINT}"
+    return ""
+
+
 def build_prompt(
     context: AssembledContext,
     target_backend: str = "local",
     *,
     enforce_routing: bool = True,
+    confidence: str | None = None,
 ) -> list[dict]:
     """Build the final message array for response generation.
 
@@ -170,6 +190,8 @@ def build_prompt(
         context: Structured assembled context for the current task.
         target_backend: "local" for local inference, otherwise provider name.
         enforce_routing: Keep the prompt-builder fail-closed guard enabled.
+        confidence: Optional confidence label used to append a brief hedging
+            instruction for ``low_confidence`` and ``medium_confidence`` cases.
     """
     _ = context.retrieval_mode  # reserved for future prompt variations
 
@@ -183,12 +205,14 @@ def build_prompt(
     formatted_attributes = _format_attributes(context.attributes)
     preference_guidance = _format_preference_guidance(context, target_backend)
     artifact_evidence = _format_artifact_evidence(context, target_backend)
+    confidence_guidance = _format_confidence_guidance(confidence)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
             formatted_attributes=formatted_attributes,
             preference_guidance=preference_guidance,
             artifact_evidence=artifact_evidence,
+            confidence_guidance=confidence_guidance,
         ),
     }
 

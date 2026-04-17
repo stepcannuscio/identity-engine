@@ -218,6 +218,11 @@ See [docs/view_db.md](docs/view_db.md) for the full output format reference.
 - Classifies each question (`simple` or `open_ended`)
 - Retrieves and scores relevant active attributes from the encrypted store
 - Builds a grounded prompt with capped conversation history (6 exchanges)
+- Runs a deterministic coverage evaluator before inference and classifies the
+  query as `high_confidence`, `medium_confidence`, `low_confidence`, or
+  `insufficient_data`; low and medium cases append a brief hedge to the
+  prompt, and `insufficient_data` returns a helpful explanation without
+  calling the LLM
 - Generates a concise answer through the resolved backend
 - Writes one `reflection_sessions` record when the session exits
 

@@ -99,6 +99,20 @@ They do not replace attributes as the source of truth. They are a lightweight
 runtime layer used to personalize prompt context and future deterministic
 ranking.
 
+## Coverage and Confidence
+
+Answer confidence is a *runtime* signal, not stored state. The coverage
+evaluator derives it from the assembled context on every query:
+
+- counts visible attributes, preferences, and artifacts for the target backend
+- applies fixed weights and caps so no single signal can dominate
+- adds small bonuses for confirmed and high-confidence attributes
+- classifies the result into `high_confidence`, `medium_confidence`,
+  `low_confidence`, or `insufficient_data`
+
+The label is attached to the query response metadata so clients can render it,
+and drives how the prompt hedges or whether the LLM is called at all.
+
 ## Key Idea
 
 Identity is composed of small, testable beliefs — not large summaries.

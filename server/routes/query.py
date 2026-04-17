@@ -15,11 +15,23 @@ from config.llm_router import (
     resolve_external_router,
     resolve_local_router,
 )
+from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
 from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
-from engine.query_engine import prepare_query, record_blocked_query, record_query_result
+from engine.query_engine import (
+    QueryContext,
+    build_insufficient_data_decision,
+    prepare_query,
+    record_blocked_query,
+    record_query_result,
+)
 from server.db import get_db_connection
-from server.models.schemas import QueryMetadata, QueryRequest, QueryResponse
+from server.models.schemas import (
+    CoverageCounts,
+    QueryMetadata,
+    QueryRequest,
+    QueryResponse,
+)
 from server.privacy import (
     blocked_privacy_state,
     privacy_state_from_decision,
@@ -74,6 +86,7 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
             if attr.get("domain")
         }
     )
+    coverage = context.coverage
     return QueryMetadata(
         query_type=context.query_type,
         attributes_used=len(context.attributes),
@@ -81,7 +94,24 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
         domains_referenced=domains,
         duration_ms=duration_ms,
         privacy=privacy,
+        confidence=coverage.confidence,
+        coverage=CoverageCounts(
+            attributes=coverage.counts.attributes,
+            preferences=coverage.counts.preferences,
+            artifacts=coverage.counts.artifacts,
+        ),
+        coverage_notes=coverage.notes,
     )
+
+
+def _should_short_circuit_insufficient(context: QueryContext) -> bool:
+    if context.coverage.confidence != "insufficient_data":
+        return False
+    if context.backend != "local" and context.assembled_context.contains_local_only:
+        # Let the privacy broker raise the routing violation instead of silently
+        # returning an "insufficient data" message that hides the block.
+        return False
+    return True
 
 
 def _contains_local_only_context(context) -> bool:
@@ -191,6 +221,23 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
                 conn,
                 provider_config,
             )
+        if _should_short_circuit_insufficient(context):
+            audit = build_insufficient_data_decision(context, provider_config)
+            record_query_result(
+                request.app.state.current_session,
+                context,
+                INSUFFICIENT_DATA_MESSAGE,
+                audit,
+            )
+            duration_ms = int((time.monotonic() - started) * 1000)
+            return QueryResponse(
+                response=INSUFFICIENT_DATA_MESSAGE,
+                metadata=_metadata_from_context(
+                    context,
+                    duration_ms,
+                    privacy_state_from_decision(audit),
+                ),
+            )
         brokered = PrivacyBroker(provider_config).generate_grounded_response(
             context.messages,
             attributes=context.attributes,
@@ -276,6 +323,28 @@ def query_stream(
                         ),
                     }
                 )
+
+            if _should_short_circuit_insufficient(context):
+                audit = build_insufficient_data_decision(context, provider_config)
+                record_query_result(
+                    request.app.state.current_session,
+                    context,
+                    INSUFFICIENT_DATA_MESSAGE,
+                    audit,
+                )
+                yield _event({"type": "token", "content": INSUFFICIENT_DATA_MESSAGE})
+                duration_ms = int((time.monotonic() - started) * 1000)
+                yield _event(
+                    {
+                        "type": "metadata",
+                        "content": _metadata_from_context(
+                            context,
+                            duration_ms,
+                            privacy_state_from_decision(audit),
+                        ).model_dump(mode="json"),
+                    }
+                )
+                return
 
             brokered = PrivacyBroker(provider_config).generate_grounded_response(
                 context.messages,

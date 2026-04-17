@@ -19,6 +19,7 @@ from engine.context_assembler import AssembledContext
 from engine.privacy_broker import AuditedRoutingViolationError, BrokeredResult, InferenceDecision
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import classify_query
+from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
 from engine.query_engine import prepare_query, query
 from engine.retriever import OPEN_ENDED_BUDGET, SIMPLE_BUDGET, retrieve_attributes, score_attribute
 from engine.session import Session
@@ -513,6 +514,14 @@ def test_query_logs_normalized_audit_entry(conn, domain_ids):
 
 
 def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["fears"],
+        "fear_of_failure",
+        "I get anxious about missing major deadlines.",
+        confidence=0.9,
+        routing="local_only",
+    )
     session = Session()
     config = SimpleNamespace(
         is_local=False,
@@ -544,7 +553,7 @@ def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn,
             audit=blocked_audit,
         ),
     ), pytest.raises(RoutingViolationError):
-        query("Tell me about my fears", session, conn, config)
+        query("What am I afraid of?", session, conn, config)
 
     assert session.query_count == 0
     assert len(session.routing_log) == 1
@@ -577,3 +586,35 @@ def test_query_blocks_external_backend_when_only_artifact_context_is_available(c
     assert session.routing_log[0]["contains_local_only_context"] is True
     assert session.routing_log[0]["blocked_external_attributes_count"] == 0
     assert session.routing_log[0]["reason"] == "local_only_context_blocked_for_external_inference"
+
+
+def test_prepare_query_attaches_coverage_assessment(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "priority",
+        "Ship the backend cleanly this quarter.",
+        confidence=0.9,
+        routing="external_ok",
+    )
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    prepared = prepare_query("What are my current goals?", session, conn, config)
+
+    assert prepared.coverage.confidence in {"medium_confidence", "high_confidence"}
+    assert prepared.coverage.counts.attributes >= 1
+
+
+def test_query_short_circuits_when_coverage_is_insufficient(conn, domain_ids):
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    with patch("engine.query_engine.PrivacyBroker.generate_grounded_response") as broker_mock:
+        result = query("What is my main goal?", session, conn, config)
+
+    assert result == INSUFFICIENT_DATA_MESSAGE
+    broker_mock.assert_not_called()
+    assert session.query_count == 1
+    entry = session.routing_log[0]
+    assert entry["decision"] == "skipped_insufficient_data"

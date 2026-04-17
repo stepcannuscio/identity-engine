@@ -28,6 +28,16 @@ Retrieval / Extraction Prep → Prompt Builder → Privacy Broker → LLM Router
 - Falls back to bounded artifact evidence for deeper or under-specified queries
 - Keeps preference selection deterministic and task-sensitive
 
+### Coverage Evaluator
+- Deterministic reasoning-control layer that runs between context assembly
+  and inference
+- Classifies the assembled context as high, medium, low, or insufficient
+  confidence using weighted counts and small quality bonuses
+- Adds a short hedging instruction to the prompt for low and medium cases
+- Short-circuits the LLM call and returns a canned message when no grounded
+  context is available (while still deferring to the privacy broker if
+  routing constraints would otherwise produce a blocked decision)
+
 ### Prompt Builder
 - Builds grounded prompts
 - Adds concise learned-preference guidance when relevant

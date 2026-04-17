@@ -2,13 +2,21 @@
 
 This module ties together classification, retrieval, prompt assembly, and LLM
 response generation, while keeping all session state in the Session object.
+It also runs the deterministic coverage evaluator after context assembly so
+the pipeline can either hedge or skip LLM inference when ground-truth is thin.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from engine.context_assembler import AssembledContext, assemble_query_context
+from engine.coverage_evaluator import (
+    INSUFFICIENT_DATA_MESSAGE,
+    CoverageAssessment,
+    evaluate_coverage,
+)
 from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import classify_query
@@ -25,6 +33,7 @@ class QueryContext:
     attributes: list[dict]
     messages: list[dict[str, str]]
     backend: str
+    coverage: CoverageAssessment
 
 
 def _preference_attributes_for_backend(
@@ -57,11 +66,13 @@ def prepare_query(
 
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
     preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
+    coverage = evaluate_coverage(assembled_context, backend=backend)
 
     messages = build_prompt(
         assembled_context,
         target_backend=backend,
         enforce_routing=False,
+        confidence=coverage.confidence,
     )
 
     return QueryContext(
@@ -71,6 +82,40 @@ def prepare_query(
         attributes=assembled_context.attributes + preference_attributes,
         messages=messages,
         backend=backend,
+        coverage=coverage,
+    )
+
+
+def _privacy_would_block(context: QueryContext) -> bool:
+    """Return True when the broker would reject the request on routing grounds.
+
+    The short-circuit for ``insufficient_data`` must defer in that case so the
+    privacy guardrail still produces the correct blocked audit.
+    """
+    if context.backend == "local":
+        return False
+    return bool(context.assembled_context.contains_local_only)
+
+
+def build_insufficient_data_decision(
+    context: QueryContext,
+    provider_config,
+) -> InferenceDecision:
+    """Build a synthetic audit decision for the short-circuited case."""
+    return InferenceDecision(
+        provider=provider_config.provider,
+        model=provider_config.model,
+        is_local=bool(provider_config.is_local),
+        task_type="query_generation",
+        blocked_external_attributes_count=0,
+        routing_enforced=True,
+        attribute_count=len(context.attributes),
+        domains_used=context.assembled_context.domains_used,
+        retrieval_mode=context.query_type,
+        contains_local_only_context=context.assembled_context.contains_local_only,
+        decision="skipped_insufficient_data",
+        reason="coverage_evaluator_reported_insufficient_data",
+        timestamp=datetime.now(UTC).isoformat(),
     )
 
 
@@ -102,6 +147,14 @@ def query(
 ) -> str:
     """Run one end-to-end query and update only in-memory session state."""
     context = prepare_query(user_query, session, conn, provider_config)
+
+    if context.coverage.confidence == "insufficient_data" and not _privacy_would_block(
+        context
+    ):
+        audit = build_insufficient_data_decision(context, provider_config)
+        record_query_result(session, context, INSUFFICIENT_DATA_MESSAGE, audit)
+        return INSUFFICIENT_DATA_MESSAGE
+
     try:
         result = PrivacyBroker(provider_config).generate_grounded_response(
             context.messages,
