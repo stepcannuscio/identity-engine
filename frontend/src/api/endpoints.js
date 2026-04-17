@@ -74,6 +74,72 @@ export const capture = async (text, domainHint, accepted) => {
   return data
 }
 
+export const createPreferenceSignal = async (payload) => {
+  const { data } = await client.post('/preferences/signals', payload)
+  return data
+}
+
+export const previewInterview = async (domain, question, answer) => {
+  const { data } = await client.post('/interview/preview', {
+    domain,
+    question,
+    answer,
+  })
+  return data
+}
+
+export const saveInterview = async (domain, question, answer, accepted) => {
+  const { data } = await client.post('/interview', {
+    domain,
+    question,
+    answer,
+    accepted: accepted ?? null,
+  })
+  return data
+}
+
+export const uploadArtifact = async ({
+  text,
+  file,
+  title,
+  type,
+  source,
+  domain,
+  metadata,
+}) => {
+  if (file) {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (title) {
+      formData.append('title', title)
+    }
+    if (type) {
+      formData.append('type', type)
+    }
+    if (source) {
+      formData.append('source', source)
+    }
+    if (domain) {
+      formData.append('domain', domain)
+    }
+    if (metadata) {
+      formData.append('metadata', JSON.stringify(metadata))
+    }
+    const { data } = await client.post('/artifacts', formData)
+    return data
+  }
+
+  const { data } = await client.post('/artifacts', {
+    text,
+    title: title || null,
+    type: type || null,
+    source: source || null,
+    domain: domain || null,
+    metadata: metadata ?? null,
+  })
+  return data
+}
+
 export const getSessions = async () => {
   const { data } = await client.get('/sessions')
   return data

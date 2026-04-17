@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import AcquisitionPanel from './AcquisitionPanel.jsx'
 import PrivacyStatus from '../privacy/PrivacyStatus.jsx'
 
 function formatDuration(durationMs) {
@@ -52,6 +53,7 @@ export default function Message({ message }) {
             {message.content}
           </ReactMarkdown>
         </div>
+        <AcquisitionPanel acquisition={message.metadata?.acquisition} />
         <PrivacyStatus privacy={message.metadata?.privacy} />
         {renderMetadata(message.metadata)}
       </div>

@@ -15,6 +15,7 @@ This document captures the current system state after completing:
 - Preference Promotion
 - Artifact Ingestion and Retrieval
 - Coverage and Answer Confidence
+- Targeted Data Acquisition
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -171,6 +172,33 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - duplicate-artifact penalties
 - artifacts remain supporting evidence only; they never become canonical truth
 
+### 17. Targeted Data Acquisition Layer
+- deterministic acquisition planning now runs after context assembly and
+  coverage scoring, before any query LLM call
+- acquisition planning uses coverage gaps plus source profile requirements to
+  identify:
+  - missing identity coverage
+  - missing preference coverage
+  - missing artifact coverage
+- query responses now surface structured `metadata.acquisition` with:
+  - `status`
+  - `gaps`
+  - `suggestions`
+- suggestions are deterministic, privacy-safe, and capped
+- the system now reuses existing intake paths instead of inventing a second
+  acquisition pipeline:
+  - quick capture for identity notes
+  - preference signal capture for preference-sensitive gaps
+  - canonical interview questions for thin core-domain coverage
+  - artifact upload suggestions for evidence-based gaps
+- web API now supports guided interview preview/save with:
+  - `POST /interview/preview`
+  - `POST /interview`
+- the CLI interview and web interview now share one canonical interview domain
+  and question catalog
+- targeted acquisition remains local planning logic only; it does not add any
+  new direct LLM path outside `PrivacyBroker` / `llm_router.py`
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -243,3 +271,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - rank grounded prompt context across sources so self-questions favor identity,
   evidence-based questions favor artifacts, and drafting/planning questions
   favor learned preferences
+- suggest the smallest next piece of data to collect when coverage is thin
+- surface deterministic follow-up actions in query metadata for:
+  - quick identity capture
+  - quick preference capture
+  - guided interview questions
+  - artifact upload
+- answer guided interview questions from the web UI using preview/save flows
+  that preserve interview write semantics and audit trail rules

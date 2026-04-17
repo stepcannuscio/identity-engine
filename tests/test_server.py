@@ -123,6 +123,7 @@ def client(monkeypatch):
     monkeypatch.setattr("server.routes.artifacts.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.attributes.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.capture.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("server.routes.interview.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.preferences.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.session.get_db_connection", _get_db_connection)
 
@@ -808,6 +809,81 @@ def test_capture_writes_attributes_with_local_only_routing(client: TestClient, m
     assert routing == "local_only"
 
 
+def test_interview_preview_does_not_write_to_database(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.interview.preview_interview_answer",
+        lambda question, answer, domain_name, provider_config: [
+            {
+                "domain": "goals",
+                "label": "career_priority",
+                "value": "I want to ship the backend cleanly this quarter.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.8,
+            }
+        ],
+    )
+
+    response = client.post(
+        "/interview/preview",
+        json={
+            "domain": "goals",
+            "question": "What is the most important thing you are trying to achieve in the next six months, professionally?",
+            "answer": "Ship the backend cleanly this quarter.",
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["proposed"][0]["label"] == "career_priority"
+    count = _db(client).execute("SELECT count(*) FROM attributes").fetchone()[0]
+    assert count == 0
+
+
+def test_interview_writes_attributes_with_reflection_source(client: TestClient):
+    response = client.post(
+        "/interview",
+        json={
+            "domain": "goals",
+            "question": "What is the most important thing you are trying to achieve in the next six months, professionally?",
+            "answer": "Ship the backend cleanly this quarter.",
+            "accepted": [
+                {
+                    "domain": "goals",
+                    "label": "career_priority",
+                    "value": "I want to ship the backend cleanly this quarter.",
+                    "elaboration": None,
+                    "mutability": "evolving",
+                    "confidence": 0.8,
+                }
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["attributes_saved"] == 1
+    stored = _db(client).execute(
+        "SELECT source, routing FROM attributes WHERE label = 'career_priority'"
+    ).fetchone()
+    assert stored == ("reflection", "local_only")
+
+
+def test_interview_preview_rejects_invalid_question(client: TestClient):
+    response = client.post(
+        "/interview/preview",
+        json={
+            "domain": "goals",
+            "question": "What is your favorite color?",
+            "answer": "Blue.",
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 422
+    assert "does not belong" in response.json()["detail"]
+
+
 def test_post_artifacts_accepts_json_text(client: TestClient):
     response = client.post(
         "/artifacts",
@@ -958,6 +1034,81 @@ def test_query_response_includes_normalized_privacy_metadata(
         "preferences": 0,
         "artifacts": 0,
     }
+    assert body["metadata"]["acquisition"] == {
+        "status": "not_needed",
+        "gaps": [],
+        "suggestions": [],
+    }
+
+
+def test_query_response_includes_acquisition_metadata(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.query.prepare_query",
+        lambda *args, **kwargs: SimpleNamespace(
+            query="What are my current goals?",
+            query_type="simple",
+            attributes=[],
+            messages=[{"role": "user", "content": "What are my current goals?"}],
+            backend="local",
+            acquisition=SimpleNamespace(
+                status="suggested",
+                gaps=[
+                    SimpleNamespace(
+                        kind="identity",
+                        domain="goals",
+                        reason="No strong current identity coverage was retrieved for this domain.",
+                    )
+                ],
+                suggestions=[
+                    SimpleNamespace(
+                        kind="quick_capture",
+                        prompt="I don't know much about your goals yet.",
+                        action={"target": "attribute", "domain_hint": "goals"},
+                    )
+                ],
+            ),
+            assembled_context=SimpleNamespace(
+                contains_local_only=False,
+                domains_used=[],
+            ),
+            coverage=SimpleNamespace(
+                counts=SimpleNamespace(attributes=0, preferences=0, artifacts=0),
+                confidence="low_confidence",
+                notes="Only thin context was available.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "server.routes.query.PrivacyBroker.generate_grounded_response",
+        lambda *args, **kwargs: SimpleNamespace(
+            content="I only have thin context for your goals right now.",
+            metadata=InferenceDecision(
+                provider="ollama",
+                model="llama3.1:8b",
+                is_local=True,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+                attribute_count=0,
+                domains_used=[],
+                retrieval_mode="simple",
+                contains_local_only_context=False,
+            ),
+        ),
+    )
+
+    response = client.post(
+        "/query",
+        json={"query": "What are my current goals?"},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    acquisition = response.json()["metadata"]["acquisition"]
+    assert acquisition["status"] == "suggested"
+    assert acquisition["gaps"][0]["kind"] == "identity"
+    assert acquisition["gaps"][0]["domain"] == "goals"
+    assert acquisition["suggestions"][0]["kind"] == "quick_capture"
 
 
 def test_query_returns_insufficient_data_message_without_calling_broker(
@@ -989,6 +1140,7 @@ def test_query_returns_insufficient_data_message_without_calling_broker(
         "preferences": 0,
         "artifacts": 0,
     }
+    assert "acquisition" in body["metadata"]
     assert "enough grounded context" in body["response"]
     assert called["value"] is False
 
@@ -1054,6 +1206,7 @@ def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
     assert '"type": "metadata"' in body
     assert '"execution_mode": "external"' in body
     assert '"summary": "Used an external model after privacy rules were applied."' in body
+    assert '"acquisition"' in body
 
 
 def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypatch):

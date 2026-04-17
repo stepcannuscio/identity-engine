@@ -113,4 +113,54 @@ describe('QueryTab', () => {
     expect(screen.getByText('Blocked')).toBeInTheDocument()
     expect(document.querySelector('.message.assistant')).toBeNull()
   })
+
+  it('renders acquisition suggestions from streamed query metadata', async () => {
+    const user = userEvent.setup()
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        { type: 'token', content: 'I do not have enough context yet.' },
+        {
+          type: 'metadata',
+          content: {
+            backend_used: 'local',
+            attributes_used: 0,
+            domains_referenced: [],
+            duration_ms: 120,
+            privacy: createPrivacy(),
+            acquisition: {
+              status: 'suggested',
+              gaps: [{ kind: 'identity', domain: 'goals', reason: 'thin coverage' }],
+              suggestions: [
+                {
+                  kind: 'quick_capture',
+                  prompt: "I don't know much about your goals yet.",
+                  action: {
+                    target: 'attribute',
+                    domain_hint: 'goals',
+                    placeholder: 'Share a quick goal note.',
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ]),
+    )
+
+    renderWithProviders(<QueryTab />, {
+      appState: {
+        token: 'session-token',
+        backend: 'local',
+      },
+    })
+
+    await user.type(
+      screen.getByPlaceholderText('Ask anything about yourself...'),
+      'What are my current goals?',
+    )
+    await user.click(screen.getByRole('button', { name: 'Send query' }))
+
+    expect(await screen.findByText("I don't know much about your goals yet.")).toBeInTheDocument()
+    expect(screen.getByText('Next best input')).toBeInTheDocument()
+  })
 })

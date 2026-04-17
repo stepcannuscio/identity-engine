@@ -688,6 +688,19 @@ def test_prepare_query_attaches_coverage_assessment(conn, domain_ids):
     assert prepared.coverage.confidence != "insufficient_data"
     assert prepared.coverage.counts.attributes >= 1
     assert prepared.coverage.breakdown.attribute_score > 0
+    assert prepared.acquisition.status == "not_needed"
+
+
+def test_prepare_query_attaches_acquisition_for_missing_domain_context(conn):
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    prepared = prepare_query("What are my current goals?", session, conn, config)
+
+    assert prepared.coverage.confidence == "insufficient_data"
+    assert prepared.acquisition.status == "suggested"
+    assert prepared.acquisition.gaps[0].kind == "identity"
+    assert prepared.acquisition.gaps[0].domain == "goals"
 
 
 def test_query_short_circuits_when_coverage_is_insufficient(conn, domain_ids):

@@ -27,6 +27,9 @@ from engine.query_engine import (
 )
 from server.db import get_db_connection
 from server.models.schemas import (
+    AcquisitionPlan,
+    AcquisitionGap,
+    AcquisitionSuggestion,
     CoverageCounts,
     QueryMetadata,
     QueryRequest,
@@ -87,6 +90,9 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
         }
     )
     coverage = context.coverage
+    acquisition = getattr(context, "acquisition", None)
+    if acquisition is None:
+        acquisition = AcquisitionPlan(status="not_needed", gaps=[], suggestions=[])
     return QueryMetadata(
         query_type=context.query_type,
         attributes_used=len(context.attributes),
@@ -101,6 +107,25 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
             artifacts=coverage.counts.artifacts,
         ),
         coverage_notes=coverage.notes,
+        acquisition=AcquisitionPlan(
+            status=acquisition.status,
+            gaps=[
+                AcquisitionGap(
+                    kind=gap.kind,
+                    domain=gap.domain,
+                    reason=gap.reason,
+                )
+                for gap in acquisition.gaps
+            ],
+            suggestions=[
+                AcquisitionSuggestion(
+                    kind=suggestion.kind,
+                    prompt=suggestion.prompt,
+                    action=suggestion.action,
+                )
+                for suggestion in acquisition.suggestions
+            ],
+        ),
     )
 
 

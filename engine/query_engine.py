@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from engine.acquisition_planner import AcquisitionPlan, build_acquisition_plan
 from engine.context_assembler import AssembledContext, assemble_query_context
 from engine.coverage_evaluator import (
     INSUFFICIENT_DATA_MESSAGE,
@@ -35,6 +36,7 @@ class QueryContext:
     messages: list[dict[str, str]]
     backend: str
     coverage: CoverageAssessment
+    acquisition: AcquisitionPlan
 
 
 def _preference_attributes_for_backend(
@@ -69,6 +71,7 @@ def prepare_query(
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
     preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
     coverage = evaluate_coverage(assembled_context, backend=backend)
+    acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
 
     messages = build_prompt(
         assembled_context,
@@ -86,6 +89,7 @@ def prepare_query(
         messages=messages,
         backend=backend,
         coverage=coverage,
+        acquisition=acquisition,
     )
 
 

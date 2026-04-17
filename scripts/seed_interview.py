@@ -18,7 +18,6 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.connection import get_connection
-from config.settings import LOCAL_ONLY, REFLECTION, STABLE
 from config.llm_router import (
     resolve_router,
     print_routing_report,
@@ -26,99 +25,9 @@ from config.llm_router import (
     ExtractionError,
     ProviderConfig,
 )
+from engine.interview_capture import find_existing_active, get_domain_id, write_attribute
+from engine.interview_catalog import DOMAINS
 from engine.privacy_broker import PrivacyBroker
-
-# ---------------------------------------------------------------------------
-# Domain definitions — questions must remain in this exact order
-# ---------------------------------------------------------------------------
-
-DOMAINS = [
-    {
-        "name": "personality",
-        "description": "Core personality traits, thinking styles, and behavioral defaults.",
-        "questions": [
-            "How do you recharge after a demanding day or week?",
-            "Walk me through how you typically make an important decision.",
-            "How do you respond when you don't have enough information to act?",
-            "What does conflict look like for you — how do you handle it?",
-            "Describe your ideal working conditions.",
-            "How do you respond to critical feedback?",
-            "What kind of work puts you in a state of flow most reliably?",
-        ],
-    },
-    {
-        "name": "values",
-        "description": "Deeply held values, ethical commitments, and non-negotiables.",
-        "questions": [
-            "What are the two or three things you would never compromise on?",
-            "What does integrity mean to you in day-to-day terms?",
-            "How do you think about money — what role does it play in your life?",
-            "What does a life well-lived look like to you?",
-        ],
-    },
-    {
-        "name": "goals",
-        "description": "Short-term and long-term goals, aspirations, and active letting-go.",
-        "questions": [
-            "What is the most important thing you are trying to achieve in the next six months,"
-            " professionally?",
-            "What is the most important thing you are trying to achieve in the next six months,"
-            " personally?",
-            "What does success look like to you right now — not abstractly, but concretely?",
-            "What are you actively trying to stop doing or let go of?",
-        ],
-    },
-    {
-        "name": "patterns",
-        "description": "Recurring behavioral patterns, habits, and tendencies.",
-        "questions": [
-            "When are you most productive during the day, and what does that look like?",
-            "What does procrastination look like for you specifically?",
-            "How do you behave when you are under significant stress?",
-            "What pulls you off track most reliably?",
-            "How do you learn new things best?",
-        ],
-    },
-    {
-        "name": "voice",
-        "description": "Communication style, tone, and self-expression.",
-        "questions": [
-            "How would you describe your communication style to someone who has never met you?",
-            "How does the way you write or speak change between professional and personal"
-            " contexts?",
-            "What tone do you default to when you are most yourself?",
-        ],
-    },
-    {
-        "name": "relationships",
-        "description": "Attitudes, needs, and patterns around relationships.",
-        "questions": [
-            "What do you need most from close friendships?",
-            "How do you show care for people you are close to?",
-            "What causes you to pull back from someone?",
-            "How is trust built and broken for you?",
-        ],
-    },
-    {
-        "name": "fears",
-        "description": "Fears, anxieties, and avoidance patterns.",
-        "questions": [
-            "What does professional failure look like in your head?",
-            "What are you most afraid staying the same would mean?",
-            "What do you most not want people to think about you?",
-        ],
-    },
-    {
-        "name": "beliefs",
-        "description": "Beliefs about the world, work, and self.",
-        "questions": [
-            "What do you believe separates good engineers from great ones?",
-            "How do you think about the role of luck versus effort in outcomes?",
-            "What do you believe about privacy in the modern world?",
-            "Where do you think software engineering is headed, and what does that mean for you?",
-        ],
-    },
-]
 
 # ---------------------------------------------------------------------------
 # Database check
@@ -282,83 +191,6 @@ def confirm_attributes(attributes: list) -> tuple:
                 "  Unrecognised input. Press Enter to confirm all, "
                 "or type numbers like '2,3' to skip."
             )
-
-
-# ---------------------------------------------------------------------------
-# Database helpers
-# ---------------------------------------------------------------------------
-
-def get_domain_id(conn, domain_name: str) -> str:
-    row = conn.execute(
-        "SELECT id FROM domains WHERE name = ?", (domain_name,)
-    ).fetchone()
-    if row is None:
-        raise RuntimeError(
-            f"Domain '{domain_name}' not found. Run 'make init' to seed domains."
-        )
-    return row[0]
-
-
-def find_existing_active(conn, domain_id: str, label: str):
-    return conn.execute(
-        "SELECT id, value, confidence FROM attributes "
-        "WHERE domain_id = ? AND label = ? AND status IN ('active', 'confirmed')",
-        (domain_id, label),
-    ).fetchone()
-
-
-def _insert_attribute_row(conn, domain_id: str, attr: dict, now: str) -> None:
-    conn.execute(
-        "INSERT INTO attributes "
-        "(id, domain_id, label, value, elaboration, mutability, source, "
-        "confidence, routing, status, created_at, updated_at, last_confirmed) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
-        (
-            str(uuid.uuid4()),
-            domain_id,
-            attr["label"],
-            attr["value"],
-            attr.get("elaboration"),
-            attr.get("mutability", STABLE),
-            REFLECTION,
-            float(attr.get("confidence", 0.8)),
-            LOCAL_ONLY,
-            now,
-            now,
-            now,
-        ),
-    )
-
-
-def write_attribute(conn, domain_id: str, attr: dict, old_row) -> str:
-    now = datetime.datetime.now(datetime.UTC).isoformat()
-
-    if old_row is not None:
-        old_id, old_value, old_confidence = old_row
-        conn.execute(
-            "UPDATE attributes SET status = 'superseded', updated_at = ? WHERE id = ?",
-            (now, old_id),
-        )
-        conn.execute(
-            "INSERT INTO attribute_history "
-            "(id, attribute_id, previous_value, previous_confidence, reason, changed_at,"
-            " changed_by) VALUES (?, ?, ?, ?, ?, ?, 'reflection')",
-            (
-                str(uuid.uuid4()),
-                old_id,
-                old_value,
-                old_confidence,
-                "superseded by interview session",
-                now,
-            ),
-        )
-        _insert_attribute_row(conn, domain_id, attr, now)
-        conn.commit()
-        return "updated"
-
-    _insert_attribute_row(conn, domain_id, attr, now)
-    conn.commit()
-    return "created"
 
 
 def write_reflection_session(

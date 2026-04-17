@@ -54,6 +54,30 @@ class CoverageCounts(BaseModel):
     artifacts: int
 
 
+class AcquisitionGap(BaseModel):
+    """One missing context area identified after coverage evaluation."""
+
+    kind: Literal["identity", "preference", "artifact"]
+    domain: str | None = None
+    reason: str
+
+
+class AcquisitionSuggestion(BaseModel):
+    """One suggested next-best acquisition action."""
+
+    kind: Literal["quick_capture", "interview_question", "artifact_upload"]
+    prompt: str
+    action: dict[str, str | int | float | bool | None]
+
+
+class AcquisitionPlan(BaseModel):
+    """Structured acquisition suggestions returned with query metadata."""
+
+    status: Literal["not_needed", "suggested"]
+    gaps: list[AcquisitionGap] = []
+    suggestions: list[AcquisitionSuggestion] = []
+
+
 class QueryMetadata(BaseModel):
     """Metadata emitted for each query response."""
 
@@ -71,6 +95,7 @@ class QueryMetadata(BaseModel):
     ]
     coverage: CoverageCounts
     coverage_notes: str | None = None
+    acquisition: AcquisitionPlan
 
 
 class RoutingLogEntry(BaseModel):
@@ -279,6 +304,28 @@ class CapturePreviewResponse(BaseModel):
 
 class CaptureResponse(BaseModel):
     """Quick-capture write response."""
+
+    attributes_saved: int
+    attributes: list[AttributeResponse]
+
+
+class InterviewPreviewRequest(BaseModel):
+    """Request body for interview preview/save endpoints."""
+
+    domain: str
+    question: str
+    answer: str
+    accepted: list["CapturePreviewWriteItem"] | None = None
+
+
+class InterviewPreviewResponse(BaseModel):
+    """Preview response for one guided interview answer."""
+
+    proposed: list[CapturePreviewItem]
+
+
+class InterviewResponse(BaseModel):
+    """Saved interview attributes."""
 
     attributes_saved: int
     attributes: list[AttributeResponse]

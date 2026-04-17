@@ -415,6 +415,68 @@ button {
   font-size: 11px;
 }
 
+.acquisition-panel {
+  margin-top: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: 14px;
+}
+
+.acquisition-title {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.acquisition-list {
+  display: grid;
+  gap: 12px;
+}
+
+.acquisition-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  padding: 12px;
+}
+
+.acquisition-prompt {
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.acquisition-form {
+  display: grid;
+  gap: 10px;
+}
+
+.acquisition-form input,
+.acquisition-form select,
+.acquisition-form textarea {
+  width: 100%;
+}
+
+.acquisition-form textarea {
+  min-height: 96px;
+}
+
+.acquisition-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.acquisition-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
 .privacy-status {
   display: grid;
   gap: 4px;
