@@ -84,6 +84,20 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
     )
 
 
+def _contains_local_only_context(context) -> bool:
+    assembled = getattr(context, "assembled_context", None)
+    if assembled is not None:
+        return bool(getattr(assembled, "contains_local_only", False))
+    return any(attr.get("routing") == "local_only" for attr in context.attributes)
+
+
+def _domains_used(context) -> list[str] | None:
+    assembled = getattr(context, "assembled_context", None)
+    if assembled is not None:
+        return list(getattr(assembled, "domains_used", []))
+    return None
+
+
 def _is_upstream_error(exc: Exception) -> bool:
     module_name = type(exc).__module__
     return module_name.startswith(("requests", "anthropic", "groq", "httpx"))
@@ -181,6 +195,8 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
             context.messages,
             attributes=context.attributes,
             retrieval_mode=context.query_type,
+            contains_local_only_context=_contains_local_only_context(context),
+            domains_used=_domains_used(context),
         )
         result = brokered.content
         assert isinstance(result, str)
@@ -266,6 +282,8 @@ def query_stream(
                 attributes=context.attributes,
                 stream=True,
                 retrieval_mode=context.query_type,
+                contains_local_only_context=_contains_local_only_context(context),
+                domains_used=_domains_used(context),
             )
             response_stream = brokered.content
             assert not isinstance(response_stream, str)

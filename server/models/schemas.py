@@ -87,6 +87,13 @@ class QueryResponse(BaseModel):
     metadata: QueryMetadata
 
 
+class ArtifactIngestResponse(BaseModel):
+    """Summary returned after artifact ingestion."""
+
+    artifact_id: str
+    chunk_count: int
+
+
 class AttributeResponse(BaseModel):
     """Serialized identity attribute."""
 

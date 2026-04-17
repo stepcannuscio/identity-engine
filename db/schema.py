@@ -66,6 +66,35 @@ CREATE TABLE IF NOT EXISTS inference_evidence (
 );
 """
 
+ARTIFACTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS artifacts (
+    id          TEXT PRIMARY KEY,
+    domain_id   TEXT REFERENCES domains(id) ON DELETE SET NULL,
+    type        TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    metadata    TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+ARTIFACT_CHUNKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS artifact_chunks (
+    id          TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content     TEXT NOT NULL,
+    metadata    TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+ARTIFACT_CHUNKS_ORDER_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_chunks_position
+    ON artifact_chunks(artifact_id, chunk_index);
+"""
+
 REFLECTION_SESSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS reflection_sessions (
     id                  TEXT PRIMARY KEY,
@@ -112,6 +141,9 @@ SCHEMA_SQL = "\n\n".join(
         ATTRIBUTES_CURRENT_INDEX_SQL,
         ATTRIBUTE_HISTORY_TABLE_SQL,
         INFERENCE_EVIDENCE_TABLE_SQL,
+        ARTIFACTS_TABLE_SQL,
+        ARTIFACT_CHUNKS_TABLE_SQL,
+        ARTIFACT_CHUNKS_ORDER_INDEX_SQL,
         REFLECTION_SESSIONS_TABLE_SQL,
         PREFERENCE_SIGNALS_TABLE_SQL,
         PREFERENCE_SIGNALS_LOOKUP_INDEX_SQL,

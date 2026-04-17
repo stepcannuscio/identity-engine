@@ -107,6 +107,8 @@ def query(
             context.messages,
             attributes=context.attributes,
             retrieval_mode=context.query_type,
+            contains_local_only_context=context.assembled_context.contains_local_only,
+            domains_used=context.assembled_context.domains_used,
         )
     except RoutingViolationError as exc:
         record_blocked_query(session, context, exc)

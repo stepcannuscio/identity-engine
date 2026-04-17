@@ -13,6 +13,7 @@ This document captures the current system state after completing:
 - Attribute Correction Loop
 - Preference Learning
 - Preference Promotion
+- Artifact Ingestion and Retrieval
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -33,6 +34,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - surfaces privacy behavior to the user
 - allows users to confirm, reject, and refine beliefs
 - stores lightweight local preference signals for future planning/recommendation use
+- stores local artifacts as retrievable evidence without turning them into source-of-truth attributes
 
 ---
 
@@ -114,6 +116,13 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - promotion respects user corrections by not recreating recently rejected matches
 - rerunning promotion refreshes existing inferred attributes instead of duplicating them
 
+### 14. Artifact Ingestion Layer
+- `POST /artifacts` accepts JSON text or simple text-file uploads
+- artifacts are stored locally with raw content plus ordered chunks
+- chunk retrieval is deterministic keyword matching, not embeddings
+- query context can fall back to bounded artifact evidence when structured coverage is thin
+- artifact evidence is prompt-bounded and treated as local-only context
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -125,6 +134,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - no raw prompts logged
 - no raw attribute values in audit logs
 - no supporting evidence text exposed via API/UI
+- no raw artifact content exposed via API/UI except bounded local prompt context
 - external inference must always be explicitly allowed
 
 ## Architecture
@@ -138,6 +148,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 ## Data Model
 
 - attributes are canonical truth
+- artifacts are local evidence, not canonical truth
 - history is append-only
 - inferred attributes may include evidence
 - audit logs describe decisions, not content
@@ -174,3 +185,6 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - use relevant learned preferences during context assembly and prompt grounding
 - summarize preference tendencies into bounded runtime guidance instead of dumping signal history
 - deterministically score future candidates against learned preferences with transparent weights
+- ingest local notes, documents, and uploads into retrievable artifact storage
+- retrieve bounded artifact chunks during deeper reasoning when attributes alone are insufficient
+- keep raw artifact bodies local while still grounding local answers in uploaded content

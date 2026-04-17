@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from engine.artifact_retrieval import DEFAULT_ARTIFACT_LIMIT, retrieve_artifact_chunks
 from engine.preference_summary import PreferenceSummaryPayload, empty_preference_summary
 from engine.preference_summary import (
     get_relevant_preference_context,
@@ -37,7 +38,20 @@ class AssembledContext:
     )
     preference_count: int = 0
     preference_categories_used: list[str] = field(default_factory=list)
+    artifact_chunks: list[dict] = field(default_factory=list)
+    artifact_count: int = 0
+    artifact_sources: list[str] = field(default_factory=list)
     budget_metadata: dict[str, int | float] = field(default_factory=dict)
+
+
+def _should_retrieve_artifacts(
+    query_type: str,
+    attributes: list[dict],
+    preference_count: int,
+) -> bool:
+    if query_type == "open_ended":
+        return True
+    return len(attributes) <= 2 and preference_count == 0
 
 
 def _cap_session_history(history: list[dict]) -> tuple[list[dict], bool]:
@@ -63,11 +77,18 @@ def assemble_query_context(
         if not is_preference_attribute(attribute)
     ]
     preference_context = get_relevant_preference_context(query, query_type, conn)
+    artifact_chunks: list[dict] = []
+    if _should_retrieve_artifacts(query_type, attributes, preference_context.item_count):
+        artifact_chunks = retrieve_artifact_chunks(
+            conn,
+            query,
+            limit=DEFAULT_ARTIFACT_LIMIT,
+        )
     capped_history, history_was_trimmed = _cap_session_history(session_history)
     domains_used = sorted(
         {
             str(attribute.get("domain", ""))
-            for attribute in attributes + preference_context.attributes
+            for attribute in attributes + preference_context.attributes + artifact_chunks
             if attribute.get("domain")
         }
     )
@@ -77,11 +98,19 @@ def assemble_query_context(
     ) or any(
         attribute.get("routing") == "local_only"
         for attribute in preference_context.attributes
+    ) or bool(artifact_chunks)
+    artifact_sources = sorted(
+        {
+            str(chunk.get("title", "")).strip()
+            for chunk in artifact_chunks
+            if str(chunk.get("title", "")).strip()
+        }
     )
     was_trimmed = (
         history_was_trimmed
         or len(retrieved_attributes) >= int(budget["max_attributes"])
         or preference_context.was_trimmed
+        or len(artifact_chunks) >= DEFAULT_ARTIFACT_LIMIT
     )
 
     return AssembledContext(
@@ -98,11 +127,15 @@ def assemble_query_context(
         preference_summary=preference_context.summary,
         preference_count=preference_context.item_count,
         preference_categories_used=preference_context.categories_used,
+        artifact_chunks=artifact_chunks,
+        artifact_count=len(artifact_chunks),
+        artifact_sources=artifact_sources,
         budget_metadata={
             "max_attributes": int(budget["max_attributes"]),
             "max_domains": int(budget["max_domains"]),
             "score_threshold": float(budget["score_threshold"]),
             "history_cap_messages": HISTORY_CAP * 2,
+            "max_artifact_chunks": DEFAULT_ARTIFACT_LIMIT,
             **preference_context.budget_metadata,
         },
     )

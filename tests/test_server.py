@@ -120,6 +120,7 @@ def client(monkeypatch):
 
     monkeypatch.setattr("server.main.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.query.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("server.routes.artifacts.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.attributes.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.capture.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.preferences.get_db_connection", _get_db_connection)
@@ -805,6 +806,60 @@ def test_capture_writes_attributes_with_local_only_routing(client: TestClient, m
         "SELECT routing FROM attributes WHERE label = 'phase_three'"
     ).fetchone()[0]
     assert routing == "local_only"
+
+
+def test_post_artifacts_accepts_json_text(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        json={
+            "text": "These are my working notes about concise writing and revision.",
+            "title": "Writing notes",
+            "type": "note",
+            "source": "capture",
+            "domain": "voice",
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artifact_id"]
+    assert body["chunk_count"] == 1
+
+    stored = _db(client).execute(
+        "SELECT title, type, source FROM artifacts"
+    ).fetchone()
+    assert stored == ("Writing notes", "note", "capture")
+
+
+def test_post_artifacts_accepts_text_file_upload(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        data={"title": "Meeting transcript", "domain": "patterns"},
+        files={"file": ("transcript.md", b"Meetings drain me when they stack back to back.", "text/markdown")},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chunk_count"] == 1
+
+    stored = _db(client).execute(
+        "SELECT title, source FROM artifacts"
+    ).fetchone()
+    assert stored == ("Meeting transcript", "upload")
+
+
+def test_post_artifacts_rejects_text_and_file_together(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        data={"text": "duplicate", "title": "Bad upload"},
+        files={"file": ("bad.txt", b"also here", "text/plain")},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "provide either text or file, not both"
 
 
 def test_query_returns_409_when_external_routing_violates_local_only_policy(

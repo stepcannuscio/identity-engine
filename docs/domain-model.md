@@ -34,6 +34,31 @@ Reflection sessions track:
 - routing decisions
 - summary
 
+## Artifacts
+
+Artifacts are local evidence objects such as:
+- notes
+- journals
+- transcripts
+- uploaded documents
+
+Artifacts are not canonical identity beliefs. They store raw local content plus
+ordered chunks for retrieval. An artifact may optionally be associated with an
+identity domain, but it remains evidence rather than truth.
+
+## Artifact Chunks
+
+Artifact chunks are bounded slices of artifact content used for retrieval.
+
+They are:
+- stored locally
+- ordered
+- retrievable by deterministic keyword matching
+- eligible for local prompt grounding only in bounded form
+
+They are not exposed through privacy summaries, audit logs, or provenance APIs
+as raw text.
+
 ## Inference Evidence
 Links inferred attributes to supporting data.
 Stored through a dedicated helper layer so evidence writes stay explicit and
@@ -77,3 +102,4 @@ ranking.
 ## Key Idea
 
 Identity is composed of small, testable beliefs — not large summaries.
+Artifacts support those beliefs as evidence without replacing them.

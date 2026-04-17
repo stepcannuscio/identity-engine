@@ -32,7 +32,10 @@ Just answer as if you simply know the person.
 Identity model:
 {formatted_attributes}
 {preference_guidance}
+{artifact_evidence}
 """
+
+ARTIFACT_EXCERPT_MAX_CHARS = 700
 
 
 def _visible_preference_attributes(
@@ -139,6 +142,22 @@ def _format_preference_guidance(context: AssembledContext, target_backend: str) 
     return "\n".join(lines)
 
 
+def _format_artifact_evidence(context: AssembledContext, target_backend: str) -> str:
+    if not context.artifact_chunks:
+        return ""
+    if target_backend != "local":
+        return ""
+
+    lines = ["", "Relevant local artifact evidence:"]
+    for chunk in context.artifact_chunks:
+        title = str(chunk.get("title", "Untitled artifact"))
+        excerpt = str(chunk.get("content", "")).strip()
+        if len(excerpt) > ARTIFACT_EXCERPT_MAX_CHARS:
+            excerpt = excerpt[: ARTIFACT_EXCERPT_MAX_CHARS - 3].rstrip() + "..."
+        lines.append(f"- {title} [chunk {int(chunk.get('chunk_index', 0)) + 1}]: {excerpt}")
+    return "\n".join(lines)
+
+
 def build_prompt(
     context: AssembledContext,
     target_backend: str = "local",
@@ -163,11 +182,13 @@ def build_prompt(
 
     formatted_attributes = _format_attributes(context.attributes)
     preference_guidance = _format_preference_guidance(context, target_backend)
+    artifact_evidence = _format_artifact_evidence(context, target_backend)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
             formatted_attributes=formatted_attributes,
             preference_guidance=preference_guidance,
+            artifact_evidence=artifact_evidence,
         ),
     }
 

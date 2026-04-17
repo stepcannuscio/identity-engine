@@ -27,6 +27,7 @@ from server.db import get_db_connection
 from server.middleware import SecurityMiddleware, apply_security_headers
 from server.routes.attributes import RoutingProtectedError
 from server.routes import (
+    artifacts_router,
     attributes_router,
     capture_router,
     preferences_router,
@@ -217,6 +218,7 @@ def create_app() -> FastAPI:
     app.add_middleware(SecurityMiddleware)
     app.include_router(auth_router)
     app.include_router(query_router)
+    app.include_router(artifacts_router)
     app.include_router(attributes_router)
     app.include_router(capture_router)
     app.include_router(preferences_router)

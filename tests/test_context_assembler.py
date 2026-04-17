@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from db.connection import get_plain_connection
 from db.preference_signals import PreferenceSignalInput, record_preference_signal
 from db.schema import create_tables, seed_domains
+from engine.artifact_ingestion import ingest_artifact
 from engine.context_assembler import assemble_query_context
 
 
@@ -219,3 +220,64 @@ def test_assemble_query_context_bounds_preference_context(conn, domain_ids):
     assert context.preference_count <= 7
     assert context.budget_metadata["max_preference_attributes"] == 4
     assert context.budget_metadata["max_preference_signal_summaries"] == 3
+
+
+def test_assemble_query_context_includes_artifact_chunks_for_open_ended_queries(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "priority",
+        "Ship the backend cleanly.",
+        confidence=0.9,
+        routing="external_ok",
+    )
+    ingest_artifact(
+        conn,
+        text="My notes keep returning to writing tone, revision rhythm, and concise drafts.",
+        title="Writing notebook",
+        artifact_type="note",
+        source="capture",
+        domain="voice",
+    )
+
+    context = assemble_query_context(
+        "What patterns exist in my writing?",
+        "open_ended",
+        [],
+        conn,
+    )
+
+    assert context.artifact_count == 1
+    assert context.artifact_chunks[0]["title"] == "Writing notebook"
+    assert "Writing notebook" in context.artifact_sources
+    assert context.contains_local_only is True
+
+
+def test_assemble_query_context_skips_artifact_chunks_for_strong_simple_structured_context(conn, domain_ids):
+    for index in range(4):
+        _insert_attribute(
+            conn,
+            domain_ids["goals"],
+            f"priority_{index}",
+            "I want to finish the current phase this quarter.",
+            confidence=0.95,
+            routing="external_ok",
+        )
+    ingest_artifact(
+        conn,
+        text="Long freeform journal about unrelated writing rituals.",
+        title="Journal",
+        artifact_type="journal",
+        source="upload",
+        domain="voice",
+    )
+
+    context = assemble_query_context(
+        "What goals should I focus on next?",
+        "simple",
+        [],
+        conn,
+    )
+
+    assert context.artifact_count == 0
+    assert context.artifact_chunks == []

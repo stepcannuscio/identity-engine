@@ -163,6 +163,26 @@ How it works:
 Quick captures do not create a `reflection_sessions` row. They are sessionless,
 atomic writes intended for “Post-it note” style ingestion.
 
+## Artifact ingestion
+
+`POST /artifacts` adds a first-pass knowledge intake layer for longer local
+content such as notes, journals, transcripts, and simple text uploads.
+
+What it does:
+
+1. Stores the raw extracted text locally in the encrypted database
+2. Chunks the content into ordered retrieval units
+3. Keeps artifacts separate from canonical attributes
+4. Lets the query system pull in a few bounded local chunks when structured
+   attributes are not enough
+
+Privacy constraints:
+
+- artifact bodies remain local-only
+- external backends are blocked if a response would rely on artifact chunks
+- prompts never receive full documents, only a small bounded set of retrieved
+  excerpts for local inference
+
 ## Inspecting the store
 
 `make view` prints everything currently in the database, grouped by domain:
@@ -260,6 +280,7 @@ Core routes:
 - `GET /health`
 - `POST /query`
 - `POST /query/stream`
+- `POST /artifacts`
 - `GET/POST/PUT/DELETE /attributes...`
 - `POST /capture/preview`
 - `POST /capture` (also accepts approved preview items from the UI)
@@ -301,13 +322,15 @@ db/schema.py                — DDL and domain seeding
 engine/privacy_broker.py    — application-level inference boundary and routing metadata
 engine/query_classifier.py  — deterministic simple/open-ended query classification
 engine/retriever.py         — score-based identity attribute retrieval
+engine/artifact_ingestion.py — local artifact storage and chunking helpers
+engine/artifact_retrieval.py — deterministic artifact chunk retrieval
 engine/prompt_builder.py    — grounded system prompt + message assembly
 engine/session.py           — in-memory session state and routing log
 engine/query_engine.py      — end-to-end query orchestration
 engine/capture.py           — quick-capture extraction, confirmation, and writes
 server/main.py              — FastAPI app, lifecycle, bind/TLS startup
 server/auth.py              — passphrase login and in-memory session tokens
-server/routes/              — query, attributes, capture, and session endpoints
+server/routes/              — query, artifacts, attributes, capture, and session endpoints
 server/middleware/          — auth enforcement, interface checks, security headers
 server/models/              — Pydantic request/response schemas
 frontend/                   — Vite React frontend for query, graph, and history tabs

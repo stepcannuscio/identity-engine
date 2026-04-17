@@ -96,6 +96,8 @@ class PrivacyBroker:
         stream: bool = False,
         task_type: str = "query_generation",
         retrieval_mode: str | None = None,
+        contains_local_only_context: bool | None = None,
+        domains_used: list[str] | None = None,
     ) -> BrokeredResult[str | Generator[str, None, None]]:
         """Generate a grounded response after enforcing query routing rules."""
         decision = self._decide(
@@ -103,6 +105,8 @@ class PrivacyBroker:
             attributes=attributes,
             enforce_routing=True,
             retrieval_mode=retrieval_mode,
+            contains_local_only_context=contains_local_only_context,
+            domains_used=domains_used,
         )
         response = generate_response(messages, self.provider_config, stream=stream)
         return BrokeredResult(content=response, metadata=decision)
@@ -158,19 +162,28 @@ class PrivacyBroker:
         attributes: list[dict] | None,
         enforce_routing: bool,
         retrieval_mode: str | None,
+        contains_local_only_context: bool | None = None,
+        domains_used: list[str] | None = None,
     ) -> InferenceDecision:
         attributes = attributes or []
         blocked_count = 0
-        contains_local_only = any(
+        derived_contains_local_only = any(
             attribute.get("routing") == "local_only" for attribute in attributes
         )
-        domains_used = sorted(
+        resolved_contains_local_only = (
+            derived_contains_local_only
+            if contains_local_only_context is None
+            else contains_local_only_context
+        )
+        resolved_domains_used = sorted(
             {
                 str(attribute.get("domain", ""))
                 for attribute in attributes
                 if attribute.get("domain")
             }
         )
+        if domains_used is not None:
+            resolved_domains_used = sorted({domain for domain in domains_used if domain})
 
         decision = InferenceDecision(
             provider=self.provider_config.provider,
@@ -180,9 +193,9 @@ class PrivacyBroker:
             blocked_external_attributes_count=0,
             routing_enforced=enforce_routing,
             attribute_count=len(attributes),
-            domains_used=domains_used,
+            domains_used=resolved_domains_used,
             retrieval_mode=retrieval_mode,
-            contains_local_only_context=contains_local_only,
+            contains_local_only_context=resolved_contains_local_only,
         )
 
         if enforce_routing and not self.provider_config.is_local:
@@ -192,7 +205,7 @@ class PrivacyBroker:
                 if attribute.get("routing") == "local_only"
             ]
             blocked_count = len(blocked)
-            if blocked:
+            if blocked or resolved_contains_local_only:
                 labels = ", ".join(str(attr.get("label", "unknown")) for attr in blocked)
                 blocked_decision = InferenceDecision(
                     provider=decision.provider,
@@ -211,7 +224,7 @@ class PrivacyBroker:
                 )
                 raise AuditedRoutingViolationError(
                     "local_only attributes cannot be sent to external backends: "
-                    f"{labels}",
+                    f"{labels or 'local_only context'}",
                     audit=blocked_decision,
                 )
 

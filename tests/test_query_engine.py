@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
+from engine.artifact_ingestion import ingest_artifact
 from engine.context_assembler import AssembledContext
 from engine.privacy_broker import AuditedRoutingViolationError, BrokeredResult, InferenceDecision
 from engine.prompt_builder import RoutingViolationError, build_prompt
@@ -319,6 +320,37 @@ def test_build_prompt_includes_learned_preference_guidance():
     assert "Avoid: Avoid dense long form content." in system
 
 
+def test_build_prompt_includes_bounded_artifact_evidence_for_local_backend():
+    context = AssembledContext(
+        task_type="query",
+        input_text="What patterns exist in my writing?",
+        attributes=[],
+        session_history=[],
+        domains_used=["voice"],
+        attribute_count=0,
+        retrieval_mode="open_ended",
+        was_trimmed=False,
+        contains_local_only=True,
+        artifact_chunks=[
+            {
+                "title": "Writing notebook",
+                "chunk_index": 0,
+                "content": "I revise heavily, then cut for clarity and rhythm.",
+                "routing": "local_only",
+            }
+        ],
+        artifact_count=1,
+        artifact_sources=["Writing notebook"],
+    )
+
+    messages = build_prompt(context, target_backend="local")
+
+    system = messages[0]["content"]
+    assert "Relevant local artifact evidence:" in system
+    assert "Writing notebook [chunk 1]" in system
+    assert "cut for clarity and rhythm" in system
+
+
 def test_build_prompt_caps_history_at_six_exchanges():
     history = []
     for i in range(7):
@@ -518,6 +550,30 @@ def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn,
     assert len(session.routing_log) == 1
     entry = session.routing_log[0]
     assert entry["decision"] == "blocked"
-    assert entry["contains_local_only_context"] is True
-    assert entry["blocked_external_attributes_count"] >= 1
-    assert entry["reason"] == "local_only_context_blocked_for_external_inference"
+
+
+def test_query_blocks_external_backend_when_only_artifact_context_is_available(conn):
+    ingest_artifact(
+        conn,
+        text="My notes on writing keep returning to concise drafts and heavy revision.",
+        title="Writing notebook",
+        artifact_type="note",
+        source="capture",
+        domain="voice",
+    )
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+
+    with pytest.raises(RoutingViolationError):
+        query("What patterns exist in my writing?", session, conn, config)
+
+    assert len(session.routing_log) == 1
+    assert session.routing_log[0]["decision"] == "blocked"
+    assert session.routing_log[0]["contains_local_only_context"] is True
+    assert session.routing_log[0]["blocked_external_attributes_count"] == 0
+    assert session.routing_log[0]["reason"] == "local_only_context_blocked_for_external_inference"
