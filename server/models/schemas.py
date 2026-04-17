@@ -105,6 +105,23 @@ class AttributeResponse(BaseModel):
     last_confirmed: datetime | None
 
 
+class ProvenanceEvidenceSummary(BaseModel):
+    """Privacy-safe summary of one evidence record."""
+
+    source_type: str
+    summary: str
+    weight: float | None
+
+
+class AttributeProvenanceResponse(BaseModel):
+    """Attribute metadata plus privacy-safe provenance summaries."""
+
+    attribute_id: str
+    label: str
+    source: str
+    evidence: list[ProvenanceEvidenceSummary] = []
+
+
 class AttributeUpdateRequest(BaseModel):
     """Updatable attribute fields."""
 

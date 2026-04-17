@@ -1,6 +1,7 @@
 """Pydantic models exposed by the FastAPI server."""
 
 from server.models.schemas import (
+    AttributeProvenanceResponse,
     AttributeResponse,
     AttributeUpdateRequest,
     AuthStatus,
@@ -13,6 +14,7 @@ from server.models.schemas import (
     DomainSummary,
     LoginRequest,
     LoginResponse,
+    ProvenanceEvidenceSummary,
     QueryMetadata,
     QueryRequest,
     QueryResponse,
@@ -20,6 +22,7 @@ from server.models.schemas import (
 )
 
 __all__ = [
+    "AttributeProvenanceResponse",
     "AttributeResponse",
     "AttributeUpdateRequest",
     "AuthStatus",
@@ -32,6 +35,7 @@ __all__ = [
     "DomainSummary",
     "LoginRequest",
     "LoginResponse",
+    "ProvenanceEvidenceSummary",
     "QueryMetadata",
     "QueryRequest",
     "QueryResponse",

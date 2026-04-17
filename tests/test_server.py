@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import engine.capture as capture_module
 from config.llm_router import ProviderConfig
 from db.connection import get_plain_connection
+from db.inference_evidence import InferenceEvidenceInput, record_inference_evidence_batch
 from db.schema import create_tables, seed_domains
 from engine.privacy_broker import InferenceDecision
 from engine.prompt_builder import RoutingViolationError
@@ -51,6 +52,7 @@ def _insert_attribute(
     value: str,
     routing: str = "local_only",
     status: str = "active",
+    source: str = "explicit",
 ) -> str:
     now = "2026-04-08T12:00:00+00:00"
     attribute_id = str(uuid.uuid4())
@@ -60,7 +62,7 @@ def _insert_attribute(
             id, domain_id, label, value, elaboration, mutability, source, confidence,
             routing, status, created_at, updated_at, last_confirmed
         )
-        VALUES (?, ?, ?, ?, ?, 'stable', 'explicit', 0.8, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 'stable', ?, 0.8, ?, ?, ?, ?, ?)
         """,
         (
             attribute_id,
@@ -68,6 +70,7 @@ def _insert_attribute(
             label,
             value,
             None,
+            source,
             routing,
             status,
             now,
@@ -205,6 +208,136 @@ def test_get_attributes_returns_list_of_active_attributes(client: TestClient):
     body = response.json()
     assert len(body) == 1
     assert body[0]["label"] == "priority"
+
+
+def test_get_attribute_provenance_requires_authentication(client: TestClient):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "patterns",
+        "focus_window",
+        "Best in the morning",
+        source="inferred",
+    )
+
+    response = client.get(f"/attributes/{attribute_id}/provenance")
+
+    assert response.status_code == 401
+    assert response.json() == {"error": "authentication required"}
+
+
+def test_get_attribute_provenance_returns_summaries_without_raw_supporting_text(
+    client: TestClient,
+):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "voice",
+        "writing_style",
+        "Prefers concise writing",
+        source="inferred",
+    )
+    private_text = "I want fewer words and tighter phrasing in every update."
+    record_inference_evidence_batch(
+        _db(client),
+        attribute_id,
+        [
+            InferenceEvidenceInput(
+                source_type="journal",
+                source_ref="journal-17",
+                supporting_text=private_text,
+                weight=0.8,
+            )
+        ],
+    )
+
+    response = client.get(
+        f"/attributes/{attribute_id}/provenance",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["attribute_id"] == attribute_id
+    assert body["label"] == "writing_style"
+    assert body["source"] == "inferred"
+    assert body["evidence"] == [
+        {
+            "source_type": "journal",
+            "summary": "Derived from journal entry; 10-word supporting note kept local.",
+            "weight": pytest.approx(0.8),
+        }
+    ]
+    assert private_text not in response.text
+
+
+def test_get_attribute_provenance_returns_empty_evidence_for_inferred_attribute_without_rows(
+    client: TestClient,
+):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "patterns",
+        "energy_pattern",
+        "Needs quiet recovery after meetings",
+        source="inferred",
+    )
+
+    response = client.get(
+        f"/attributes/{attribute_id}/provenance",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "attribute_id": attribute_id,
+        "label": "energy_pattern",
+        "source": "inferred",
+        "evidence": [],
+    }
+
+
+def test_get_attribute_provenance_returns_multiple_rows_in_creation_order(client: TestClient):
+    attribute_id = _insert_attribute(
+        _db(client),
+        "patterns",
+        "meeting_load",
+        "Too many meetings drains energy",
+        source="inferred",
+    )
+    record_inference_evidence_batch(
+        _db(client),
+        attribute_id,
+        [
+            InferenceEvidenceInput(
+                source_type="capture",
+                supporting_text="Back-to-back meetings drain me.",
+                weight=0.6,
+            ),
+            InferenceEvidenceInput(
+                source_type="reflection_session",
+                source_ref="session-7",
+                supporting_text="I need recovery time after meeting-heavy days.",
+                weight=0.9,
+            ),
+        ],
+    )
+
+    response = client.get(
+        f"/attributes/{attribute_id}/provenance",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["evidence"] == [
+        {
+            "source_type": "capture",
+            "summary": "Derived from captured note; 6-word supporting note kept local.",
+            "weight": pytest.approx(0.6),
+        },
+        {
+            "source_type": "reflection_session",
+            "summary": "Derived from reflection session; 8-word supporting note kept local.",
+            "weight": pytest.approx(0.9),
+        },
+    ]
 
 
 def test_put_attribute_value_creates_history_record(client: TestClient):

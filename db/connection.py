@@ -1,7 +1,9 @@
 """Database connection helpers for SQLCipher production and sqlite test usage."""
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from config.settings import DB_PATH, SQLCIPHER_PAGE_SIZE, SQLCIPHER_PBKDF2_ITER, get_db_key
 
 
@@ -22,7 +24,7 @@ def _apply_pragmas(conn, key: str) -> None:
 
 
 @contextmanager
-def get_connection(db_path: Path = DB_PATH):
+def get_connection(db_path: Path = DB_PATH) -> Iterator[Any]:
     """Context manager that yields an open, authenticated SQLCipher connection.
 
     Usage:
@@ -67,7 +69,7 @@ def get_connection(db_path: Path = DB_PATH):
 
 
 @contextmanager
-def get_plain_connection(db_path: str = ":memory:"):
+def get_plain_connection(db_path: str = ":memory:") -> Iterator[Any]:
     """Plain (unencrypted) SQLite connection for testing without SQLCipher.
 
     Uses the standard sqlite3 module. Only for use in tests.

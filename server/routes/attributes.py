@@ -11,11 +11,13 @@ from fastapi import APIRouter, HTTPException, Request
 from config.settings import EXTERNAL_OK
 from server.db import get_db_connection
 from server.models.schemas import (
+    AttributeProvenanceResponse,
     AttributeResponse,
     AttributeUpdateRequest,
     CreateAttributeRequest,
     DomainSummary,
 )
+from server.services import build_attribute_provenance_response
 
 router = APIRouter(tags=["attributes"])
 
@@ -133,6 +135,24 @@ def get_attribute(attribute_id: str, request: Request) -> AttributeResponse:
     if row is None:
         raise HTTPException(status_code=404, detail="attribute not found")
     return _serialize_attribute(row)
+
+
+@router.get(
+    "/attributes/{attribute_id}/provenance",
+    response_model=AttributeProvenanceResponse,
+)
+def get_attribute_provenance(
+    attribute_id: str,
+    request: Request,
+) -> AttributeProvenanceResponse:
+    """Return privacy-safe provenance details for one attribute."""
+    _ = request
+    with get_db_connection() as conn:
+        row = _fetch_attribute(conn, attribute_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="attribute not found")
+        attribute = _serialize_attribute(row)
+        return build_attribute_provenance_response(conn, attribute)
 
 
 @router.post("/attributes", response_model=AttributeResponse)
