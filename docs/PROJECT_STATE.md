@@ -12,6 +12,7 @@ This document captures the current system state after completing:
 - Provenance Read API
 - Attribute Correction Loop
 - Preference Learning
+- Preference Promotion
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -105,6 +106,14 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - preference signals are stored separately from canonical attributes
 - raw signal history remains local data and is not routed through audit/privacy summaries
 
+### 13. Preference Promotion Loop
+- `POST /preferences/promote` runs deterministic local promotion manually
+- repeated stable preference signals can become inferred attributes
+- promotion uses simple thresholds and conflict checks, not probabilistic scoring
+- promoted attributes default to `local_only` and attach summarized local evidence
+- promotion respects user corrections by not recreating recently rejected matches
+- rerunning promotion refreshes existing inferred attributes instead of duplicating them
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -137,6 +146,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - excluded/non-current states are `rejected`, `superseded`, and `retracted`
 - only one current `(domain, label)` may exist at a time
 - preference signals are separate from attributes and represent lower-level evidence
+- preference promotion must not recreate rejected attributes or overwrite refined values
 
 ---
 
@@ -159,4 +169,5 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - retrieval favors confirmed attributes and ignores rejected ones
 - current listings and domain counts include both `active` and `confirmed`
 - record explicit likes, dislikes, accepts, rejects, prefers, and avoids as local preference signals
-- summarize preference tendencies without promoting them into attributes yet
+- summarize preference tendencies without exposing raw signal history
+- promote stable preference tendencies into inferred local-only attributes on demand

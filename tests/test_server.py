@@ -374,6 +374,101 @@ def test_preference_signal_writes_do_not_touch_routing_logs(client: TestClient):
     assert _app(client).state.current_session.routing_log == []
 
 
+def test_post_preference_promote_creates_attribute_and_evidence(client: TestClient):
+    headers = _login_headers(client)
+    for _ in range(3):
+        response = client.post(
+            "/preferences/signals",
+            json={
+                "category": "writing_style",
+                "subject": "concise_responses",
+                "signal": "prefer",
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    response = client.post(
+        "/preferences/promote",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["category"] == "writing_style"
+    assert body[0]["subject"] == "concise_responses"
+    assert body[0]["state"] == "stable"
+    assert body[0]["action"] == "created"
+    assert body[0]["domain"] == "voice"
+    assert body[0]["label"] == "preference_writing_style_concise_responses"
+    assert body[0]["attribute_id"]
+    assert body[0]["confidence"] == 0.91
+    assert body[0]["observations"] == 3
+    assert body[0]["positive_count"] == 3
+    assert body[0]["negative_count"] == 0
+    assert body[0]["net_score"] == 9
+
+    stored = _db(client).execute(
+        """
+        SELECT source, routing, status
+        FROM attributes
+        WHERE label = ?
+        """,
+        ("preference_writing_style_concise_responses",),
+    ).fetchone()
+    assert stored == ("inferred", "local_only", "active")
+
+    evidence_count = _db(client).execute(
+        """
+        SELECT count(*)
+        FROM inference_evidence
+        WHERE source_type = 'preference_signal'
+        """
+    ).fetchone()[0]
+    assert evidence_count == 3
+
+
+def test_post_preference_promote_respects_rejected_attribute(client: TestClient):
+    headers = _login_headers(client)
+    for _ in range(3):
+        _db(client).execute(
+            """
+            INSERT INTO preference_signals (
+                id, category, subject, signal, strength, source, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                "writing_style",
+                "concise_responses",
+                "prefer",
+                3,
+                "explicit_feedback",
+                "2026-04-17T12:00:00+00:00",
+            ),
+        )
+    _db(client).commit()
+    rejected_id = _insert_attribute(
+        _db(client),
+        "voice",
+        "preference_writing_style_concise_responses",
+        "I prefer concise responses.",
+        status="rejected",
+        source="inferred",
+    )
+
+    response = client.post(
+        "/preferences/promote",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["action"] == "blocked_rejected"
+    assert response.json()[0]["attribute_id"] == rejected_id
+
+
 def test_get_attribute_provenance_requires_authentication(client: TestClient):
     attribute_id = _insert_attribute(
         _db(client),

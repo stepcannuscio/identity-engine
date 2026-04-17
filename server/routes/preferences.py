@@ -12,9 +12,11 @@ from db.preference_signals import (
     record_preference_signal,
     summarize_preference_signals,
 )
+from engine.preference_promotion import run_preference_promotion
 from server.db import get_db_connection
 from server.models.schemas import (
     PreferenceSignalCreateRequest,
+    PreferencePromotionResponse,
     PreferenceSignalResponse,
     PreferenceSignalSummaryResponse,
 )
@@ -104,4 +106,37 @@ def get_preference_signal_summary(
             latest_at=_parse_timestamp(row.latest_at),
         )
         for row in rows
+    ]
+
+
+@router.post(
+    "/preferences/promote",
+    response_model=list[PreferencePromotionResponse],
+)
+def promote_preferences(
+    request: Request,
+    category: str | None = None,
+    subject: str | None = None,
+) -> list[PreferencePromotionResponse]:
+    """Promote stable preference signals into inferred attributes."""
+    _ = request
+    with get_db_connection() as conn:
+        results = run_preference_promotion(conn, category=category, subject=subject)
+    return [
+        PreferencePromotionResponse(
+            category=row.category,
+            subject=row.subject,
+            state=row.state,
+            action=row.action,
+            reason=row.reason,
+            domain=row.domain,
+            label=row.label,
+            attribute_id=row.attribute_id,
+            confidence=row.confidence,
+            observations=row.observations,
+            positive_count=row.positive_count,
+            negative_count=row.negative_count,
+            net_score=row.net_score,
+        )
+        for row in results
     ]

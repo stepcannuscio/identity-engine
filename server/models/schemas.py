@@ -148,6 +148,24 @@ class PreferenceSignalSummaryResponse(BaseModel):
     latest_at: datetime
 
 
+class PreferencePromotionResponse(BaseModel):
+    """Outcome for one manual preference-promotion pass."""
+
+    category: str
+    subject: str
+    state: str
+    action: str
+    reason: str
+    domain: str
+    label: str
+    attribute_id: str | None
+    confidence: float | None
+    observations: int
+    positive_count: int
+    negative_count: int
+    net_score: int
+
+
 class ProvenanceEvidenceSummary(BaseModel):
     """Privacy-safe summary of one evidence record."""
 
