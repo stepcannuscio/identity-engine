@@ -19,8 +19,14 @@ User Input → Query Engine / Capture Flow → Retrieval / Extraction Prep → P
 - Selects relevant attributes
 - Applies scoring and thresholds
 
+### Context Assembler
+- Builds structured query context
+- Augments general retrieval with bounded learned-preference context
+- Keeps preference selection deterministic and task-sensitive
+
 ### Prompt Builder
 - Builds grounded prompts
+- Adds concise learned-preference guidance when relevant
 - Enforces routing constraints
 
 ### Privacy Broker
@@ -37,6 +43,11 @@ User Input → Query Engine / Capture Flow → Retrieval / Extraction Prep → P
 
 ### Query Engine
 - Orchestrates entire flow
+
+### Preference Runtime Layer
+- Selects relevant confirmed or inferred preference attributes
+- Adds privacy-safe summarized preference tendencies when helpful
+- Supports lightweight deterministic ranking for future planning and recommendation flows
 
 ## Trust Boundaries
 

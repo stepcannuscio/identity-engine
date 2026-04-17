@@ -3,6 +3,7 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 PRE_COMMIT := $(VENV)/bin/pre-commit
+PYRIGHT := $(VENV)/bin/pyright
 NPM := npm
 FRONTEND_DIR := frontend
 FRONTEND_NODE_MODULES := $(FRONTEND_DIR)/node_modules/.package-lock.json
@@ -11,7 +12,7 @@ APP ?= all
 BACKEND_ARGS ?=
 FRONTEND_ARGS ?=
 
-.PHONY: help setup init test test-backend test-frontend clean interview \
+.PHONY: help setup init test test-backend test-frontend typecheck verify-backend clean interview \
 	capture query view serve smoke add-anthropic-key add-groq-key \
 	set-ui-passphrase frontend-install frontend-dev frontend-build dev
 
@@ -23,6 +24,8 @@ help:
 	@echo "  make init    Run scripts/init_db.py to initialise the encrypted database"
 	@echo "  make test    Run backend + frontend tests by default"
 	@echo "               Use APP=backend|frontend|all BACKEND_ARGS='...' FRONTEND_ARGS='...'"
+	@echo "  make typecheck  Run backend Pyright type-checking from .venv"
+	@echo "  make verify-backend  Run compileall, backend tests, and Pyright from .venv"
 	@echo "  make clean   Remove .venv and __pycache__ (never removes the database)"
 	@echo "  make capture Write a quick capture directly to the identity store"
 	@echo "  make query   Start an interactive freeform query session"
@@ -80,7 +83,21 @@ test:
 ## Run the backend pytest suite
 test-backend: setup
 	@echo "--> Running backend tests..."
-	$(PYTEST) tests/ -v $(BACKEND_ARGS)
+	$(PYTHON) -m pytest tests/ -v $(BACKEND_ARGS)
+
+## Run backend Pyright type-checking
+typecheck: setup
+	@echo "--> Running backend type checks..."
+	$(PYTHON) -m pyright
+
+## Run backend compile, tests, and type-checking
+verify-backend: setup
+	@echo "--> Compiling backend modules..."
+	$(PYTHON) -m compileall engine tests
+	@echo "--> Running backend tests..."
+	$(PYTHON) -m pytest tests/ -v $(BACKEND_ARGS)
+	@echo "--> Running backend type checks..."
+	$(PYTHON) -m pyright
 
 ## Run the frontend Vitest suite
 test-frontend: $(FRONTEND_NODE_MODULES)

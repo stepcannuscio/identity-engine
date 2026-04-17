@@ -27,6 +27,19 @@ class QueryContext:
     backend: str
 
 
+def _preference_attributes_for_backend(
+    assembled_context: AssembledContext,
+    backend: str,
+) -> list[dict]:
+    if backend == "local":
+        return assembled_context.preference_attributes
+    return [
+        attribute
+        for attribute in assembled_context.preference_attributes
+        if attribute.get("routing") != "local_only"
+    ]
+
+
 def prepare_query(
     user_query: str,
     session: Session,
@@ -43,6 +56,7 @@ def prepare_query(
     )
 
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
 
     messages = build_prompt(
         assembled_context,
@@ -54,7 +68,7 @@ def prepare_query(
         query=user_query,
         query_type=query_type,
         assembled_context=assembled_context,
-        attributes=assembled_context.attributes,
+        attributes=assembled_context.attributes + preference_attributes,
         messages=messages,
         backend=backend,
     )

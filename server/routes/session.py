@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -22,7 +24,7 @@ def _parse_timestamp(value: object) -> datetime:
     raise ValueError("Invalid routing-log timestamp.")
 
 
-def _backend_from_entry(entry: dict) -> str:
+def _backend_from_entry(entry: Mapping[str, Any]) -> str:
     if entry.get("is_local") is True:
         return "local"
     provider = entry.get("provider")
@@ -34,7 +36,9 @@ def _backend_from_entry(entry: dict) -> str:
 def _serialize_session(row) -> SessionRecord:
     raw_log = row[8] or "[]"
     parsed_log = json.loads(raw_log)
-    safe_entries = [entry for entry in parsed_log if isinstance(entry, dict)]
+    safe_entries: list[Mapping[str, Any]] = [
+        entry for entry in parsed_log if isinstance(entry, dict)
+    ]
     routing_log = [
         RoutingLogEntry(
             query=str(entry.get("query", "")),

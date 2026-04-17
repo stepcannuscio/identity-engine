@@ -55,6 +55,25 @@ They act as local evidence that future recommendation, planning, or inference
 features may consult when deciding whether to promote a pattern into an
 attribute.
 
+At runtime, signals may also be condensed into small deterministic preference
+summaries for local context assembly. Raw signal history is not prompt context.
+
+## Runtime Preference Summaries
+
+Runtime preference summaries are:
+- bounded
+- task-sensitive
+- local-first
+- explainable
+
+They combine:
+- current preference attributes when relevant
+- summarized positive or avoid tendencies from signal aggregates when useful
+
+They do not replace attributes as the source of truth. They are a lightweight
+runtime layer used to personalize prompt context and future deterministic
+ranking.
+
 ## Key Idea
 
 Identity is composed of small, testable beliefs — not large summaries.

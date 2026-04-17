@@ -59,6 +59,13 @@ Every feature must include:
 - Routing/privacy tests
 - Failure case tests
 
+## Python Environment
+- Always use the repo virtualenv for Python commands
+- Run Python tools as `./.venv/bin/python -m ...` instead of system `python`, `pytest`, or `pyright`
+- Before closing Python changes, run the relevant tests from the virtualenv
+- Treat Pylance/Pyright errors as real regressions and fix them before finishing
+- Prefer `make test-backend`, `make typecheck`, or `make verify-backend` for backend verification
+
 ## When Unsure
 Choose:
 - More privacy

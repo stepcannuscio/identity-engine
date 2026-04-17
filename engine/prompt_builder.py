@@ -31,14 +31,37 @@ Just answer as if you simply know the person.
 
 Identity model:
 {formatted_attributes}
+{preference_guidance}
 """
 
 
-def _assert_routing(attributes: list[dict], target_backend: str) -> None:
+def _visible_preference_attributes(
+    preference_attributes: list[dict],
+    target_backend: str,
+) -> list[dict]:
+    if target_backend == "local":
+        return preference_attributes
+    return [
+        attribute
+        for attribute in preference_attributes
+        if attribute.get("routing") != "local_only"
+    ]
+
+
+def _assert_routing(
+    attributes: list[dict],
+    preference_attributes: list[dict],
+    target_backend: str,
+) -> None:
     if target_backend == "local":
         return
 
-    violations = [a for a in attributes if a.get("routing") == "local_only"]
+    visible_preferences = _visible_preference_attributes(preference_attributes, target_backend)
+    violations = [
+        attribute
+        for attribute in attributes + visible_preferences
+        if attribute.get("routing") == "local_only"
+    ]
     if violations:
         labels = ", ".join(str(v.get("label", "unknown")) for v in violations)
         raise RoutingViolationError(
@@ -84,6 +107,38 @@ def _format_attributes(attributes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_preference_guidance(context: AssembledContext, target_backend: str) -> str:
+    summary = context.preference_summary or {}
+    positive_items = list(summary["positive"])
+    negative_items = list(summary["negative"])
+
+    if target_backend != "local":
+        positive_items = [
+            item
+            for item in positive_items
+            if item.get("routing") != "local_only"
+        ]
+        negative_items = [
+            item
+            for item in negative_items
+            if item.get("routing") != "local_only"
+        ]
+
+    if not positive_items and not negative_items:
+        return ""
+
+    lines = ["", "Learned preference guidance:"]
+    for item in positive_items:
+        summary_text = str(item.get("summary", ""))
+        source = str(item.get("status") or item.get("source") or "preference")
+        lines.append(f"- Prefer: {summary_text} [{source}]")
+    for item in negative_items:
+        summary_text = str(item.get("summary", ""))
+        source = str(item.get("status") or item.get("source") or "preference")
+        lines.append(f"- Avoid: {summary_text} [{source}]")
+    return "\n".join(lines)
+
+
 def build_prompt(
     context: AssembledContext,
     target_backend: str = "local",
@@ -100,13 +155,19 @@ def build_prompt(
     _ = context.retrieval_mode  # reserved for future prompt variations
 
     if enforce_routing:
-        _assert_routing(context.attributes, target_backend)
+        _assert_routing(
+            context.attributes,
+            context.preference_attributes,
+            target_backend,
+        )
 
     formatted_attributes = _format_attributes(context.attributes)
+    preference_guidance = _format_preference_guidance(context, target_backend)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
-            formatted_attributes=formatted_attributes
+            formatted_attributes=formatted_attributes,
+            preference_guidance=preference_guidance,
         ),
     }
 

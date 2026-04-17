@@ -18,7 +18,7 @@ from engine.context_assembler import AssembledContext
 from engine.privacy_broker import AuditedRoutingViolationError, BrokeredResult, InferenceDecision
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import classify_query
-from engine.query_engine import query
+from engine.query_engine import prepare_query, query
 from engine.retriever import OPEN_ENDED_BUDGET, SIMPLE_BUDGET, retrieve_attributes, score_attribute
 from engine.session import Session
 
@@ -279,6 +279,46 @@ def test_build_prompt_formats_attributes_grouped_by_domain():
     assert "[values] integrity: Keep promises" in system
 
 
+def test_build_prompt_includes_learned_preference_guidance():
+    context = AssembledContext(
+        task_type="query",
+        input_text="Rewrite this email",
+        attributes=[],
+        session_history=[],
+        domains_used=[],
+        attribute_count=0,
+        retrieval_mode="simple",
+        was_trimmed=False,
+        contains_local_only=False,
+        preference_summary={
+            "task_profiles": [],
+            "positive": [
+                {
+                    "summary": "I prefer concise responses.",
+                    "source": "attribute",
+                    "status": "confirmed",
+                    "routing": "local_only",
+                }
+            ],
+            "negative": [
+                {
+                    "summary": "Avoid dense long form content.",
+                    "source": "signal_summary",
+                    "status": "summary",
+                    "routing": "local_only",
+                }
+            ],
+        },
+    )
+
+    messages = build_prompt(context, target_backend="local")
+
+    system = messages[0]["content"]
+    assert "Learned preference guidance:" in system
+    assert "Prefer: I prefer concise responses." in system
+    assert "Avoid: Avoid dense long form content." in system
+
+
 def test_build_prompt_caps_history_at_six_exchanges():
     history = []
     for i in range(7):
@@ -300,6 +340,38 @@ def test_build_prompt_caps_history_at_six_exchanges():
     assert len(messages) == 14
     assert messages[1]["content"] == "u1"
     assert messages[-1]["content"] == "current"
+
+
+def test_prepare_query_omits_local_signal_summaries_for_external_backend(conn):
+    for index in range(3):
+        conn.execute(
+            """
+            INSERT INTO preference_signals (
+                id, category, subject, signal, strength, source, context_json, attribute_id, created_at
+            )
+            VALUES (?, 'writing_style', 'dense_long_form', 'avoid', 4, 'explicit_feedback', NULL, NULL, ?)
+            """,
+            (str(uuid.uuid4()), f"2026-04-17T12:0{index}:00+00:00"),
+        )
+    conn.commit()
+
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+
+    prepared = prepare_query(
+        "Rewrite this email so it sounds better.",
+        session,
+        conn,
+        config,
+    )
+
+    assert "Learned preference guidance:" not in prepared.messages[0]["content"]
+    assert prepared.attributes == []
 
 
 def test_session_add_exchange_drops_oldest_when_cap_exceeded():

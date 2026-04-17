@@ -171,3 +171,6 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - record explicit likes, dislikes, accepts, rejects, prefers, and avoids as local preference signals
 - summarize preference tendencies without exposing raw signal history
 - promote stable preference tendencies into inferred local-only attributes on demand
+- use relevant learned preferences during context assembly and prompt grounding
+- summarize preference tendencies into bounded runtime guidance instead of dumping signal history
+- deterministically score future candidates against learned preferences with transparent weights
