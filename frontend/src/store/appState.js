@@ -25,7 +25,9 @@ export function AppStateProvider({ children }) {
   const [isStreaming, setStreaming] = useState(false)
   const [toasts, setToasts] = useState([])
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
+  const [privacyPreference, setPrivacyPreference] = useState(null)
   const [activeProfile, setActiveProfile] = useState(null)
+  const [preferredProvider, setPreferredProvider] = useState(null)
   const [providerStatuses, setProviderStatuses] = useState([])
   const [securityPosture, setSecurityPosture] = useState(null)
   const [teachQuestions, setTeachQuestions] = useState([])
@@ -75,7 +77,9 @@ export function AppStateProvider({ children }) {
   const setTeachState = useCallback((payload) => {
     if (!payload) {
       setOnboardingCompleted(false)
+      setPrivacyPreference(null)
       setActiveProfile(null)
+      setPreferredProvider(null)
       setProviderStatuses([])
       setSecurityPosture(null)
       setTeachQuestions([])
@@ -83,7 +87,9 @@ export function AppStateProvider({ children }) {
       return
     }
     setOnboardingCompleted(Boolean(payload.onboarding_completed))
+    setPrivacyPreference(payload.privacy_preference ?? null)
     setActiveProfile(payload.active_profile ?? null)
+    setPreferredProvider(payload.preferred_provider ?? null)
     setProviderStatuses(payload.providers ?? [])
     setSecurityPosture(payload.security_posture ?? null)
     setTeachQuestions(payload.questions ?? [])
@@ -108,7 +114,9 @@ export function AppStateProvider({ children }) {
       addToast,
       removeToast,
       onboardingCompleted,
+      privacyPreference,
       activeProfile,
+      preferredProvider,
       providerStatuses,
       securityPosture,
       teachQuestions,
@@ -124,9 +132,11 @@ export function AppStateProvider({ children }) {
       clearMessages,
       expiresAt,
       onboardingCompleted,
+      privacyPreference,
       isAuthenticated,
       isStreaming,
       messages,
+      preferredProvider,
       providerStatuses,
       removeToast,
       securityPosture,

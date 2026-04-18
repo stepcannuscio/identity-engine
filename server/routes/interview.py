@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from engine.interview_capture import preview_interview_answer, save_preview_attributes
+from engine.setup_state import resolve_active_provider_config
 from server.db import get_db_connection
 from server.models.schemas import (
     AttributeResponse,
@@ -58,30 +59,29 @@ def _find_conflict(conn, domain: str, label: str):
 def preview(payload: InterviewPreviewRequest, request: Request) -> InterviewPreviewResponse:
     """Extract interview attributes without writing them to the database."""
     try:
-        extracted = preview_interview_answer(
-            payload.question,
-            payload.answer,
-            payload.domain,
-            request.app.state.llm_config,
-        )
+        proposed: list[CapturePreviewItem] = []
+        with get_db_connection() as conn:
+            extracted = preview_interview_answer(
+                payload.question,
+                payload.answer,
+                payload.domain,
+                resolve_active_provider_config(conn, request.app.state.llm_config),
+            )
+            for item in extracted:
+                conflict = _find_conflict(conn, item["domain"], item["label"])
+                proposed.append(
+                    CapturePreviewItem(
+                        domain=item["domain"],
+                        label=item["label"],
+                        value=item["value"],
+                        elaboration=item.get("elaboration"),
+                        mutability=item.get("mutability", "stable"),
+                        confidence=float(item.get("confidence", 0.8)),
+                        conflicts_with=_serialize_attribute(conflict) if conflict is not None else None,
+                    )
+                )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    proposed: list[CapturePreviewItem] = []
-    with get_db_connection() as conn:
-        for item in extracted:
-            conflict = _find_conflict(conn, item["domain"], item["label"])
-            proposed.append(
-                CapturePreviewItem(
-                    domain=item["domain"],
-                    label=item["label"],
-                    value=item["value"],
-                    elaboration=item.get("elaboration"),
-                    mutability=item.get("mutability", "stable"),
-                    confidence=float(item.get("confidence", 0.8)),
-                    conflicts_with=_serialize_attribute(conflict) if conflict is not None else None,
-                )
-            )
     return InterviewPreviewResponse(proposed=proposed)
 
 
@@ -89,14 +89,15 @@ def preview(payload: InterviewPreviewRequest, request: Request) -> InterviewPrev
 def interview(payload: InterviewPreviewRequest, request: Request) -> InterviewResponse:
     """Persist accepted interview attributes."""
     try:
-        accepted = payload.accepted
-        if accepted is None:
-            accepted = preview_interview_answer(
-                payload.question,
-                payload.answer,
-                payload.domain,
-                request.app.state.llm_config,
-            )
+        with get_db_connection() as conn:
+            accepted = payload.accepted
+            if accepted is None:
+                accepted = preview_interview_answer(
+                    payload.question,
+                    payload.answer,
+                    payload.domain,
+                    resolve_active_provider_config(conn, request.app.state.llm_config),
+                )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

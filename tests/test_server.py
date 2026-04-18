@@ -980,8 +980,8 @@ def test_query_returns_409_when_external_routing_violates_local_only_policy(
     client: TestClient, monkeypatch
 ):
     monkeypatch.setattr(
-        "server.routes.query.resolve_external_router",
-        lambda: ProviderConfig(
+        "server.routes.query.resolve_active_provider_config",
+        lambda *args, **kwargs: ProviderConfig(
             provider="anthropic",
             api_key="test-key",  # pragma: allowlist secret
             model="claude-sonnet-4-6",
@@ -1202,8 +1202,8 @@ def test_query_stream_emits_privacy_metadata(client: TestClient, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "server.routes.query.resolve_external_router",
-        lambda: ProviderConfig(
+        "server.routes.query.resolve_active_provider_config",
+        lambda *args, **kwargs: ProviderConfig(
             provider="anthropic",
             api_key="test-key",  # pragma: allowlist secret
             model="claude-sonnet-4-6",
@@ -1258,8 +1258,8 @@ def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypat
             _db_conn, "goals", label, value, routing="external_ok", status="confirmed"
         )
     monkeypatch.setattr(
-        "server.routes.query.resolve_external_router",
-        lambda: ProviderConfig(
+        "server.routes.query.resolve_active_provider_config",
+        lambda *args, **kwargs: ProviderConfig(
             provider="anthropic",
             api_key="test-key",  # pragma: allowlist secret
             model="claude-sonnet-4-6",
@@ -1294,8 +1294,8 @@ def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient
         routing="local_only",
     )
     monkeypatch.setattr(
-        "server.routes.query.resolve_external_router",
-        lambda: ProviderConfig(
+        "server.routes.query.resolve_active_provider_config",
+        lambda *args, **kwargs: ProviderConfig(
             provider="anthropic",
             api_key="test-key",  # pragma: allowlist secret
             model="claude-sonnet-4-6",
@@ -1546,6 +1546,8 @@ def test_security_posture_route_returns_inspected_checks(client, monkeypatch):
                 "code": "filevault",
                 "label": "FileVault",
                 "status": "enabled",
+                "recommended_value": "Enabled with a personal recovery key stored locally.",
+                "action_required": False,
                 "summary": "Enabled.",
                 "recommendation": "Keep it on.",
             }

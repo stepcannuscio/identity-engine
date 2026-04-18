@@ -6,9 +6,11 @@ from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Request
 
+from config.provider_catalog import get_provider_definition, list_external_provider_ids
 from config.settings import set_api_key
 from engine.security_posture import inspect_security_posture
 from engine.setup_state import (
+    build_privacy_preferences,
     build_recommended_profiles,
     get_app_settings,
     get_provider_statuses,
@@ -17,7 +19,9 @@ from engine.setup_state import (
 )
 from server.db import get_db_connection
 from server.models.schemas import (
+    PrivacyPreferenceOption,
     PrivacyProfileOption,
+    ProviderCredentialField,
     ProviderCredentialRequest,
     ProviderStatusResponse,
     SecurityCheckResponse,
@@ -27,23 +31,46 @@ from server.models.schemas import (
 )
 
 router = APIRouter(tags=["setup"])
-_SUPPORTED_PROVIDERS = {"anthropic", "groq"}
+_SUPPORTED_PROVIDERS = set(list_external_provider_ids())
 
 
-def _provider_statuses(conn) -> list[ProviderStatusResponse]:
-    return [
-        ProviderStatusResponse(
-            provider=status.provider,  # type: ignore[arg-type]
-            label=status.label,
-            configured=status.configured,
-            available=status.available,
-            validated=status.validated,
-            is_local=status.is_local,
-            model=status.model,
-            reason=status.reason,
-        )
-        for status in get_provider_statuses(conn)
-    ]
+def _provider_status_response(status) -> ProviderStatusResponse:
+    return ProviderStatusResponse(
+        provider=status.provider,
+        label=status.label,
+        deployment=cast(Any, getattr(status, "deployment", "local" if status.is_local else "external")),
+        trust_boundary=cast(
+            Any,
+            getattr(status, "trust_boundary", "self_hosted" if status.is_local else "external"),
+        ),
+        auth_strategy=cast(Any, getattr(status, "auth_strategy", "none" if status.is_local else "api_key")),
+        configured=status.configured,
+        available=status.available,
+        validated=status.validated,
+        is_local=status.is_local,
+        description=getattr(status, "description", None),
+        setup_hint=getattr(status, "setup_hint", None),
+        credential_fields=[
+            ProviderCredentialField(
+                name=field.name,
+                label=field.label,
+                input_type=field.input_type,
+                placeholder=field.placeholder,
+                secret=field.secret,
+            )
+            for field in getattr(status, "credential_fields", [])
+        ],
+        model=status.model,
+        reason=status.reason,
+    )
+
+
+def _privacy_preference_option(option: dict[str, str]) -> PrivacyPreferenceOption:
+    return PrivacyPreferenceOption(
+        code=cast(Any, option["code"]),
+        label=option["label"],
+        description=option["description"],
+    )
 
 
 def _profile_option(profile: dict[str, object]) -> PrivacyProfileOption:
@@ -52,20 +79,46 @@ def _profile_option(profile: dict[str, object]) -> PrivacyProfileOption:
         label=str(profile["label"]),
         description=str(profile["description"]),
         default_backend=cast(Any, str(profile["default_backend"])),
+        provider_scope=cast(Any, str(profile["provider_scope"])),
+        provider_options=[str(provider) for provider in cast(list[object], profile["provider_options"])],
+        recommended_provider=cast(str | None, profile["recommended_provider"]),
+        recommendation_reason=str(profile["recommendation_reason"]),
         requires_external_provider=bool(profile["requires_external_provider"]),
         available=bool(profile["available"]),
         recommended=bool(profile["recommended"]),
     )
 
 
-def _validate_api_key(provider: str, api_key: str) -> None:
-    value = api_key.strip()
+def _normalized_credentials(payload: ProviderCredentialRequest) -> dict[str, str]:
+    credentials = dict(payload.credentials or {})
+    if payload.api_key and "api_key" not in credentials:
+        credentials["api_key"] = payload.api_key
+    return {name: value.strip() for name, value in credentials.items() if value and value.strip()}
+
+
+def _validate_credentials(provider: str, credentials: dict[str, str]) -> None:
+    definition = get_provider_definition(provider)
+    if definition.auth_strategy != "api_key":
+        raise HTTPException(status_code=422, detail="this provider does not accept stored credentials")
+
+    value = credentials.get("api_key", "").strip()
     if len(value) < 12:
         raise HTTPException(status_code=422, detail="api key is too short")
-    if provider == "anthropic" and not value.startswith("sk-ant-"):
-        raise HTTPException(status_code=422, detail="anthropic keys should start with sk-ant-")
-    if provider == "groq" and not value.startswith("gsk_"):
-        raise HTTPException(status_code=422, detail="groq keys should start with gsk_")
+    if definition.key_prefix and not value.startswith(definition.key_prefix):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{definition.label.lower()} keys should start with {definition.key_prefix}",
+        )
+
+
+def _validate_selected_provider(profile_code: str, preferred_provider: str | None, profiles) -> None:
+    if preferred_provider is None:
+        return
+    selected_profile = next((profile for profile in profiles if profile["code"] == profile_code), None)
+    if selected_profile is None:
+        raise HTTPException(status_code=422, detail="unknown profile")
+    if preferred_provider not in cast(list[str], selected_profile["provider_options"]):
+        raise HTTPException(status_code=422, detail="provider is not compatible with the selected profile")
 
 
 @router.get("/setup/model-options", response_model=SetupOptionsResponse)
@@ -75,24 +128,22 @@ def model_options(request: Request) -> SetupOptionsResponse:
     with get_db_connection() as conn:
         settings = get_app_settings(conn)
         statuses = get_provider_statuses(conn)
-        provider_statuses = [
-            ProviderStatusResponse(
-                provider=status.provider,  # type: ignore[arg-type]
-                label=status.label,
-                configured=status.configured,
-                available=status.available,
-                validated=status.validated,
-                is_local=status.is_local,
-                model=status.model,
-                reason=status.reason,
-            )
-            for status in statuses
+        provider_statuses = [_provider_status_response(status) for status in statuses]
+        privacy_preference = cast(str | None, settings["privacy_preference"])
+        profiles = [
+            _profile_option(profile)
+            for profile in build_recommended_profiles(statuses, privacy_preference)
         ]
-        profiles = [_profile_option(profile) for profile in build_recommended_profiles(statuses)]
+        preference_options = [
+            _privacy_preference_option(option) for option in build_privacy_preferences()
+        ]
     return SetupOptionsResponse(
         providers=provider_statuses,
+        privacy_preference=cast(Any, privacy_preference),
+        privacy_preferences=preference_options,
         profiles=profiles,
         active_profile=cast(str | None, settings["active_profile"]),
+        preferred_provider=cast(str | None, settings["preferred_provider"]),
         preferred_backend=cast(Any, settings["preferred_backend"]),
     )
 
@@ -108,21 +159,13 @@ def save_provider_credentials(
     provider = provider.lower()
     if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=404, detail="unsupported provider")
-    _validate_api_key(provider, payload.api_key)
-    set_api_key(provider, payload.api_key.strip())
+    credentials = _normalized_credentials(payload)
+    _validate_credentials(provider, credentials)
+    set_api_key(provider, credentials["api_key"])
     with get_db_connection() as conn:
         statuses = {status.provider: status for status in get_provider_statuses(conn)}
         status = statuses[provider]
-    return ProviderStatusResponse(
-        provider=status.provider,  # type: ignore[arg-type]
-        label=status.label,
-        configured=status.configured,
-        available=status.available,
-        validated=status.validated,
-        is_local=status.is_local,
-        model=status.model,
-        reason=status.reason,
-    )
+    return _provider_status_response(status)
 
 
 @router.post("/setup/profile", response_model=SetupOptionsResponse)
@@ -131,36 +174,48 @@ def save_profile(payload: SetupProfileRequest, request: Request) -> SetupOptions
     _ = request
     with get_db_connection() as conn:
         statuses = get_provider_statuses(conn)
+        current_settings = get_app_settings(conn)
+        privacy_preference = payload.privacy_preference or cast(
+            str | None, current_settings["privacy_preference"]
+        )
+        profiles = build_recommended_profiles(statuses, privacy_preference)
+        _validate_selected_provider(payload.profile, payload.preferred_provider, profiles)
+        selected_profile = next(profile for profile in profiles if profile["code"] == payload.profile)
         preferred_backend = payload.preferred_backend or resolve_profile_backend(payload.profile, statuses)
+        preferred_provider = payload.preferred_provider or cast(
+            str | None, selected_profile["recommended_provider"]
+        )
         update_app_settings(
             conn,
+            privacy_preference=privacy_preference,
             active_profile=payload.profile,
+            preferred_provider=preferred_provider,
             preferred_backend=preferred_backend,
             onboarding_completed=(
                 payload.onboarding_completed
                 if payload.onboarding_completed is not None
-                else cast(bool, get_app_settings(conn)["onboarding_completed"])
+                else cast(bool, current_settings["onboarding_completed"])
             ),
         )
         settings = get_app_settings(conn)
-        provider_statuses = [
-            ProviderStatusResponse(
-                provider=status.provider,  # type: ignore[arg-type]
-                label=status.label,
-                configured=status.configured,
-                available=status.available,
-                validated=status.validated,
-                is_local=status.is_local,
-                model=status.model,
-                reason=status.reason,
+        provider_statuses = [_provider_status_response(status) for status in statuses]
+        profiles = [
+            _profile_option(profile)
+            for profile in build_recommended_profiles(
+                statuses,
+                cast(str | None, settings["privacy_preference"]),
             )
-            for status in statuses
         ]
-        profiles = [_profile_option(profile) for profile in build_recommended_profiles(statuses)]
+        preference_options = [
+            _privacy_preference_option(option) for option in build_privacy_preferences()
+        ]
     return SetupOptionsResponse(
         providers=provider_statuses,
+        privacy_preference=cast(Any, settings["privacy_preference"]),
+        privacy_preferences=preference_options,
         profiles=profiles,
         active_profile=cast(str | None, settings["active_profile"]),
+        preferred_provider=cast(str | None, settings["preferred_provider"]),
         preferred_backend=cast(Any, settings["preferred_backend"]),
     )
 

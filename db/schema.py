@@ -1,5 +1,7 @@
 """Database schema definitions and table creation."""
 
+from config.provider_catalog import list_provider_definitions
+
 DOMAINS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS domains (
     id          TEXT PRIMARY KEY,
@@ -152,7 +154,10 @@ APP_SETTINGS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS app_settings (
     id                    INTEGER PRIMARY KEY CHECK(id = 1),
     onboarding_completed  INTEGER NOT NULL DEFAULT 0 CHECK(onboarding_completed IN (0, 1)),
+    privacy_preference    TEXT
+                             CHECK(privacy_preference IN ('privacy_first', 'balanced', 'capability_first')),
     active_profile        TEXT,
+    preferred_provider    TEXT,
     preferred_backend     TEXT NOT NULL DEFAULT 'local'
                              CHECK(preferred_backend IN ('local', 'external')),
     created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -162,7 +167,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 PROVIDER_STATUS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS provider_status (
-    provider          TEXT PRIMARY KEY CHECK(provider IN ('ollama', 'anthropic', 'groq')),
+    provider          TEXT PRIMARY KEY,
+    deployment        TEXT NOT NULL CHECK(deployment IN ('local', 'external')),
+    trust_boundary    TEXT NOT NULL CHECK(trust_boundary IN ('self_hosted', 'external')),
+    auth_strategy     TEXT NOT NULL CHECK(auth_strategy IN ('none', 'api_key')),
     configured        INTEGER NOT NULL DEFAULT 0 CHECK(configured IN (0, 1)),
     validated         INTEGER NOT NULL DEFAULT 0 CHECK(validated IN (0, 1)),
     last_validated_at TIMESTAMP,
@@ -275,6 +283,30 @@ def _attributes_schema_needs_migration(conn) -> bool:
     )
 
 
+def _app_settings_schema_needs_migration(conn) -> bool:
+    app_settings_sql = _read_schema_sql(conn, kind="table", name="app_settings")
+    return bool(
+        app_settings_sql
+        and (
+            "privacy_preference" not in app_settings_sql
+            or "preferred_provider" not in app_settings_sql
+        )
+    )
+
+
+def _provider_status_schema_needs_migration(conn) -> bool:
+    provider_status_sql = _read_schema_sql(conn, kind="table", name="provider_status")
+    return bool(
+        provider_status_sql
+        and (
+            "deployment" not in provider_status_sql
+            or "trust_boundary" not in provider_status_sql
+            or "auth_strategy" not in provider_status_sql
+            or "check(provider in" in provider_status_sql
+        )
+    )
+
+
 def _migrate_attribute_tables(conn) -> None:
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
@@ -334,23 +366,87 @@ def _migrate_attribute_tables(conn) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _migrate_app_settings_table(conn) -> None:
+    conn.execute("ALTER TABLE app_settings RENAME TO app_settings_old")
+    conn.execute(APP_SETTINGS_TABLE_SQL)
+    conn.execute(
+        """
+        INSERT INTO app_settings (
+            id,
+            onboarding_completed,
+            privacy_preference,
+            active_profile,
+            preferred_provider,
+            preferred_backend,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            onboarding_completed,
+            NULL,
+            active_profile,
+            NULL,
+            preferred_backend,
+            created_at,
+            updated_at
+        FROM app_settings_old
+        """
+    )
+    conn.execute("DROP TABLE app_settings_old")
+    conn.commit()
+
+
+def _migrate_provider_status_table(conn) -> None:
+    conn.execute("DROP TABLE IF EXISTS provider_status")
+    conn.execute(PROVIDER_STATUS_TABLE_SQL)
+    conn.commit()
+
+
 def create_tables(conn) -> None:
     """Execute the full schema DDL against the given connection."""
     conn.executescript(SCHEMA_SQL)
     if _attributes_schema_needs_migration(conn):
         _migrate_attribute_tables(conn)
+    if _app_settings_schema_needs_migration(conn):
+        _migrate_app_settings_table(conn)
+    if _provider_status_schema_needs_migration(conn):
+        _migrate_provider_status_table(conn)
     conn.execute(
         """
-        INSERT OR IGNORE INTO app_settings (id, onboarding_completed, active_profile, preferred_backend)
-        VALUES (1, 0, NULL, 'local')
+        INSERT OR IGNORE INTO app_settings (
+            id,
+            onboarding_completed,
+            privacy_preference,
+            active_profile,
+            preferred_provider,
+            preferred_backend
+        )
+        VALUES (1, 0, NULL, NULL, NULL, 'local')
         """
     )
     conn.executemany(
         """
-        INSERT OR IGNORE INTO provider_status (provider, configured, validated, last_error)
-        VALUES (?, 0, 0, NULL)
+        INSERT OR IGNORE INTO provider_status (
+            provider,
+            deployment,
+            trust_boundary,
+            auth_strategy,
+            configured,
+            validated,
+            last_error
+        )
+        VALUES (?, ?, ?, ?, 0, 0, NULL)
         """,
-        [("ollama",), ("anthropic",), ("groq",)],
+        [
+            (
+                definition.provider,
+                definition.deployment,
+                definition.trust_boundary,
+                definition.auth_strategy,
+            )
+            for definition in list_provider_definitions()
+        ],
     )
     conn.commit()
 

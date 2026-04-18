@@ -139,23 +139,51 @@ class ArtifactIngestResponse(BaseModel):
 class ProviderStatusResponse(BaseModel):
     """One provider readiness summary."""
 
-    provider: Literal["ollama", "anthropic", "groq"]
+    provider: str
     label: str
+    deployment: Literal["local", "external"]
+    trust_boundary: Literal["self_hosted", "external"]
+    auth_strategy: Literal["none", "api_key"]
     configured: bool
     available: bool
     validated: bool
     is_local: bool
+    description: str | None = None
+    setup_hint: str | None = None
+    credential_fields: list["ProviderCredentialField"] = []
     model: str | None = None
     reason: str | None = None
 
 
+class ProviderCredentialField(BaseModel):
+    """One provider credential field rendered in onboarding."""
+
+    name: str
+    label: str
+    input_type: Literal["password", "text"]
+    placeholder: str | None = None
+    secret: bool = True
+
+
+class PrivacyPreferenceOption(BaseModel):
+    """One privacy preference used to rank recommended configurations."""
+
+    code: Literal["privacy_first", "balanced", "capability_first"]
+    label: str
+    description: str
+
+
 class PrivacyProfileOption(BaseModel):
-    """One selectable onboarding privacy/model profile."""
+    """One selectable onboarding model/provider configuration."""
 
     code: Literal["private_local_first", "balanced_hybrid", "external_assist"]
     label: str
     description: str
     default_backend: Literal["local", "external"]
+    provider_scope: Literal["self_hosted_only", "hybrid", "external_default"]
+    provider_options: list[str] = []
+    recommended_provider: str | None = None
+    recommendation_reason: str
     requires_external_provider: bool
     available: bool
     recommended: bool
@@ -167,6 +195,8 @@ class SecurityCheckResponse(BaseModel):
     code: str
     label: str
     status: Literal["enabled", "disabled", "unknown"]
+    recommended_value: str = ""
+    action_required: bool = False
     summary: str
     recommendation: str
 
@@ -183,8 +213,11 @@ class SetupOptionsResponse(BaseModel):
     """Current provider readiness and recommended profiles."""
 
     providers: list[ProviderStatusResponse]
+    privacy_preference: Literal["privacy_first", "balanced", "capability_first"] | None = None
+    privacy_preferences: list[PrivacyPreferenceOption]
     profiles: list[PrivacyProfileOption]
     active_profile: str | None
+    preferred_provider: str | None = None
     preferred_backend: Literal["local", "external"]
 
 
@@ -192,6 +225,8 @@ class SetupProfileRequest(BaseModel):
     """Persisted onboarding profile selection."""
 
     profile: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    privacy_preference: Literal["privacy_first", "balanced", "capability_first"] | None = None
+    preferred_provider: str | None = None
     preferred_backend: Literal["local", "external"] | None = None
     onboarding_completed: bool | None = None
 
@@ -199,7 +234,8 @@ class SetupProfileRequest(BaseModel):
 class ProviderCredentialRequest(BaseModel):
     """Credential payload for a supported external provider."""
 
-    api_key: str
+    api_key: str | None = None
+    credentials: dict[str, str] | None = None
 
 
 class TeachQuestionResponse(BaseModel):
@@ -227,7 +263,10 @@ class TeachBootstrapResponse(BaseModel):
     """Combined onboarding/bootstrap payload for the Teach tab."""
 
     onboarding_completed: bool
+    privacy_preference: Literal["privacy_first", "balanced", "capability_first"] | None = None
+    privacy_preferences: list[PrivacyPreferenceOption]
     active_profile: str | None
+    preferred_provider: str | None = None
     preferred_backend: Literal["local", "external"]
     providers: list[ProviderStatusResponse]
     profiles: list[PrivacyProfileOption]

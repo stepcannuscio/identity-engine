@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from engine.capture import capture as save_capture
 from engine.capture import preview_capture
 from engine.capture import save_preview_attributes
+from engine.setup_state import resolve_active_provider_config
 from server.db import get_db_connection
 from server.models.schemas import (
     CapturePreviewItem,
@@ -47,13 +48,13 @@ def _find_conflict(conn, domain: str, label: str):
 @router.post("/capture/preview", response_model=CapturePreviewResponse)
 def preview(payload: CaptureRequest, request: Request) -> CapturePreviewResponse:
     """Extract capture attributes without writing them to the database."""
-    extracted = preview_capture(
-        payload.text,
-        payload.domain_hint,
-        request.app.state.llm_config,
-    )
     proposed: list[CapturePreviewItem] = []
     with get_db_connection() as conn:
+        extracted = preview_capture(
+            payload.text,
+            payload.domain_hint,
+            resolve_active_provider_config(conn, request.app.state.llm_config),
+        )
         for item in extracted:
             conflict = _find_conflict(conn, item["domain"], item["label"])
             proposed.append(
@@ -84,7 +85,7 @@ def capture(payload: CaptureRequest, request: Request) -> CaptureResponse:
                 payload.text,
                 payload.domain_hint,
                 conn,
-                request.app.state.llm_config,
+                resolve_active_provider_config(conn, request.app.state.llm_config),
                 confirm=False,
             )
         attributes = []

@@ -432,10 +432,32 @@ button {
   background: var(--color-accent-light);
 }
 
+.teach-profile-header,
+.teach-provider-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.teach-provider-meta,
+.teach-inline-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .teach-profile-card em {
   color: var(--color-accent);
   font-size: 12px;
   font-style: normal;
+}
+
+.teach-field {
+  display: grid;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
 .teach-question {

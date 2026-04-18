@@ -180,9 +180,9 @@ export const getSetupModelOptions = async () => {
   return data
 }
 
-export const saveProviderCredentials = async (provider, apiKey) => {
+export const saveProviderCredentials = async (provider, credentials) => {
   const { data } = await client.post(`/setup/providers/${provider}/credentials`, {
-    api_key: apiKey,
+    credentials,
   })
   return data
 }

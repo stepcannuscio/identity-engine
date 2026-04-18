@@ -28,7 +28,7 @@ function renderUseAuth(options) {
 describe('useAuth', () => {
   it('boots from session storage and validates the token', async () => {
     sessionStorage.setItem('session_token', 'session-token')
-    getAuthStatus.mockResolvedValue({ expires_at: '2026-04-18T12:00:00Z' })
+    getAuthStatus.mockResolvedValue({ expires_at: '2030-04-18T12:00:00Z' })
 
     const { result } = renderUseAuth()
 
@@ -38,7 +38,7 @@ describe('useAuth', () => {
 
     expect(getAuthStatus).toHaveBeenCalledTimes(1)
     expect(result.current.state.token).toBe('session-token')
-    expect(result.current.state.expiresAt).toBe('2026-04-18T12:00:00Z')
+    expect(result.current.state.expiresAt).toBe('2030-04-18T12:00:00Z')
   })
 
   it('clears the session when the backend reports an expired token', async () => {
@@ -58,7 +58,7 @@ describe('useAuth', () => {
   it('polls auth status every five minutes while authenticated', async () => {
     vi.useFakeTimers()
     sessionStorage.setItem('session_token', 'session-token')
-    getAuthStatus.mockResolvedValue({ expires_at: '2026-04-18T12:00:00Z' })
+    getAuthStatus.mockResolvedValue({ expires_at: '2030-04-18T12:00:00Z' })
 
     renderUseAuth()
 
@@ -78,7 +78,7 @@ describe('useAuth', () => {
   it('stores the session token on login', async () => {
     loginRequest.mockResolvedValue({
       token: 'new-token',
-      expires_at: '2026-04-18T12:00:00Z',
+      expires_at: '2030-04-18T12:00:00Z',
     })
 
     const { result } = renderUseAuth()
@@ -93,7 +93,7 @@ describe('useAuth', () => {
   })
 
   it('clears messages and auth state on logout even when the request fails', async () => {
-    getAuthStatus.mockResolvedValue({ expires_at: '2026-04-18T12:00:00Z' })
+    getAuthStatus.mockResolvedValue({ expires_at: '2030-04-18T12:00:00Z' })
     logoutRequest.mockRejectedValue(new Error('network failed'))
 
     const { result } = renderUseAuth({

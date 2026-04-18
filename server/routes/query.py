@@ -9,12 +9,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from config.llm_router import (
-    ConfigurationError,
-    ProviderConfig,
-    resolve_external_router,
-    resolve_local_router,
-)
+from config.llm_router import ConfigurationError, ProviderConfig
 from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
 from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
@@ -25,6 +20,7 @@ from engine.query_engine import (
     record_blocked_query,
     record_query_result,
 )
+from engine.setup_state import resolve_active_provider_config
 from server.db import get_db_connection
 from server.models.schemas import (
     AcquisitionPlan,
@@ -64,14 +60,14 @@ def _event(payload: dict) -> str:
     return f"data: {json.dumps(payload, default=str)}\n\n"
 
 
-def _resolve_provider(default_config: ProviderConfig, override: str | None) -> ProviderConfig:
-    if override is None:
-        return default_config
-    if override == "local":
-        return default_config if default_config.is_local else resolve_local_router()
-    if override == "external":
-        return default_config if not default_config.is_local else resolve_external_router()
-    raise HTTPException(status_code=400, detail="invalid backend_override")
+def _resolve_provider(conn, default_config: ProviderConfig, override: str | None) -> ProviderConfig:
+    if override not in {None, "local", "external"}:
+        raise HTTPException(status_code=400, detail="invalid backend_override")
+    return resolve_active_provider_config(
+        conn,
+        default_config,
+        backend_override=override,
+    )
 
 
 def _is_sensitive_query(query_text: str, attributes: list[dict]) -> bool:
@@ -235,11 +231,12 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
     provider_config = request.app.state.llm_config
     context = None
     try:
-        provider_config = _resolve_provider(
-            request.app.state.llm_config,
-            payload.backend_override,
-        )
         with get_db_connection() as conn:
+            provider_config = _resolve_provider(
+                conn,
+                request.app.state.llm_config,
+                payload.backend_override,
+            )
             context = prepare_query(
                 payload.query,
                 request.app.state.current_session,
@@ -303,13 +300,14 @@ def query_stream(
     provider_config = request.app.state.llm_config
     context = None
     try:
-        provider_config = _resolve_provider(
-            request.app.state.llm_config,
-            payload.backend_override,
-        )
         # Resolve identity context before streaming starts so the DB connection
         # closes immediately instead of staying open for the whole SSE response.
         with get_db_connection() as conn:
+            provider_config = _resolve_provider(
+                conn,
+                request.app.state.llm_config,
+                payload.backend_override,
+            )
             context = prepare_query(
                 payload.query,
                 request.app.state.current_session,

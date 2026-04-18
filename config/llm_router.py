@@ -28,6 +28,7 @@ from typing import Any, cast
 
 import requests
 
+from config.provider_catalog import get_provider_definition, list_external_provider_ids
 # All keychain reads go through settings.get_api_key — never call keyring here.
 from config.settings import get_api_key
 
@@ -287,24 +288,26 @@ def resolve_local_router() -> ProviderConfig:
     return _resolve_local_router(detect_hardware())
 
 
-def _resolve_external_router(hw: dict[str, Any]) -> ProviderConfig:
-    anthropic_key = get_api_key("anthropic")
-    if anthropic_key:
-        return ProviderConfig(
-            provider="anthropic",
-            api_key=anthropic_key,
-            model="claude-sonnet-4-6",
-            is_local=False,
-            arch=hw["arch"],
-            ram_gb=hw["ram_gb"],
-        )
+def _resolve_external_router(
+    hw: dict[str, Any],
+    preferred_provider: str | None = None,
+) -> ProviderConfig:
+    ordered_providers = list_external_provider_ids()
+    if preferred_provider:
+        ordered_providers = [
+            preferred_provider,
+            *[provider for provider in ordered_providers if provider != preferred_provider],
+        ]
 
-    groq_key = get_api_key("groq")
-    if groq_key:
+    for provider in ordered_providers:
+        definition = get_provider_definition(provider)
+        api_key = get_api_key(provider)
+        if not api_key:
+            continue
         return ProviderConfig(
-            provider="groq",
-            api_key=groq_key,
-            model="llama-3.1-8b-instant",
+            provider=provider,
+            api_key=api_key,
+            model=definition.default_model or "",
             is_local=False,
             arch=hw["arch"],
             ram_gb=hw["ram_gb"],
@@ -318,9 +321,19 @@ def _resolve_external_router(hw: dict[str, Any]) -> ProviderConfig:
     )
 
 
-def resolve_external_router() -> ProviderConfig:
+def resolve_external_router(preferred_provider: str | None = None) -> ProviderConfig:
     """Resolve an external-only backend or raise ConfigurationError."""
-    return _resolve_external_router(detect_hardware())
+    return _resolve_external_router(detect_hardware(), preferred_provider=preferred_provider)
+
+
+def resolve_provider_router(provider: str) -> ProviderConfig:
+    """Resolve a specific named provider or raise ConfigurationError."""
+    hw = detect_hardware()
+    if provider == "ollama":
+        return _resolve_local_router(hw)
+    if provider in list_external_provider_ids():
+        return _resolve_external_router(hw, preferred_provider=provider)
+    raise ConfigurationError(f"Unknown provider: {provider!r}")
 
 
 def resolve_router() -> ProviderConfig:

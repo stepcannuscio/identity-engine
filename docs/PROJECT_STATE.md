@@ -240,14 +240,30 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - setup state is stored explicitly, not as a generic blob:
   - `app_settings`
   - `provider_status`
+- setup state now persists:
+  - `privacy_preference`
+  - `active_profile`
+  - `preferred_provider`
+  - `preferred_backend`
+- provider setup now uses a shared provider catalog rather than hard-coded cards
+- provider metadata now distinguishes:
+  - deployment location (`local` vs `external`)
+  - trust boundary (`self_hosted` vs third-party external)
+  - auth strategy (`none` vs `api_key`)
 - the backend now recommends three model/privacy profiles:
   - `private_local_first`
   - `balanced_hybrid`
   - `external_assist`
-- recommendations are derived from local hardware plus currently configured
-  providers
+- onboarding now also captures a privacy preference:
+  - `privacy_first`
+  - `balanced`
+  - `capability_first`
+- configuration recommendations are derived from local hardware, the selected
+  privacy preference, and currently configured providers
 - external provider credentials are stored in the system keychain only and are
   managed through setup routes, not the database
+- runtime provider resolution now honors the saved preferred provider when the
+  user chooses an external-backed configuration
 - setup APIs now expose:
   - `GET /setup/model-options`
   - `POST /setup/providers/{provider}/credentials`
@@ -258,6 +274,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - personal recovery key availability when detectable
   - immediate password after sleep/screensaver
   - auto-login disabled / login required at boot
+- security recommendations now surface the recommended target state and whether
+  an update is currently recommended
 
 ---
 
@@ -348,7 +366,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - guide first-run onboarding through the Teach tab instead of relying on the
   terminal interview as the primary UX
 - recommend local/external model profiles based on hardware and configured providers
-- persist the selected profile and use it to hydrate the frontend's default query backend
+- persist the selected privacy preference, configuration, and provider choice
+- use the saved configuration to hydrate the frontend's default query backend
+- use the saved preferred provider for external routing across query and Teach flows
 - collect structured feedback on Teach questions so irrelevant or duplicate
   prompts are downranked over time
 - parse tagged local `.pdf` and `.docx` uploads without introducing OCR or an

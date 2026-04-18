@@ -7,6 +7,8 @@ from pathlib import Path
 import keyring
 from keyring.errors import KeyringError
 
+from config.provider_catalog import PROVIDER_DEFINITIONS
+
 logger = logging.getLogger(__name__)
 
 DB_DIR = Path.home() / ".identity-engine"
@@ -34,8 +36,9 @@ EVOLVING = "evolving"
 
 
 _PROVIDER_KEY_MAP = {
-    "anthropic": "anthropic-api-key",
-    "groq":      "groq-api-key",
+    provider: definition.keyring_username
+    for provider, definition in PROVIDER_DEFINITIONS.items()
+    if definition.keyring_username is not None
 }
 
 
