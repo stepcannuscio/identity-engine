@@ -90,6 +90,7 @@ def test_all_tables_created(conn):
         "inference_evidence",
         "reflection_sessions",
         "preference_signals",
+        "query_feedback",
     }
     assert expected.issubset(tables)
 

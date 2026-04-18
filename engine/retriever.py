@@ -7,8 +7,10 @@ and returns the most relevant context for prompt grounding.
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
+from datetime import UTC, datetime
+
+from engine.text_utils import contains_any_phrase, find_matching_phrases, tokenize
 
 SIMPLE_BUDGET = {
     "max_attributes": 8,
@@ -62,13 +64,14 @@ STOPWORDS = {
     "can", "should", "would", "will", "me", "you", "it", "this", "that",
     "and", "or", "but", "in", "on", "at", "to", "of", "for",
 }
-
-TOKEN_RE = re.compile(r"[a-z0-9']+")
+_RECENT_CONFIRM_DAYS = 180
+_STALE_CONFIRM_DAYS = 540
+_RECENT_UPDATE_DAYS = 120
+_PHRASE_BOOST_CAP = 0.15
 
 
 def _tokenize(text: str) -> set[str]:
-    tokens = {t for t in TOKEN_RE.findall(text.lower()) if t not in STOPWORDS}
-    return tokens
+    return tokenize(text, stopwords=STOPWORDS)
 
 
 def _query_domains(query: str) -> set[str]:
@@ -82,28 +85,134 @@ def _query_domains(query: str) -> set[str]:
     return matched
 
 
-def score_attribute(query: str, attribute: dict) -> float:
+def _parse_timestamp(value: object) -> datetime | None:
+    if value in {None, ""}:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _recency_score(attribute: dict) -> float:
+    now = datetime.now(UTC)
+    last_confirmed = _parse_timestamp(attribute.get("last_confirmed"))
+    updated_at = _parse_timestamp(attribute.get("updated_at"))
+
+    if last_confirmed is not None:
+        age_days = (now - last_confirmed).days
+        if age_days <= _RECENT_CONFIRM_DAYS:
+            return 0.10
+        if age_days <= _STALE_CONFIRM_DAYS:
+            return 0.04
+        return -0.04
+
+    if updated_at is not None:
+        age_days = (now - updated_at).days
+        if age_days <= _RECENT_UPDATE_DAYS:
+            return 0.04
+        if age_days > _STALE_CONFIRM_DAYS:
+            return -0.06
+    return 0.0
+
+
+def _stability_penalty(attribute: dict) -> float:
+    prior_versions = int(attribute.get("prior_versions", 0) or 0)
+    if prior_versions <= 0:
+        return 0.0
+    if attribute.get("status") == "confirmed":
+        return -min(prior_versions * 0.02, 0.05)
+    return -min(prior_versions * 0.04, 0.12)
+
+
+def _phrase_boost(query: str, attribute: dict) -> float:
+    query_phrases = [
+        phrase
+        for phrase in (
+            "sound like me",
+            "my values",
+            "my goals",
+            "my voice",
+            "my patterns",
+            "deep work",
+            "writing style",
+            "next step",
+        )
+        if phrase in query.lower()
+    ]
+    if not query_phrases:
+        return 0.0
+
+    attribute_text = " ".join(
+        str(attribute.get(key, "") or "")
+        for key in ("label", "value", "elaboration")
+    ).lower()
+    matches = find_matching_phrases(attribute_text, query_phrases)
+    return min(len(matches) * 0.05, _PHRASE_BOOST_CAP)
+
+
+def score_attribute(
+    query: str,
+    attribute: dict,
+    *,
+    domain_hints: list[str] | None = None,
+    intent_tags: list[str] | None = None,
+) -> float:
     """Score an attribute against the query using deterministic relevance heuristics."""
     query_tokens = _tokenize(query)
-    attr_text = f"{attribute.get('label', '')} {attribute.get('value', '')}"
-    attr_tokens = _tokenize(attr_text)
+    label_tokens = _tokenize(str(attribute.get("label", "")))
+    value_tokens = _tokenize(str(attribute.get("value", "")))
+    elaboration_tokens = _tokenize(str(attribute.get("elaboration", "") or ""))
 
-    if not query_tokens or not attr_tokens:
-        keyword_score = 0.0
+    if not query_tokens:
+        lexical_score = 0.0
     else:
-        overlap = len(query_tokens.intersection(attr_tokens))
-        keyword_score = overlap / max(len(query_tokens), len(attr_tokens))
+        label_overlap = len(query_tokens.intersection(label_tokens)) / max(len(query_tokens), 1)
+        value_overlap = len(query_tokens.intersection(value_tokens)) / max(len(query_tokens), 1)
+        elaboration_overlap = len(query_tokens.intersection(elaboration_tokens)) / max(
+            len(query_tokens),
+            1,
+        )
+        lexical_score = (label_overlap * 0.50) + (value_overlap * 0.35) + (elaboration_overlap * 0.15)
 
-    matched_domains = _query_domains(query)
+    matched_domains = set(domain_hints or []) or _query_domains(query)
+    domain_score = 0.0
     if matched_domains and attribute.get("domain") in matched_domains:
-        domain_score = 0.3
-    else:
-        domain_score = 0.0
+        domain_score += 0.40
+    if "planning" in (intent_tags or []) and attribute.get("domain") in {"goals", "patterns"}:
+        domain_score += 0.10
+    if "voice_adaptation" in (intent_tags or []) and attribute.get("domain") == "voice":
+        domain_score += 0.10
 
     confidence = float(attribute.get("confidence", 0.0) or 0.0)
-    confirmed_bonus = 0.1 if attribute.get("status") == "confirmed" else 0.0
+    status = str(attribute.get("status", ""))
+    source = str(attribute.get("source", ""))
+    trust_score = 0.0
+    if status == "confirmed":
+        trust_score += 0.18
+    elif status == "active":
+        trust_score += 0.08
+    if source in {"explicit", "reflection"}:
+        trust_score += 0.04
+    elif source == "inferred":
+        trust_score -= 0.05
 
-    return (keyword_score * 0.5) + (domain_score * 0.3) + (confidence * 0.2) + confirmed_bonus
+    return round(
+        max(
+            0.0,
+            (lexical_score * 0.42)
+            + (domain_score * 0.30)
+            + (confidence * 0.16)
+            + trust_score
+            + _recency_score(attribute)
+            + _phrase_boost(query, attribute)
+            + _stability_penalty(attribute),
+        ),
+        4,
+    )
 
 
 def budget_for_query_type(query_type: str) -> dict:
@@ -207,7 +316,14 @@ def _apply_domain_cap(results: list[dict], max_domains: int, max_attributes: int
     return selected
 
 
-def retrieve_attribute_candidates(query: str, query_type: str, conn) -> list[dict]:
+def retrieve_attribute_candidates(
+    query: str,
+    query_type: str,
+    conn,
+    *,
+    domain_hints: list[str] | None = None,
+    intent_tags: list[str] | None = None,
+) -> list[dict]:
     """Return scored identity-attribute candidates before final prompt blending."""
     rows = conn.execute(
         """
@@ -219,7 +335,17 @@ def retrieve_attribute_candidates(query: str, query_type: str, conn) -> list[dic
             a.elaboration,
             a.confidence,
             a.routing,
-            a.status
+            a.status,
+            a.source,
+            a.updated_at,
+            a.last_confirmed,
+            (
+                SELECT COUNT(*)
+                FROM attributes history
+                WHERE history.domain_id = a.domain_id
+                  AND history.label = a.label
+                  AND history.status IN ('superseded', 'rejected', 'retracted')
+            ) AS prior_versions
         FROM attributes a
         JOIN domains d ON d.id = a.domain_id
         WHERE a.status IN ('active', 'confirmed')
@@ -237,8 +363,17 @@ def retrieve_attribute_candidates(query: str, query_type: str, conn) -> list[dic
             "confidence": float(row[5]),
             "routing": row[6],
             "status": row[7],
+            "source": row[8],
+            "updated_at": row[9],
+            "last_confirmed": row[10],
+            "prior_versions": int(row[11] or 0),
         }
-        attr["score"] = score_attribute(query, attr)
+        attr["score"] = score_attribute(
+            query,
+            attr,
+            domain_hints=domain_hints,
+            intent_tags=intent_tags,
+        )
         scored.append(attr)
 
     scored.sort(key=lambda x: x["score"], reverse=True)

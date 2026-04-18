@@ -33,6 +33,7 @@ weights are explicit constants so decisions are reproducible and explainable.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from engine.context_assembler import AssembledContext
@@ -82,6 +83,10 @@ ARTIFACT_SCORE_CAP = 20
 # ---------------------------------------------------------------------------
 CONSISTENCY_MULTI_SIGNAL_BONUS = 5  # all three components contribute
 CONSISTENCY_SPLIT_PENALTY = -5      # strong conflicting preference signals
+CONSISTENCY_CONFIRMED_ALIGNMENT_BONUS = 3
+STALE_ATTRIBUTE_PENALTY = -4
+MOSTLY_INFERRED_PENALTY = -4
+STALE_UPDATE_DAYS = 365
 
 # ---------------------------------------------------------------------------
 # Classification thresholds — global defaults
@@ -289,6 +294,8 @@ def _score_consistency(
     attribute_score: float,
     preference_score: float,
     artifact_score: float,
+    attributes: list[dict],
+    preference_attributes: list[dict],
     preference_summary: PreferenceSummaryPayload,
 ) -> float:
     """Return a small consistency adjustment.
@@ -305,6 +312,13 @@ def _score_consistency(
     if attribute_score > 0 and preference_score > 0 and artifact_score > 0:
         adjustment += CONSISTENCY_MULTI_SIGNAL_BONUS
 
+    has_confirmed_identity = any(str(a.get("status", "")) == "confirmed" for a in attributes)
+    has_confirmed_preference = any(
+        str(a.get("status", "")) == "confirmed" for a in preference_attributes
+    )
+    if has_confirmed_identity and has_confirmed_preference:
+        adjustment += CONSISTENCY_CONFIRMED_ALIGNMENT_BONUS
+
     positive_items = preference_summary["positive"]
     negative_items = preference_summary["negative"]
     if positive_items and negative_items:
@@ -318,6 +332,44 @@ def _score_consistency(
             adjustment += CONSISTENCY_SPLIT_PENALTY
 
     return float(adjustment)
+
+
+def _recency_penalty(attributes: list[dict]) -> float:
+    def _parse_timestamp(value: object) -> datetime | None:
+        if value in {None, ""}:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    stale = 0
+    inferred = 0
+    total = 0
+    now = datetime.now(UTC)
+    for attribute in attributes:
+        total += 1
+        if str(attribute.get("source", "")) in _INFERRED_SOURCES:
+            inferred += 1
+        last_confirmed = attribute.get("last_confirmed")
+        updated_at = attribute.get("updated_at")
+        updated_at_dt = _parse_timestamp(updated_at)
+        if (
+            last_confirmed in {None, ""}
+            and updated_at_dt is not None
+            and (now - updated_at_dt).days >= STALE_UPDATE_DAYS
+        ):
+            stale += 1
+
+    penalty = 0.0
+    if total and stale == total:
+        penalty += STALE_ATTRIBUTE_PENALTY
+    if total >= 2 and inferred / total >= 0.6:
+        penalty += MOSTLY_INFERRED_PENALTY
+    return penalty
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +497,9 @@ def evaluate_coverage(
     """
     profile = context.source_profile
     thresholds = _PROFILE_THRESHOLDS.get(profile, _PROFILE_THRESHOLDS["general"])
+    if "planning" in context.intent_tags:
+        high_t, medium_t, low_t, insuf_t = thresholds
+        thresholds = (max(high_t - 2, medium_t), max(medium_t - 2, low_t), low_t, insuf_t)
 
     attribute_score = _score_attributes(context.attributes, backend)
     preference_score, has_pref_attr_support = _score_preferences(
@@ -461,10 +516,17 @@ def evaluate_coverage(
         attribute_score,
         preference_score,
         artifact_score,
+        context.attributes,
+        context.preference_attributes,
         context.preference_summary,
     )
-
-    raw_score = attribute_score + preference_score + artifact_score + consistency_adj
+    consistency_adj += _recency_penalty(context.attributes)
+    raw_score = (
+        attribute_score
+        + preference_score
+        + artifact_score
+        + consistency_adj
+    )
 
     raw_score, cap_applied = _apply_guardrails(
         raw_score,

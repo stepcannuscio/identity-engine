@@ -19,6 +19,8 @@ This document captures the current system state after completing:
 - Unified Onboarding + Teach Flow
 - Profile-Based Model Setup
 - Machine Security Recommendations
+- Query Usefulness Tuning + Eval Harness
+- Query Feedback Loop
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -277,6 +279,55 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - security recommendations now surface the recommended target state and whether
   an update is currently recommended
 
+### 20. Query Usefulness Tuning Layer
+- query planning now keeps the public `query_type` stable while extending the
+  internal plan with:
+  - `intent_tags`
+  - `domain_hints`
+  - `classification_reason`
+- source-profile classification remains deterministic but now uses:
+  - normalized tokens
+  - ordered phrase rules
+  - planning / writing / artifact cues
+  - explicit false-positive prevention for generic terms
+- identity retrieval scoring now incorporates:
+  - normalized label/value/elaboration overlap
+  - phrase boosts
+  - stronger domain-intent bonuses
+  - freshness from `last_confirmed` / `updated_at`
+  - correction-aware penalties for unstable labels with prior non-current versions
+- preference and artifact selection now also use stronger domain-aware scoring
+  so planning and self-model questions are grounded more usefully without
+  adding a probabilistic reranker
+- planning-oriented preference-sensitive queries now bias toward current goals,
+  focus patterns, and stable preference evidence rather than generic retrieval
+
+### 21. Query Calibration + Feedback Layer
+- query responses now include privacy-safe `metadata.intent` with:
+  - `source_profile`
+  - `intent_tags`
+  - `domain_hints`
+- local-only query usefulness feedback is now persisted through:
+  - `POST /query/feedback`
+  - `query_feedback`
+- feedback labels are:
+  - `helpful`
+  - `ungrounded`
+  - `missed_context`
+  - `wrong_focus`
+- query feedback is stored separately from canonical attributes and does not
+  auto-promote into identity truth
+- the repository now includes a versioned deterministic query eval corpus at:
+  - `evals/query_usefulness/v1.json`
+- the evaluation runner lives at:
+  - `python -m engine.query_eval`
+- the eval harness exercises:
+  - self-reflection grounding
+  - planning support
+  - artifact lookup behavior
+  - thin-context acquisition suggestions
+  - external-block detection
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -318,6 +369,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - preference promotion must not recreate rejected attributes or overwrite refined values
 - onboarding/profile/provider state must live in explicit tables, not a generic
   JSON blob
+- query usefulness feedback must remain local-only and separate from canonical
+  identity truth
 
 ---
 
@@ -374,3 +427,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - parse tagged local `.pdf` and `.docx` uploads without introducing OCR or an
   external document service
 - inspect and surface macOS security recommendations without blocking the user
+- classify self, planning, writing, and artifact-reference queries more precisely
+  without changing the public query API
+- expose privacy-safe query intent metadata for UI and local feedback workflows
+- rank identity evidence with recency, trust, and label-stability signals
+- store local-only answer usefulness feedback for future calibration and review
+- run a deterministic query usefulness eval corpus without calling an LLM

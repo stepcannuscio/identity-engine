@@ -48,16 +48,29 @@ def _insert_attribute(
     confidence: float = 0.9,
     routing: str = "local_only",
     status: str = "active",
+    source: str = "reflection",
+    last_confirmed: str | None = "2026-04-08T12:00:00+00:00",
 ) -> None:
     conn.execute(
         """
         INSERT INTO attributes (
             id, domain_id, label, value, elaboration, mutability, source, confidence,
-            routing, status
+            routing, status, created_at, updated_at, last_confirmed
         )
-        VALUES (?, ?, ?, ?, ?, 'stable', 'reflection', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 'stable', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
         """,
-        (str(uuid.uuid4()), domain_id, label, value, None, confidence, routing, status),
+        (
+            str(uuid.uuid4()),
+            domain_id,
+            label,
+            value,
+            None,
+            source,
+            confidence,
+            routing,
+            status,
+            last_confirmed,
+        ),
     )
     conn.commit()
 
@@ -108,6 +121,23 @@ def test_build_query_plan_keeps_public_query_type_stable():
 
     assert plan.retrieval_mode == "simple"
     assert plan.source_profile == "preference_sensitive"
+    assert "writing_task" in plan.intent_tags
+    assert plan.classification_reason
+
+
+def test_build_query_plan_extracts_planning_domain_hints():
+    plan = build_query_plan("How should I plan my week so I stay focused?")
+
+    assert plan.source_profile == "preference_sensitive"
+    assert "planning" in plan.intent_tags
+    assert "goals" in plan.domain_hints
+    assert "patterns" in plan.domain_hints
+
+
+def test_build_query_plan_prevents_write_term_from_becoming_self_question():
+    plan = build_query_plan("Write a quick summary for me.")
+
+    assert plan.source_profile == "general"
 
 
 def test_score_attribute_higher_for_direct_keyword_match():
@@ -231,6 +261,49 @@ def test_score_attribute_prefers_confirmed_status_when_other_signals_match():
     }
 
     assert score_attribute(query_text, confirmed) > score_attribute(query_text, active)
+
+
+def test_score_attribute_penalizes_unstable_label_history():
+    query_text = "What is my main goal?"
+    stable = {
+        "label": "primary_goal",
+        "value": "Build the product carefully.",
+        "domain": "goals",
+        "confidence": 0.85,
+        "status": "active",
+        "source": "reflection",
+        "prior_versions": 0,
+    }
+    unstable = {**stable, "prior_versions": 3}
+
+    assert score_attribute(query_text, stable) > score_attribute(query_text, unstable)
+
+
+def test_retrieve_attribute_candidates_prefers_recently_confirmed_goal(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "weekly_priority",
+        "Protect focus time for the main project.",
+        confidence=0.9,
+        routing="external_ok",
+        status="confirmed",
+        last_confirmed="2026-04-18T12:00:00+00:00",
+    )
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "weekly_priority_old",
+        "Protect focus time for the main project.",
+        confidence=0.9,
+        routing="external_ok",
+        status="active",
+        last_confirmed=None,
+    )
+
+    results = retrieve_attributes("What is my main goal this week?", "simple", conn)
+
+    assert results[0]["label"] == "weekly_priority"
 
 
 def test_build_prompt_includes_system_message_first():

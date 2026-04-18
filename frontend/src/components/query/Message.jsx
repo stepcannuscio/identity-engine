@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import AcquisitionPanel from './AcquisitionPanel.jsx'
+import QueryFeedbackPanel from './QueryFeedbackPanel.jsx'
 import PrivacyStatus from '../privacy/PrivacyStatus.jsx'
 
 function formatDuration(durationMs) {
@@ -54,6 +55,7 @@ export default function Message({ message }) {
           </ReactMarkdown>
         </div>
         <AcquisitionPanel acquisition={message.metadata?.acquisition} />
+        {message.query ? <QueryFeedbackPanel message={message} /> : null}
         <PrivacyStatus privacy={message.metadata?.privacy} />
         {renderMetadata(message.metadata)}
       </div>

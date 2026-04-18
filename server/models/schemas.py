@@ -35,6 +35,19 @@ class QueryRequest(BaseModel):
     backend_override: str | None = None
 
 
+class QueryIntentMetadata(BaseModel):
+    """Privacy-safe query-planning metadata for UI and feedback."""
+
+    source_profile: Literal[
+        "self_question",
+        "evidence_based",
+        "preference_sensitive",
+        "general",
+    ]
+    intent_tags: list[str] = []
+    domain_hints: list[str] = []
+
+
 class PrivacyState(BaseModel):
     """Privacy-safe execution summary for frontend display."""
 
@@ -82,6 +95,7 @@ class QueryMetadata(BaseModel):
     """Metadata emitted for each query response."""
 
     query_type: str
+    intent: QueryIntentMetadata
     attributes_used: int
     backend_used: str
     domains_referenced: list[str]
@@ -96,6 +110,32 @@ class QueryMetadata(BaseModel):
     coverage: CoverageCounts
     coverage_notes: str | None = None
     acquisition: AcquisitionPlan
+
+
+class QueryFeedbackRequest(BaseModel):
+    """Request body for local-only query usefulness feedback."""
+
+    query: str
+    response: str
+    feedback: Literal["helpful", "ungrounded", "missed_context", "wrong_focus"]
+    notes: str | None = None
+    query_type: str
+    backend_used: Literal["local", "external"]
+    confidence: Literal[
+        "high_confidence",
+        "medium_confidence",
+        "low_confidence",
+        "insufficient_data",
+    ]
+    intent: QueryIntentMetadata
+    domains_referenced: list[str] = []
+
+
+class QueryFeedbackResponse(BaseModel):
+    """Response returned after storing query feedback."""
+
+    id: str
+    stored: bool = True
 
 
 class RoutingLogEntry(BaseModel):

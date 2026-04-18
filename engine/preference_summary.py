@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
+from datetime import UTC, datetime
 from typing import NotRequired, Required, TypedDict
 
 from db.preference_signals import PreferenceSignalSummary, summarize_preference_signals
+from engine.text_utils import tokenize
 
 _PREFERENCE_LABEL_PREFIX = "preference_"
 
@@ -107,9 +108,6 @@ _DOMAIN_PROFILE_BOOSTS = {
 _POSITIVE_TERMS = {"accept", "like", "prefer"}
 _NEGATIVE_TERMS = {"avoid", "dislike", "reject"}
 
-_TOKEN_RE = re.compile(r"[a-z0-9']+")
-
-
 class PreferenceSummaryItem(TypedDict, total=False):
     """One bounded preference item used for prompting or ranking."""
 
@@ -169,19 +167,8 @@ def preference_budget_for_query_type(query_type: str) -> dict[str, int]:
     return _SIMPLE_CAPS if query_type == "simple" else _OPEN_ENDED_CAPS
 
 
-def _normalize_token(token: str) -> str:
-    normalized = token.lower()
-    if len(normalized) > 4 and normalized.endswith("s"):
-        return normalized[:-1]
-    return normalized
-
-
 def _tokenize(text: str) -> set[str]:
-    return {
-        _normalize_token(token)
-        for token in _TOKEN_RE.findall(text.lower())
-        if _normalize_token(token) not in _STOPWORDS
-    }
+    return tokenize(text, stopwords=_STOPWORDS)
 
 
 def _detect_task_profiles(query: str) -> list[str]:
@@ -197,6 +184,31 @@ def _overlap_score(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left.intersection(right)) / max(len(left), len(right))
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if value in {None, ""}:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _preference_recency(attribute: dict) -> float:
+    last_confirmed = _parse_timestamp(attribute.get("last_confirmed"))
+    updated_at = _parse_timestamp(attribute.get("updated_at"))
+    now = datetime.now(UTC)
+
+    if last_confirmed is not None:
+        age_days = (now - last_confirmed).days
+        return 0.08 if age_days <= 240 else 0.03 if age_days <= 540 else -0.03
+    if updated_at is not None and (now - updated_at).days <= 120:
+        return 0.03
+    return 0.0
 
 
 def _attribute_direction(attribute: dict) -> str:
@@ -220,6 +232,8 @@ def _score_preference_attribute(
     query: str,
     task_profiles: list[str],
     attribute: dict,
+    *,
+    domain_hints: list[str] | None = None,
 ) -> float:
     query_tokens = _tokenize(query)
     attribute_tokens = _tokenize(
@@ -245,6 +259,9 @@ def _score_preference_attribute(
     if lexical_overlap == 0.0 and not profile_match:
         return 0.0
 
+    if domain_hints and domain in domain_hints:
+        score += 0.15
+
     status = str(attribute.get("status", ""))
     if status == "confirmed":
         score += 0.25
@@ -252,6 +269,8 @@ def _score_preference_attribute(
         score += 0.1
 
     score += min(float(attribute.get("confidence", 0.0) or 0.0), 1.0) * 0.2
+    score += _preference_recency(attribute)
+    score -= min(int(attribute.get("prior_versions", 0) or 0) * 0.03, 0.09)
     return round(score, 4)
 
 
@@ -352,10 +371,13 @@ def get_relevant_preference_context(
     query: str,
     query_type: str,
     conn,
+    *,
+    domain_hints: list[str] | None = None,
+    intent_tags: list[str] | None = None,
 ) -> PreferenceContextResult:
     """Select bounded, task-sensitive preference context for one query."""
     budget = preference_budget_for_query_type(query_type)
-    task_profiles = _detect_task_profiles(query)
+    task_profiles = sorted(set(_detect_task_profiles(query) + list(intent_tags or [])))
 
     rows = conn.execute(
         """
@@ -368,7 +390,16 @@ def get_relevant_preference_context(
             a.confidence,
             a.routing,
             a.status,
-            a.source
+            a.source,
+            a.updated_at,
+            a.last_confirmed,
+            (
+                SELECT COUNT(*)
+                FROM attributes history
+                WHERE history.domain_id = a.domain_id
+                  AND history.label = a.label
+                  AND history.status IN ('superseded', 'rejected', 'retracted')
+            ) AS prior_versions
         FROM attributes a
         JOIN domains d ON d.id = a.domain_id
         WHERE a.status IN ('active', 'confirmed') AND a.label LIKE 'preference_%'
@@ -387,8 +418,16 @@ def get_relevant_preference_context(
             "routing": str(row[6]),
             "status": str(row[7]),
             "source": str(row[8]),
+            "updated_at": row[9],
+            "last_confirmed": row[10],
+            "prior_versions": int(row[11] or 0),
         }
-        attribute["score"] = _score_preference_attribute(query, task_profiles, attribute)
+        attribute["score"] = _score_preference_attribute(
+            query,
+            task_profiles,
+            attribute,
+            domain_hints=domain_hints,
+        )
         if attribute["score"] >= 0.35:
             scored_attributes.append(attribute)
 

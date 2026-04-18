@@ -1,0 +1,180 @@
+{
+  "version": "v1",
+  "description": "Deterministic query usefulness corpus for self-understanding and planning tuning.",
+  "cases": [
+    {
+      "id": "self_reflection_grounded",
+      "query": "What matters most to me right now across work and relationships?",
+      "backend": "local",
+      "seed": {
+        "attributes": [
+          {
+            "domain": "values",
+            "label": "honesty",
+            "value": "Honesty matters most in close relationships and work.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.95
+          },
+          {
+            "domain": "goals",
+            "label": "current_priority",
+            "value": "Build durable, trustworthy work over short-term noise.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.92
+          },
+          {
+            "domain": "relationships",
+            "label": "trusted_circle",
+            "value": "I invest most in honest, long-term relationships.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.91
+          }
+        ]
+      },
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "self_question",
+        "confidence": "low_confidence",
+        "acquisition_status": "not_needed",
+        "top_source_type": "identity",
+        "would_block_external": false
+      }
+    },
+    {
+      "id": "planning_grounded",
+      "query": "How should I plan my week so I stay focused and avoid context switching?",
+      "backend": "local",
+      "seed": {
+        "attributes": [
+          {
+            "domain": "goals",
+            "label": "weekly_priority",
+            "value": "Protect time for the highest-leverage product work first.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.93
+          },
+          {
+            "domain": "patterns",
+            "label": "work_style",
+            "value": "I do best with long uninterrupted focus blocks.",
+            "status": "active",
+            "routing": "external_ok",
+            "confidence": 0.85
+          },
+          {
+            "domain": "patterns",
+            "label": "preference_planning_focus_blocks",
+            "value": "I prefer schedules that protect deep work blocks.",
+            "status": "confirmed",
+            "routing": "local_only",
+            "confidence": 0.95
+          }
+        ],
+        "preference_signals": [
+          {
+            "category": "planning",
+            "subject": "context_switching",
+            "signal": "avoid",
+            "strength": 4
+          },
+          {
+            "category": "planning",
+            "subject": "deep_work_blocks",
+            "signal": "prefer",
+            "strength": 4
+          }
+        ]
+      },
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "preference_sensitive",
+        "confidence": "medium_confidence",
+        "acquisition_status": "not_needed",
+        "top_source_type": "preference",
+        "would_block_external": false
+      }
+    },
+    {
+      "id": "artifact_lookup_grounded",
+      "query": "What do my notes say about how I write?",
+      "backend": "local",
+      "seed": {
+        "attributes": [
+          {
+            "domain": "voice",
+            "label": "writing_style",
+            "value": "I aim for concise, clear writing.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.9
+          }
+        ],
+        "artifacts": [
+          {
+            "title": "Writing notebook",
+            "text": "My writing notes say I revise heavily, then cut for rhythm and clarity.",
+            "domain": "voice",
+            "type": "note"
+          },
+          {
+            "title": "Draft review",
+            "text": "Another note says I shorten drafts aggressively so they sound cleaner and calmer.",
+            "domain": "voice",
+            "type": "note"
+          }
+        ]
+      },
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "evidence_based",
+        "confidence": "low_confidence",
+        "acquisition_status": "not_needed",
+        "top_source_type": "artifact",
+        "would_block_external": false
+      }
+    },
+    {
+      "id": "thin_context_goals",
+      "query": "What are my current goals?",
+      "backend": "local",
+      "seed": {},
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "self_question",
+        "confidence": "insufficient_data",
+        "acquisition_status": "suggested",
+        "top_source_type": null,
+        "would_block_external": false
+      }
+    },
+    {
+      "id": "external_block_local_only",
+      "query": "Tell me about my fears",
+      "backend": "external",
+      "seed": {
+        "attributes": [
+          {
+            "domain": "fears",
+            "label": "failure_loop",
+            "value": "I worry about disappointing people when I miss a commitment.",
+            "status": "confirmed",
+            "routing": "local_only",
+            "confidence": 0.94
+          }
+        ]
+      },
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "self_question",
+        "confidence": "insufficient_data",
+        "acquisition_status": "not_needed",
+        "top_source_type": "identity",
+        "would_block_external": true
+      }
+    }
+  ]
+}

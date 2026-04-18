@@ -663,6 +663,47 @@ button {
   font-size: 13px;
 }
 
+.query-feedback-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: 14px;
+}
+
+.query-feedback-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.query-feedback-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.query-feedback-notes {
+  width: 100%;
+  min-height: 84px;
+}
+
+.query-feedback-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.query-feedback-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
 .privacy-status {
   display: grid;
   gap: 4px;

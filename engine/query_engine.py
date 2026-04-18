@@ -31,6 +31,9 @@ class QueryContext:
     query: str
     query_type: str
     source_profile: str
+    intent_tags: list[str]
+    domain_hints: list[str]
+    classification_reason: str
     assembled_context: AssembledContext
     attributes: list[dict]
     messages: list[dict[str, str]]
@@ -66,6 +69,8 @@ def prepare_query(
         query_plan.source_profile,
         session.get_history(),
         conn,
+        intent_tags=query_plan.intent_tags,
+        domain_hints=query_plan.domain_hints,
     )
 
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
@@ -84,6 +89,9 @@ def prepare_query(
         query=user_query,
         query_type=query_plan.retrieval_mode,
         source_profile=query_plan.source_profile,
+        intent_tags=query_plan.intent_tags,
+        domain_hints=query_plan.domain_hints,
+        classification_reason=query_plan.classification_reason,
         assembled_context=assembled_context,
         attributes=assembled_context.attributes + preference_attributes,
         messages=messages,

@@ -67,6 +67,7 @@ export default function QueryTab() {
               role: 'assistant',
               content: current.content,
               metadata: current.metadata,
+              query: text,
             })
           }
           setStreaming(false)
@@ -93,6 +94,7 @@ export default function QueryTab() {
               role: 'assistant',
               content: finalMessage.content,
               metadata: finalMessage.metadata,
+              query: text,
             })
             updateStreamingMessage(null)
             return

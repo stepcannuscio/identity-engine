@@ -31,6 +31,7 @@ def _context(
     retrieval_mode: str = "simple",
     source_profile: str = "general",
     preference_summary: PreferenceSummaryPayload | None = None,
+    intent_tags: list[str] | None = None,
 ) -> AssembledContext:
     attributes = attributes or []
     preference_attributes = preference_attributes or []
@@ -50,6 +51,7 @@ def _context(
         attribute_count=len(attributes),
         retrieval_mode=retrieval_mode,
         source_profile=source_profile,
+        intent_tags=intent_tags or [],
         was_trimmed=False,
         contains_local_only=False,
         preference_attributes=preference_attributes,
@@ -75,6 +77,8 @@ def _active_attr(
         "confidence": confidence,
         "routing": routing,
         "source": source,
+        "updated_at": "2026-04-18T12:00:00+00:00",
+        "last_confirmed": "2026-04-18T12:00:00+00:00" if status == "confirmed" else None,
     }
 
 
@@ -260,6 +264,52 @@ def test_negative_preference_signal_adds_bonus():
 
     # PREF_STRONG_SIGNAL (4) + PREF_NEGATIVE_BONUS (3) = 7.
     assert assessment.breakdown.preference_score == 7.0
+
+
+def test_planning_intent_uses_slightly_lighter_thresholds():
+    rank = {
+        "insufficient_data": 0,
+        "low_confidence": 1,
+        "medium_confidence": 2,
+        "high_confidence": 3,
+    }
+    attrs = [_confirmed_attr(confidence=0.90) for _ in range(4)]
+    planning_assessment = evaluate_coverage(
+        _context(
+            attributes=attrs,
+            source_profile="preference_sensitive",
+            intent_tags=["planning"],
+        ),
+        backend="local",
+    )
+    default_assessment = evaluate_coverage(
+        _context(
+            attributes=attrs,
+            source_profile="preference_sensitive",
+        ),
+        backend="local",
+    )
+
+    assert planning_assessment.score == default_assessment.score
+    assert rank[planning_assessment.confidence] >= rank[default_assessment.confidence]
+
+
+def test_stale_unconfirmed_attributes_reduce_total_score():
+    stale = {
+        **_active_attr(confidence=0.8, source="reflection"),
+        "updated_at": "2024-01-01T12:00:00+00:00",
+        "last_confirmed": None,
+    }
+    fresh = {
+        **_active_attr(confidence=0.8, source="reflection"),
+        "updated_at": "2026-04-18T12:00:00+00:00",
+        "last_confirmed": None,
+    }
+
+    assert evaluate_coverage(_context(attributes=[fresh]), backend="local").score > evaluate_coverage(
+        _context(attributes=[stale]),
+        backend="local",
+    ).score
 
 
 # ---------------------------------------------------------------------------

@@ -91,6 +91,13 @@ def _query_domains(query: str) -> list[str]:
     return matched
 
 
+def _resolved_domains(query: str, context: AssembledContext) -> list[str]:
+    hinted = list(context.domain_hints)
+    if hinted:
+        return hinted
+    return _query_domains(query)
+
+
 def _has_strong_identity_support(context: AssembledContext, domain: str) -> bool:
     for attribute in context.attributes:
         if attribute.get("domain") != domain:
@@ -226,7 +233,7 @@ def build_acquisition_plan(
     if not _should_plan_for_confidence(coverage.confidence):
         return empty_acquisition_plan()
 
-    matched_domains = _query_domains(query)
+    matched_domains = _resolved_domains(query, context)
     gaps: list[AcquisitionGap] = []
     suggestions: list[AcquisitionSuggestion] = []
 
@@ -242,6 +249,17 @@ def build_acquisition_plan(
                 )
             )
             suggestions.extend(_build_identity_suggestions(context, domain))
+
+    if "planning" in context.intent_tags and "goals" in matched_domains:
+        if not _has_strong_identity_support(context, "goals"):
+            gaps.append(
+                AcquisitionGap(
+                    kind="identity",
+                    domain="goals",
+                    reason="Planning queries work better with an up-to-date current goal or priority.",
+                )
+            )
+            suggestions.extend(_build_identity_suggestions(context, "goals"))
 
     if context.source_profile == "preference_sensitive":
         if not _has_relevant_preference_support(context):

@@ -92,6 +92,8 @@ class AssembledContext:
     attribute_count: int
     retrieval_mode: str
     source_profile: str = "general"
+    intent_tags: list[str] = field(default_factory=list)
+    domain_hints: list[str] = field(default_factory=list)
     was_trimmed: bool = False
     contains_local_only: bool = False
     evidence_items: list[EvidenceItem] = field(default_factory=list)
@@ -118,6 +120,22 @@ def _query_domains(query: str) -> set[str]:
         if any(trigger in lowered for trigger in triggers):
             matched.add(domain)
     return matched
+
+
+def _resolved_source_config(source_profile: str, intent_tags: list[str]) -> dict[str, dict[str, float | int]]:
+    base = _SOURCE_PROFILE_CONFIG[source_profile]
+    weights = dict(base["weights"])
+    caps = dict(base["caps"])
+
+    if source_profile == "preference_sensitive" and "planning" in intent_tags:
+        weights.update({"identity": 0.85, "preference": 1.00, "artifact": 0.25})
+        caps.update({"identity": 4, "preference": 3, "artifact": 1})
+
+    if source_profile == "preference_sensitive" and "voice_adaptation" in intent_tags:
+        weights.update({"identity": 0.55, "preference": 1.00, "artifact": 0.20})
+        caps.update({"identity": 2, "preference": 4, "artifact": 1})
+
+    return {"weights": weights, "caps": caps}
 
 
 def _cap_session_history(history: list[dict]) -> tuple[list[dict], bool]:
@@ -293,11 +311,12 @@ def _effective_score(
     source_profile: str,
     matched_domains: set[str],
     task_profiles: list[str],
+    intent_tags: list[str],
     selected_artifact_ids: set[str],
     selected_artifact_sources: set[str],
     top_confirmed_identity_score: float | None,
 ) -> float:
-    config = _SOURCE_PROFILE_CONFIG[source_profile]
+    config = _resolved_source_config(source_profile, intent_tags)
     score = item.normalized_score * float(config["weights"][item.source_type])
     score += _trust_bonus(item)
     score += _profile_bonus(item, source_profile)
@@ -327,12 +346,13 @@ def _select_evidence_items(
     source_profile: str,
     matched_domains: set[str],
     task_profiles: list[str],
+    intent_tags: list[str],
 ) -> list[EvidenceItem]:
     if not candidates:
         return []
 
     normalized = _normalize_candidates(candidates)
-    config = _SOURCE_PROFILE_CONFIG[source_profile]
+    config = _resolved_source_config(source_profile, intent_tags)
     total_cap = _FINAL_EVIDENCE_CAPS[query_type]
     source_caps = dict(config["caps"])
 
@@ -343,6 +363,7 @@ def _select_evidence_items(
             source_profile=source_profile,
             matched_domains=matched_domains,
             task_profiles=task_profiles,
+            intent_tags=intent_tags,
             selected_artifact_ids=set(),
             selected_artifact_sources=set(),
             top_confirmed_identity_score=None,
@@ -381,6 +402,7 @@ def _select_evidence_items(
                 source_profile=source_profile,
                 matched_domains=matched_domains,
                 task_profiles=task_profiles,
+                intent_tags=intent_tags,
                 selected_artifact_ids=selected_artifact_ids,
                 selected_artifact_sources=selected_artifact_sources,
                 top_confirmed_identity_score=top_confirmed_identity_score,
@@ -477,6 +499,9 @@ def assemble_query_context(
     source_profile: str | list[dict],
     session_history: list[dict] | Any,
     conn: Any = None,
+    *,
+    intent_tags: list[str] | None = None,
+    domain_hints: list[str] | None = None,
 ) -> AssembledContext:
     """Assemble structured context for grounded query inference."""
     if conn is None:
@@ -487,16 +512,31 @@ def assemble_query_context(
         resolved_source_profile = str(source_profile)
         resolved_session_history = cast(list[dict], session_history)
         resolved_conn = conn
+    resolved_intent_tags = sorted(set(intent_tags or []))
+    resolved_domain_hints = sorted(set(domain_hints or []))
 
-    attribute_candidates = retrieve_attribute_candidates(query, query_type, resolved_conn)
-    preference_context = get_relevant_preference_context(query, query_type, resolved_conn)
+    attribute_candidates = retrieve_attribute_candidates(
+        query,
+        query_type,
+        resolved_conn,
+        domain_hints=resolved_domain_hints,
+        intent_tags=resolved_intent_tags,
+    )
+    preference_context = get_relevant_preference_context(
+        query,
+        query_type,
+        resolved_conn,
+        domain_hints=resolved_domain_hints,
+        intent_tags=resolved_intent_tags,
+    )
     artifact_candidates = retrieve_artifact_chunk_candidates(
         resolved_conn,
         query,
         limit=_ARTIFACT_CANDIDATE_LIMITS[query_type],
+        domain_hints=resolved_domain_hints,
     )
 
-    matched_domains = _query_domains(query)
+    matched_domains = set(resolved_domain_hints) or _query_domains(query)
     task_profiles = list(preference_context.summary["task_profiles"])
     evidence_candidates = (
         _collect_identity_candidates(attribute_candidates)
@@ -512,6 +552,7 @@ def assemble_query_context(
         source_profile=resolved_source_profile,
         matched_domains=matched_domains,
         task_profiles=task_profiles,
+        intent_tags=resolved_intent_tags,
     )
 
     attributes = _project_selected_attributes(evidence_items, attribute_candidates)
@@ -559,6 +600,8 @@ def assemble_query_context(
         attribute_count=len(attributes),
         retrieval_mode=query_type,
         source_profile=resolved_source_profile,
+        intent_tags=resolved_intent_tags,
+        domain_hints=resolved_domain_hints,
         was_trimmed=was_trimmed,
         contains_local_only=contains_local_only,
         evidence_items=evidence_items,
@@ -571,6 +614,8 @@ def assemble_query_context(
         artifact_sources=artifact_sources,
         budget_metadata={
             "source_profile": resolved_source_profile,
+            "intent_tags": ",".join(resolved_intent_tags),
+            "domain_hints": ",".join(resolved_domain_hints),
             "max_attributes": int(budget["max_attributes"]),
             "max_domains": int(budget["max_domains"]),
             "score_threshold": float(budget["score_threshold"]),

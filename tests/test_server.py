@@ -1285,6 +1285,47 @@ def test_query_stream_emits_upstream_error_details(client: TestClient, monkeypat
     assert '"code": "upstream_error"' in body
 
 
+def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
+    response = client.post(
+        "/query/feedback",
+        json={
+            "query": "How should I plan my week?",
+            "response": "Protect your focus blocks and group shallow work.",
+            "feedback": "helpful",
+            "notes": "The focus-block guidance matched my working style.",
+            "query_type": "simple",
+            "backend_used": "local",
+            "confidence": "medium_confidence",
+            "intent": {
+                "source_profile": "preference_sensitive",
+                "intent_tags": ["planning"],
+                "domain_hints": ["goals", "patterns"],
+            },
+            "domains_referenced": ["goals", "patterns"],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    feedback_id = response.json()["id"]
+    row = _db(client).execute(
+        """
+        SELECT query_text, response_text, feedback, notes, backend, source_profile
+        FROM query_feedback
+        WHERE id = ?
+        """,
+        (feedback_id,),
+    ).fetchone()
+    assert row == (
+        "How should I plan my week?",
+        "Protect your focus blocks and group shallow work.",
+        "helpful",
+        "The focus-block guidance matched my working style.",
+        "local",
+        "preference_sensitive",
+    )
+
+
 def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient, monkeypatch):
     _insert_attribute(
         _db(client),

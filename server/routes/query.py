@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from config.llm_router import ConfigurationError, ProviderConfig
+from db.query_feedback import QueryFeedbackInput, record_query_feedback
 from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
 from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
@@ -27,6 +28,9 @@ from server.models.schemas import (
     AcquisitionGap,
     AcquisitionSuggestion,
     CoverageCounts,
+    QueryFeedbackRequest,
+    QueryFeedbackResponse,
+    QueryIntentMetadata,
     QueryMetadata,
     QueryRequest,
     QueryResponse,
@@ -91,6 +95,11 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
         acquisition = AcquisitionPlan(status="not_needed", gaps=[], suggestions=[])
     return QueryMetadata(
         query_type=context.query_type,
+        intent=QueryIntentMetadata(
+            source_profile=getattr(context, "source_profile", "general"),
+            intent_tags=list(getattr(context, "intent_tags", [])),
+            domain_hints=list(getattr(context, "domain_hints", [])),
+        ),
         attributes_used=len(context.attributes),
         backend_used=context.backend,
         domains_referenced=domains,
@@ -123,6 +132,33 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
             ],
         ),
     )
+
+
+@router.post("/query/feedback", response_model=QueryFeedbackResponse)
+def record_feedback(
+    request: Request,
+    payload: QueryFeedbackRequest,
+) -> QueryFeedbackResponse:
+    """Persist local-only answer usefulness feedback for future calibration."""
+    with get_db_connection() as conn:
+        feedback_id = record_query_feedback(
+            conn,
+            QueryFeedbackInput(
+                session_id=getattr(request.app.state.current_session, "id", None),
+                query_text=payload.query,
+                response_text=payload.response,
+                feedback=payload.feedback,
+                notes=(payload.notes or "").strip() or None,
+                backend=payload.backend_used,
+                query_type=payload.query_type,
+                source_profile=payload.intent.source_profile,
+                confidence=payload.confidence,
+                intent_tags=payload.intent.intent_tags,
+                domain_hints=payload.intent.domain_hints,
+                domains_referenced=payload.domains_referenced,
+            ),
+        )
+    return QueryFeedbackResponse(id=feedback_id)
 
 
 def _should_short_circuit_insufficient(context: QueryContext) -> bool:

@@ -150,6 +150,11 @@ export const getSessions = async () => {
   return data
 }
 
+export const submitQueryFeedback = async (payload) => {
+  const { data } = await client.post('/query/feedback', payload)
+  return data
+}
+
 export const getCurrentSession = async () => {
   const { data } = await client.get('/sessions/current')
   return data

@@ -3,31 +3,15 @@
 from __future__ import annotations
 
 import json
-import re
 
 from engine.retriever import DOMAIN_KEYWORDS, STOPWORDS
+from engine.text_utils import tokenize
 
 DEFAULT_ARTIFACT_LIMIT = 3
-_TOKEN_RE = re.compile(r"[a-z0-9']+")
-
-
-def _normalize_token(token: str) -> str:
-    normalized = token.lower()
-    if len(normalized) > 5 and normalized.endswith("ing"):
-        normalized = normalized[:-3]
-    elif len(normalized) > 4 and normalized.endswith("ed"):
-        normalized = normalized[:-2]
-    if len(normalized) > 4 and normalized.endswith("s"):
-        normalized = normalized[:-1]
-    return normalized
 
 
 def _tokenize(text: str) -> set[str]:
-    return {
-        _normalize_token(token)
-        for token in _TOKEN_RE.findall(text.lower())
-        if _normalize_token(token) not in STOPWORDS
-    }
+    return tokenize(text, stopwords=STOPWORDS)
 
 
 def _query_domains(query: str) -> set[str]:
@@ -45,6 +29,7 @@ def retrieve_artifact_chunk_candidates(
     *,
     limit: int | None = DEFAULT_ARTIFACT_LIMIT,
     artifact_type: str | None = None,
+    domain_hints: list[str] | None = None,
 ) -> list[dict]:
     """Return scored artifact chunk candidates for a query."""
     query_tokens = _tokenize(query)
@@ -92,7 +77,7 @@ def retrieve_artifact_chunk_candidates(
         params,
     ).fetchall()
 
-    matched_domains = _query_domains(query)
+    matched_domains = set(domain_hints or []) or _query_domains(query)
     scored: list[dict] = []
     for row in rows:
         content = str(row[3])
@@ -100,14 +85,20 @@ def retrieve_artifact_chunk_candidates(
         domain = str(row[9]) if row[9] is not None else None
         tags = str(row[10]) if row[10] is not None else ""
         haystack_tokens = _tokenize(f"{title} {content} {tags}")
-        overlap = len(query_tokens.intersection(haystack_tokens))
+        title_tokens = _tokenize(title)
+        content_tokens = _tokenize(content)
+        tag_tokens = _tokenize(tags)
+        overlap = len(query_tokens.intersection(content_tokens))
+        title_overlap = len(query_tokens.intersection(title_tokens))
+        tag_overlap = len(query_tokens.intersection(tag_tokens))
         if overlap <= 0:
-            continue
+            if title_overlap <= 0 and tag_overlap <= 0:
+                continue
 
-        domain_bonus = 1 if domain and domain in matched_domains else 0
-        title_bonus = 1 if any(token in _tokenize(title) for token in query_tokens) else 0
-        tag_bonus = 1 if tags and any(token in _tokenize(tags) for token in query_tokens) else 0
-        score = overlap + domain_bonus + title_bonus + tag_bonus
+        domain_bonus = 2 if domain and domain in matched_domains else 0
+        title_bonus = title_overlap * 2
+        tag_bonus = tag_overlap
+        score = (overlap * 1.4) + domain_bonus + title_bonus + tag_bonus
         scored.append(
             {
                 "id": str(row[0]),

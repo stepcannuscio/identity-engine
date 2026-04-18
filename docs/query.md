@@ -12,7 +12,9 @@ Phase 3 also exposes the same query engine over the FastAPI backend:
 
 For each user question:
 
-1. Classify query as public `simple|open_ended` plus an internal `source_profile` (`engine/query_classifier.py`)
+1. Classify query as public `simple|open_ended` plus an internal query plan with:
+   `source_profile`, `intent_tags`, `domain_hints`, and `classification_reason`
+   (`engine/query_classifier.py`)
 2. Gather scored candidates from identity attributes, learned preferences, and artifacts (`engine/retriever.py`, `engine/preference_summary.py`, `engine/artifact_retrieval.py`)
 3. Merge and rank those candidates deterministically in the context assembler (`engine/context_assembler.py`)
 4. Build a blended grounded prompt with explicit source labels and capped history (`engine/prompt_builder.py`)
@@ -42,6 +44,9 @@ The final prompt uses a single ranked `Grounded context:` block. Items are
 labeled as `[identity]`, `[preference]`, or `[artifact]`. Artifacts are always
 supporting evidence rather than canonical truth.
 
+Responses now also include a privacy-safe `metadata.intent` block so the UI can
+understand the routed query shape without exposing internal prompts or raw evidence.
+
 ## Safety constraints
 
 - `retriever.py`, `query_classifier.py`, and `prompt_builder.py` perform no LLM calls
@@ -49,6 +54,17 @@ supporting evidence rather than canonical truth.
 - Prompt builder still retains a fail-closed guard: `local_only` attributes cannot be included for external backends (`RoutingViolationError`)
 - Selected artifact evidence is always treated as local-only context
 - Session history is in-memory only during runtime
+
+## Evaluation and Feedback
+
+- `python -m engine.query_eval` runs the versioned deterministic usefulness
+  corpus in `evals/query_usefulness/v1.json`
+- `POST /query/feedback` stores local-only answer quality feedback using:
+  - `helpful`
+  - `ungrounded`
+  - `missed_context`
+  - `wrong_focus`
+- query feedback is stored separately from canonical identity attributes
 
 ## Session commands
 

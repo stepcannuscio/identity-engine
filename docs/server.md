@@ -53,6 +53,7 @@ Supported token headers:
 - `POST /query/stream` — SSE stream with `token`, `metadata`, `warning`, `error`, and `done` events
   - query failures now distinguish privacy routing blocks, missing backend configuration,
     and upstream provider failures
+- `POST /query/feedback` — stores local-only answer usefulness feedback for calibration
 
 ### Attributes
 

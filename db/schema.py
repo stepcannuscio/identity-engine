@@ -150,6 +150,35 @@ CREATE INDEX IF NOT EXISTS ix_preference_signals_lookup
     ON preference_signals(category, subject, created_at DESC);
 """
 
+QUERY_FEEDBACK_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS query_feedback (
+    id                  TEXT PRIMARY KEY,
+    session_id          TEXT,
+    query_text          TEXT NOT NULL,
+    response_text       TEXT NOT NULL,
+    feedback            TEXT NOT NULL CHECK(feedback IN (
+                            'helpful',
+                            'ungrounded',
+                            'missed_context',
+                            'wrong_focus'
+                        )),
+    notes               TEXT,
+    backend             TEXT NOT NULL CHECK(backend IN ('local', 'external')),
+    query_type          TEXT NOT NULL,
+    source_profile      TEXT NOT NULL,
+    confidence          TEXT NOT NULL,
+    intent_tags_json    TEXT NOT NULL DEFAULT '[]',
+    domain_hints_json   TEXT NOT NULL DEFAULT '[]',
+    domains_json        TEXT NOT NULL DEFAULT '[]',
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+QUERY_FEEDBACK_LOOKUP_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_query_feedback_created
+    ON query_feedback(created_at DESC, feedback);
+"""
+
 APP_SETTINGS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS app_settings (
     id                    INTEGER PRIMARY KEY CHECK(id = 1),
@@ -239,6 +268,8 @@ SCHEMA_SQL = "\n\n".join(
         REFLECTION_SESSIONS_TABLE_SQL,
         PREFERENCE_SIGNALS_TABLE_SQL,
         PREFERENCE_SIGNALS_LOOKUP_INDEX_SQL,
+        QUERY_FEEDBACK_TABLE_SQL,
+        QUERY_FEEDBACK_LOOKUP_INDEX_SQL,
         APP_SETTINGS_TABLE_SQL,
         PROVIDER_STATUS_TABLE_SQL,
         TEACH_QUESTIONS_TABLE_SQL,
