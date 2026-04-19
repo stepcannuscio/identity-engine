@@ -9,6 +9,45 @@ const FEEDBACK_OPTIONS = [
   { value: 'wrong_focus', label: 'Wrong focus' },
 ]
 
+const VOICE_FEEDBACK_OPTIONS = [
+  {
+    value: 'authentic',
+    label: 'Authentic',
+    feedback: 'helpful',
+    voiceFeedback: 'authentic',
+  },
+  {
+    value: 'not_me',
+    label: 'Not me',
+    feedback: 'wrong_focus',
+    voiceFeedback: 'not_me',
+  },
+  {
+    value: 'too_formal',
+    label: 'Too formal',
+    feedback: 'wrong_focus',
+    voiceFeedback: 'too_formal',
+  },
+  {
+    value: 'too_wordy',
+    label: 'Too wordy',
+    feedback: 'wrong_focus',
+    voiceFeedback: 'too_wordy',
+  },
+  {
+    value: 'wrong_rhythm',
+    label: 'Wrong rhythm',
+    feedback: 'wrong_focus',
+    voiceFeedback: 'wrong_rhythm',
+  },
+  {
+    value: 'overdone_style',
+    label: 'Overdone style',
+    feedback: 'wrong_focus',
+    voiceFeedback: 'overdone_style',
+  },
+]
+
 export default function QueryFeedbackPanel({ message }) {
   const { addToast } = useAppState()
   const [selected, setSelected] = useState('')
@@ -21,8 +60,13 @@ export default function QueryFeedbackPanel({ message }) {
     return null
   }
 
+  const sourceProfile = message.metadata?.intent?.source_profile ?? 'general'
+  const isVoiceMode = sourceProfile === 'voice_generation'
+  const options = isVoiceMode ? VOICE_FEEDBACK_OPTIONS : FEEDBACK_OPTIONS
+  const selectedOption = options.find((option) => option.value === selected) ?? null
+
   const handleSubmit = async () => {
-    if (!selected) {
+    if (!selectedOption) {
       setError('Choose one feedback label first.')
       return
     }
@@ -33,7 +77,8 @@ export default function QueryFeedbackPanel({ message }) {
       await submitQueryFeedback({
         query: message.query,
         response: message.content,
-        feedback: selected,
+        feedback: selectedOption.feedback ?? selectedOption.value,
+        voice_feedback: selectedOption.voiceFeedback ?? null,
         notes: notes.trim() || null,
         query_type: message.metadata.query_type,
         backend_used: message.metadata.backend_used,
@@ -46,7 +91,11 @@ export default function QueryFeedbackPanel({ message }) {
         domains_referenced: message.metadata.domains_referenced ?? [],
       })
       setIsSubmitted(true)
-      addToast({ message: 'Query feedback saved locally.', tone: 'success', duration: 3000 })
+      addToast({
+        message: isVoiceMode ? 'Voice feedback saved locally.' : 'Query feedback saved locally.',
+        tone: 'success',
+        duration: 3000,
+      })
     } catch (nextError) {
       setError(nextError?.response?.data?.detail ?? 'Unable to save feedback right now.')
     } finally {
@@ -56,9 +105,11 @@ export default function QueryFeedbackPanel({ message }) {
 
   return (
     <section className="query-feedback-panel">
-      <p className="query-feedback-title">Was this answer useful?</p>
+      <p className="query-feedback-title">
+        {isVoiceMode ? 'Did this sound like you?' : 'Was this answer useful?'}
+      </p>
       <div className="query-feedback-options">
-        {FEEDBACK_OPTIONS.map((option) => (
+        {options.map((option) => (
           <button
             key={option.value}
             type="button"
@@ -74,7 +125,11 @@ export default function QueryFeedbackPanel({ message }) {
         value={notes}
         onChange={(event) => setNotes(event.target.value)}
         className="query-feedback-notes"
-        placeholder="Optional note about what worked or what was missing."
+        placeholder={
+          isVoiceMode
+            ? 'Optional note about what felt off or what matched your voice.'
+            : 'Optional note about what worked or what was missing.'
+        }
         disabled={isSaving}
       />
       <div className="query-feedback-actions">

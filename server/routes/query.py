@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from config.llm_router import ConfigurationError, ProviderConfig
+from db.preference_signals import PreferenceSignalInput, record_preference_signal
 from db.query_feedback import QueryFeedbackInput, record_query_feedback
+from db.voice_feedback import VoiceFeedbackInput, record_voice_feedback
 from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
 from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
@@ -57,6 +59,15 @@ _SENSITIVE_TERMS = {
     "patterns",
     "anxiety",
     "trauma",
+}
+
+_VOICE_FEEDBACK_SIGNAL_MAP = {
+    "authentic": ("voice", "authentic_voice", "prefer", 4),
+    "not_me": ("voice", "current_voice_render", "reject", 4),
+    "too_formal": ("voice", "formal_tone", "avoid", 4),
+    "too_wordy": ("voice", "wordy_phrasing", "avoid", 4),
+    "wrong_rhythm": ("voice", "rhythm_mismatch", "reject", 4),
+    "overdone_style": ("voice", "overdone_style_markers", "avoid", 4),
 }
 
 
@@ -158,6 +169,39 @@ def record_feedback(
                 domains_referenced=payload.domains_referenced,
             ),
         )
+        if payload.voice_feedback is not None:
+            if payload.intent.source_profile != "voice_generation":
+                raise HTTPException(
+                    status_code=422,
+                    detail="voice_feedback is only valid for voice_generation queries.",
+                )
+            record_voice_feedback(
+                conn,
+                VoiceFeedbackInput(
+                    query_feedback_id=feedback_id,
+                    session_id=getattr(request.app.state.current_session, "id", None),
+                    query_text=payload.query,
+                    response_text=payload.response,
+                    feedback=payload.voice_feedback,
+                    notes=(payload.notes or "").strip() or None,
+                    backend=payload.backend_used,
+                    query_type=payload.query_type,
+                    source_profile=payload.intent.source_profile,
+                    intent_tags=payload.intent.intent_tags,
+                    domains_referenced=payload.domains_referenced,
+                ),
+            )
+            category, subject, signal, strength = _VOICE_FEEDBACK_SIGNAL_MAP[payload.voice_feedback]
+            record_preference_signal(
+                conn,
+                PreferenceSignalInput(
+                    category=category,
+                    subject=subject,
+                    signal=signal,
+                    strength=strength,
+                    source="explicit_feedback",
+                ),
+            )
     return QueryFeedbackResponse(id=feedback_id)
 
 

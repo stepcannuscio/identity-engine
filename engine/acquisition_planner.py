@@ -271,6 +271,28 @@ def build_acquisition_plan(
             )
             suggestions.append(_build_preference_suggestion(context, query))
 
+    if context.source_profile == "voice_generation":
+        if not _has_strong_identity_support(context, "voice"):
+            gaps.append(
+                AcquisitionGap(
+                    kind="identity",
+                    domain="voice",
+                    reason="Voice drafting works better with explicit current voice traits and examples.",
+                )
+            )
+            suggestions.extend(_build_identity_suggestions(context, "voice"))
+        if not _has_relevant_preference_support(context):
+            gaps.append(
+                AcquisitionGap(
+                    kind="preference",
+                    domain="voice",
+                    reason="No relevant voice or writing preferences were retrieved.",
+                )
+            )
+            suggestions.append(_build_preference_suggestion(context, query))
+        if not _has_relevant_artifact_support(context):
+            suggestions.append(_build_artifact_suggestion(query, "voice"))
+
     if context.source_profile == "evidence_based":
         if not _has_relevant_artifact_support(context):
             domain = matched_domains[0] if matched_domains else None

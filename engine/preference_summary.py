@@ -58,6 +58,7 @@ _TASK_KEYWORDS = {
         "sound",
         "style",
         "tone",
+        "voice",
         "write",
         "writing",
     },
@@ -376,7 +377,10 @@ def get_relevant_preference_context(
     intent_tags: list[str] | None = None,
 ) -> PreferenceContextResult:
     """Select bounded, task-sensitive preference context for one query."""
-    budget = preference_budget_for_query_type(query_type)
+    budget = dict(preference_budget_for_query_type(query_type))
+    if "voice_adaptation" in (intent_tags or []):
+        budget["max_attributes"] += 2
+        budget["max_signal_summaries"] += 1
     task_profiles = sorted(set(_detect_task_profiles(query) + list(intent_tags or [])))
 
     rows = conn.execute(

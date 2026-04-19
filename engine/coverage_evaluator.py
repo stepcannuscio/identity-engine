@@ -99,6 +99,7 @@ LOW_SCORE_THRESHOLD = 25
 _PROFILE_THRESHOLDS: dict[str, tuple[int, int, int, int]] = {
     "general":              (65, 45, 25, 25),
     "preference_sensitive": (60, 42, 25, 25),
+    "voice_generation":     (62, 44, 25, 25),
     "self_question":        (70, 50, 30, 30),
     "evidence_based":       (60, 40, 20, 20),
 }

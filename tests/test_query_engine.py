@@ -108,7 +108,7 @@ def test_classify_query_returns_open_ended_for_complex_query():
     [
         ("Who am I when I am under pressure?", "self_question"),
         ("What do my notes say about how I write?", "evidence_based"),
-        ("Rewrite this email so it sounds like me.", "preference_sensitive"),
+        ("Rewrite this email so it sounds like me.", "voice_generation"),
         ("Summarize the situation for me.", "general"),
     ],
 )
@@ -117,11 +117,13 @@ def test_classify_source_profile(prompt, expected):
 
 
 def test_build_query_plan_keeps_public_query_type_stable():
-    plan = build_query_plan("Rewrite this email.")
+    plan = build_query_plan("Rewrite this email so it sounds like me.")
 
     assert plan.retrieval_mode == "simple"
-    assert plan.source_profile == "preference_sensitive"
+    assert plan.source_profile == "voice_generation"
     assert "writing_task" in plan.intent_tags
+    assert "voice_adaptation" in plan.intent_tags
+    assert "voice" in plan.domain_hints
     assert plan.classification_reason
 
 
@@ -537,6 +539,92 @@ def test_prepare_query_omits_local_signal_summaries_for_external_backend(conn):
     assert prepared.source_profile == "preference_sensitive"
     assert "Grounded context:\n(no grounded context retrieved)" in prepared.messages[0]["content"]
     assert prepared.attributes == []
+
+
+def test_prepare_query_builds_voice_guidance_for_local_voice_generation(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["voice"],
+        "tone",
+        "Calm, direct, and lightly warm.",
+        confidence=0.95,
+        routing="external_ok",
+        status="confirmed",
+    )
+    _insert_attribute(
+        conn,
+        domain_ids["voice"],
+        "preference_writing_style_concise_responses",
+        "I prefer concise responses.",
+        confidence=0.92,
+        routing="local_only",
+        status="confirmed",
+        source="inferred",
+    )
+    ingest_artifact(
+        conn,
+        text="I trim hedging, keep the cadence steady, and avoid sounding theatrical.",
+        title="Email sample",
+        artifact_type="note",
+        source="capture",
+        domain="voice",
+    )
+
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    prepared = prepare_query(
+        "Rewrite this email so it sounds like me.",
+        session,
+        conn,
+        config,
+    )
+
+    system = prepared.messages[0]["content"]
+    assert prepared.source_profile == "voice_generation"
+    assert prepared.assembled_context.voice_profile is not None
+    assert "Voice guidance:" in system
+    assert "Local exemplar snippets:" in system
+
+
+def test_prepare_query_hides_local_voice_exemplars_for_external_backend(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["voice"],
+        "tone",
+        "Calm, direct, and lightly warm.",
+        confidence=0.95,
+        routing="external_ok",
+        status="confirmed",
+    )
+    ingest_artifact(
+        conn,
+        text="This local sample should never be shown to an external backend.",
+        title="Local sample",
+        artifact_type="note",
+        source="capture",
+        domain="voice",
+    )
+
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+
+    prepared = prepare_query(
+        "Rewrite this email so it sounds like me.",
+        session,
+        conn,
+        config,
+    )
+
+    system = prepared.messages[0]["content"]
+    assert prepared.source_profile == "voice_generation"
+    assert "Voice guidance:" in system
+    assert "Local exemplar snippets:" not in system
 
 
 def test_session_add_exchange_drops_oldest_when_cap_exceeded():

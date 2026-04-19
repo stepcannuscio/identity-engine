@@ -100,10 +100,14 @@ PREFERENCE_SENSITIVE_TERMS = (
 
 VOICE_ADAPTATION_PHRASES = (
     "sound like me",
+    "sounds like me",
     "my voice",
     "my tone",
     "in my style",
     "using my style",
+    "as if i wrote it",
+    "like i wrote it",
+    "from me",
 )
 
 PLANNING_VERBS = {
@@ -191,6 +195,7 @@ def _intent_tags(query: str, tokens: set[str], domain_hints: list[str]) -> list[
         tags.append("artifact_lookup")
     if any(phrase in lowered for phrase in VOICE_ADAPTATION_PHRASES):
         tags.append("voice_adaptation")
+        tags.append("voice_generation")
     if tokens.intersection({"draft", "email", "rewrite", "message", "tone", "write", "writing"}):
         tags.append("writing_task")
     if tokens.intersection(PLANNING_VERBS):
@@ -211,6 +216,9 @@ def _intent_tags(query: str, tokens: set[str], domain_hints: list[str]) -> list[
     if "planning" in tags and "patterns" not in domain_hints:
         domain_hints = [*domain_hints, "patterns"]
 
+    if "voice_adaptation" in tags and "voice" not in domain_hints:
+        domain_hints = [*domain_hints, "voice"]
+
     return sorted(set(tags))
 
 
@@ -226,6 +234,8 @@ def _classification_reason(
     matched_voice = find_matching_phrases(lowered, VOICE_ADAPTATION_PHRASES)
     if source_profile == "evidence_based":
         return "matched explicit artifact/evidence cues"
+    if source_profile == "voice_generation" and matched_voice:
+        return "matched explicit voice-generation phrasing"
     if source_profile == "preference_sensitive" and matched_voice:
         return "matched voice-adaptation phrasing"
     if source_profile == "preference_sensitive" and "planning" in intent_tags:
@@ -248,7 +258,7 @@ def classify_query(query: str) -> str:
     """
     normalized = query.strip().lower()
 
-    if _word_count(normalized) < 8:
+    if _word_count(normalized) <= 8:
         return "simple"
 
     if _contains_domain_keyword(normalized):
@@ -276,6 +286,12 @@ def classify_source_profile(query: str) -> str:
 
     if has_artifact_lookup:
         return "evidence_based"
+
+    has_writing_task = bool(
+        words.intersection({"draft", "email", "message", "rewrite", "write", "writing"})
+    )
+    if has_voice_adaptation and has_writing_task:
+        return "voice_generation"
 
     if has_preference_task or any(term in normalized for term in PREFERENCE_SENSITIVE_TERMS):
         return "preference_sensitive"

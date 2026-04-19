@@ -42,6 +42,7 @@ class QueryIntentMetadata(BaseModel):
         "self_question",
         "evidence_based",
         "preference_sensitive",
+        "voice_generation",
         "general",
     ]
     intent_tags: list[str] = []
@@ -118,6 +119,14 @@ class QueryFeedbackRequest(BaseModel):
     query: str
     response: str
     feedback: Literal["helpful", "ungrounded", "missed_context", "wrong_focus"]
+    voice_feedback: Literal[
+        "authentic",
+        "not_me",
+        "too_formal",
+        "too_wordy",
+        "wrong_rhythm",
+        "overdone_style",
+    ] | None = None
     notes: str | None = None
     query_type: str
     backend_used: Literal["local", "external"]

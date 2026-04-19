@@ -38,11 +38,19 @@ the public `query_type` field:
 - `self_question`: favor canonical identity attributes
 - `evidence_based`: favor artifact evidence while still checking structured support
 - `preference_sensitive`: favor learned preferences for drafting, planning, or selection work
+- `voice_generation`: favor explicit voice traits, learned voice preferences,
+  and bounded local writing exemplars for rewrite/drafting requests that ask to
+  sound like the user
 - `general`: balanced default
 
 The final prompt uses a single ranked `Grounded context:` block. Items are
 labeled as `[identity]`, `[preference]`, or `[artifact]`. Artifacts are always
 supporting evidence rather than canonical truth.
+
+For `voice_generation` queries, prompt building also emits a dedicated
+`Voice guidance:` block. Local runs may include up to two bounded local
+exemplar snippets from `voice` artifacts; external runs omit those snippets and
+only retain `external_ok` voice guidance.
 
 Responses now also include a privacy-safe `metadata.intent` block so the UI can
 understand the routed query shape without exposing internal prompts or raw evidence.
@@ -64,6 +72,13 @@ understand the routed query shape without exposing internal prompts or raw evide
   - `ungrounded`
   - `missed_context`
   - `wrong_focus`
+- voice-generation queries may also include a local-only `voice_feedback` label:
+  - `authentic`
+  - `not_me`
+  - `too_formal`
+  - `too_wordy`
+  - `wrong_rhythm`
+  - `overdone_style`
 - query feedback is stored separately from canonical identity attributes
 
 ## Session commands

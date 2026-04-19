@@ -80,6 +80,8 @@ def _assemble(query: str, conn, history: list[dict] | None = None):
         plan.source_profile,
         history or [],
         conn,
+        intent_tags=plan.intent_tags,
+        domain_hints=plan.domain_hints,
     )
 
 
@@ -340,6 +342,41 @@ def test_preference_sensitive_queries_rank_preferences_ahead_of_artifacts(conn, 
     artifact_items = [item for item in context.evidence_items if item.source_type == "artifact"]
     if artifact_items:
         assert context.evidence_items[0].final_score > artifact_items[0].final_score
+
+
+def test_voice_generation_queries_compile_voice_profile(conn, domain_ids):
+    _insert_attribute(
+        conn,
+        domain_ids["voice"],
+        "tone",
+        "Calm, direct, and lightly warm.",
+        confidence=0.95,
+        routing="external_ok",
+    )
+    _insert_attribute(
+        conn,
+        domain_ids["voice"],
+        "preference_writing_style_concise_responses",
+        "I prefer concise responses.",
+        confidence=0.92,
+        routing="local_only",
+    )
+    ingest_artifact(
+        conn,
+        text="A writing sample where I cut hedging and keep the rhythm tight.",
+        title="Email sample",
+        artifact_type="note",
+        source="capture",
+        domain="voice",
+    )
+
+    context = _assemble("Rewrite this email so it sounds like me.", conn)
+
+    assert context.source_profile == "voice_generation"
+    assert context.voice_profile is not None
+    assert context.voice_profile.identity_lines
+    assert context.voice_profile.preference_lines
+    assert context.voice_profile.exemplar_lines
 
 
 def test_evidence_based_ranking_penalizes_duplicate_artifact_chunks(conn):

@@ -57,6 +57,9 @@ DOMAINS = [
             "How does the way you write or speak change between professional and personal"
             " contexts?",
             "What tone do you default to when you are most yourself?",
+            "What usually makes a draft sound most like you instead of generic?",
+            "What kinds of phrasing, tone, or polish levels never feel like you?",
+            "When your writing is working, is it more blunt, warm, calm, playful, or something else?",
         ],
     },
     {

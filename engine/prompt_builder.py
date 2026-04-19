@@ -30,9 +30,14 @@ Just answer as if you simply know the person.
 Structured identity remains the canonical user model.
 Artifacts are supporting evidence only and should ground or
 corroborate answers rather than replace identity facts.
+If you are asked to draft or rewrite in the user's voice,
+imitate only the grounded traits below. Keep the voice
+subtle and natural. Do not invent signature phrases,
+biographical details, or exaggerated quirks.
 
 Grounded context:
 {grounded_context}
+{voice_guidance}
 {confidence_guidance}
 """
 
@@ -204,6 +209,41 @@ def _format_confidence_guidance(confidence: str | None) -> str:
     return ""
 
 
+def _format_voice_guidance(context: AssembledContext, target_backend: str) -> str:
+    profile = context.voice_profile
+    if profile is None:
+        return ""
+
+    def _visible_lines(items) -> list[str]:
+        if target_backend == "local":
+            return [item.text for item in items]
+        return [item.text for item in items if item.routing != "local_only"]
+
+    identity_lines = _visible_lines(profile.identity_lines)
+    preference_lines = _visible_lines(profile.preference_lines)
+    avoid_lines = _visible_lines(profile.avoid_lines)
+    exemplar_lines = _visible_lines(profile.exemplar_lines) if target_backend == "local" else []
+
+    if not any([identity_lines, preference_lines, avoid_lines, exemplar_lines]):
+        return ""
+
+    lines = ["", "Voice guidance:"]
+    if identity_lines:
+        lines.append("- Stable voice traits:")
+        lines.extend(f"  - {line}" for line in identity_lines)
+    if preference_lines:
+        lines.append("- Voice preferences:")
+        lines.extend(f"  - {line}" for line in preference_lines)
+    if avoid_lines:
+        lines.append("- Avoid:")
+        lines.extend(f"  - {line}" for line in avoid_lines)
+    if exemplar_lines:
+        lines.append("- Local exemplar snippets:")
+        lines.extend(f"  - {line}" for line in exemplar_lines)
+
+    return "\n".join(lines)
+
+
 def build_prompt(
     context: AssembledContext,
     target_backend: str = "local",
@@ -221,11 +261,13 @@ def build_prompt(
         )
 
     grounded_context = _format_grounded_context(context, target_backend)
+    voice_guidance = _format_voice_guidance(context, target_backend)
     confidence_guidance = _format_confidence_guidance(confidence)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
             grounded_context=grounded_context,
+            voice_guidance=voice_guidance,
             confidence_guidance=confidence_guidance,
         ),
     }

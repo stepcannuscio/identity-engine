@@ -179,6 +179,36 @@ CREATE INDEX IF NOT EXISTS ix_query_feedback_created
     ON query_feedback(created_at DESC, feedback);
 """
 
+VOICE_FEEDBACK_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS voice_feedback (
+    id                  TEXT PRIMARY KEY,
+    query_feedback_id   TEXT REFERENCES query_feedback(id) ON DELETE SET NULL,
+    session_id          TEXT,
+    query_text          TEXT NOT NULL,
+    response_text       TEXT NOT NULL,
+    feedback            TEXT NOT NULL CHECK(feedback IN (
+                            'authentic',
+                            'not_me',
+                            'too_formal',
+                            'too_wordy',
+                            'wrong_rhythm',
+                            'overdone_style'
+                        )),
+    notes               TEXT,
+    backend             TEXT NOT NULL CHECK(backend IN ('local', 'external')),
+    query_type          TEXT NOT NULL,
+    source_profile      TEXT NOT NULL,
+    intent_tags_json    TEXT NOT NULL DEFAULT '[]',
+    domains_json        TEXT NOT NULL DEFAULT '[]',
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+VOICE_FEEDBACK_LOOKUP_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_voice_feedback_created
+    ON voice_feedback(created_at DESC, feedback);
+"""
+
 APP_SETTINGS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS app_settings (
     id                    INTEGER PRIMARY KEY CHECK(id = 1),
@@ -270,6 +300,8 @@ SCHEMA_SQL = "\n\n".join(
         PREFERENCE_SIGNALS_LOOKUP_INDEX_SQL,
         QUERY_FEEDBACK_TABLE_SQL,
         QUERY_FEEDBACK_LOOKUP_INDEX_SQL,
+        VOICE_FEEDBACK_TABLE_SQL,
+        VOICE_FEEDBACK_LOOKUP_INDEX_SQL,
         APP_SETTINGS_TABLE_SQL,
         PROVIDER_STATUS_TABLE_SQL,
         TEACH_QUESTIONS_TABLE_SQL,

@@ -20,6 +20,7 @@ from engine.preference_summary import (
 )
 from engine.retriever import DOMAIN_KEYWORDS, budget_for_query_type, retrieve_attribute_candidates
 from engine.session import HISTORY_CAP
+from engine.voice_profile import VoiceProfile, build_voice_profile
 
 _TOKEN_RE = re.compile(r"[a-z0-9']+")
 
@@ -45,6 +46,10 @@ _SOURCE_PROFILE_CONFIG = {
     "preference_sensitive": {
         "weights": {"identity": 0.70, "preference": 1.00, "artifact": 0.30},
         "caps": {"identity": 3, "preference": 4, "artifact": 1},
+    },
+    "voice_generation": {
+        "weights": {"identity": 0.90, "preference": 1.00, "artifact": 0.75},
+        "caps": {"identity": 4, "preference": 4, "artifact": 2},
     },
     "general": {
         "weights": {"identity": 1.00, "preference": 0.70, "artifact": 0.45},
@@ -106,6 +111,7 @@ class AssembledContext:
     artifact_chunks: list[dict] = field(default_factory=list)
     artifact_count: int = 0
     artifact_sources: list[str] = field(default_factory=list)
+    voice_profile: VoiceProfile | None = None
     budget_metadata: dict[str, int | float | str] = field(default_factory=dict)
 
 
@@ -134,6 +140,10 @@ def _resolved_source_config(source_profile: str, intent_tags: list[str]) -> dict
     if source_profile == "preference_sensitive" and "voice_adaptation" in intent_tags:
         weights.update({"identity": 0.55, "preference": 1.00, "artifact": 0.20})
         caps.update({"identity": 2, "preference": 4, "artifact": 1})
+
+    if source_profile == "voice_generation":
+        weights.update({"identity": 0.95, "preference": 1.00, "artifact": 0.80})
+        caps.update({"identity": 4, "preference": 4, "artifact": 2})
 
     return {"weights": weights, "caps": caps}
 
@@ -282,6 +292,13 @@ def _profile_bonus(item: EvidenceItem, source_profile: str) -> float:
         "evidence_based": "artifact",
         "preference_sensitive": "preference",
     }
+    if source_profile == "voice_generation":
+        if item.source_type == "preference":
+            return 0.15
+        if item.source_type == "identity" and item.domain == "voice":
+            return 0.14
+        if item.source_type == "artifact" and item.domain == "voice":
+            return 0.12
     if profile_source_map.get(source_profile) == item.source_type:
         return 0.15
     return 0.0
@@ -325,6 +342,9 @@ def _effective_score(
     if source_profile == "evidence_based" and item.source_type == "artifact":
         if (item.source or item.title_or_label) not in selected_artifact_sources:
             score += 0.10
+
+    if source_profile == "voice_generation" and item.domain == "voice":
+        score += 0.08
 
     if item.source_type == "artifact" and item.artifact_id in selected_artifact_ids:
         score -= 0.15
@@ -583,6 +603,13 @@ def assemble_query_context(
             if str(chunk.get("title", "")).strip()
         }
     )
+    voice_profile = build_voice_profile(
+        source_profile=resolved_source_profile,
+        attributes=attributes,
+        preference_attributes=preference_attributes,
+        preference_summary=preference_context.summary,
+        artifact_chunks=artifact_chunks,
+    )
     was_trimmed = (
         history_was_trimmed
         or len(attribute_candidates) > len(attributes)
@@ -612,6 +639,7 @@ def assemble_query_context(
         artifact_chunks=artifact_chunks,
         artifact_count=len(artifact_chunks),
         artifact_sources=artifact_sources,
+        voice_profile=voice_profile,
         budget_metadata={
             "source_profile": resolved_source_profile,
             "intent_tags": ",".join(resolved_intent_tags),

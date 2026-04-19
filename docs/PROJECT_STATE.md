@@ -21,6 +21,7 @@ This document captures the current system state after completing:
 - Machine Security Recommendations
 - Query Usefulness Tuning + Eval Harness
 - Query Feedback Loop
+- Voice Fidelity Tuning
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -45,6 +46,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - stores lightweight local preference signals for future planning/recommendation use
 - stores local artifacts as retrievable evidence without turning them into source-of-truth attributes
 - recommends privacy/model configurations and local machine security posture
+- can draft or rewrite text in a grounded approximation of the user's voice
 
 ---
 
@@ -328,6 +330,40 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - thin-context acquisition suggestions
   - external-block detection
 
+### 22. Voice Fidelity Tuning Layer
+- query planning now distinguishes explicit voice-imitation drafting from generic
+  preference-sensitive work through an internal `voice_generation` source profile
+- voice-generation detection remains deterministic and is triggered by explicit
+  rewrite/drafting phrasing plus “sound like me” style cues
+- context assembly now compiles a bounded `voice_profile` for voice-generation
+  requests using:
+  - current `voice` domain attributes
+  - learned voice-related preference attributes and summaries
+  - up to two local exemplar artifact snippets from `voice` artifacts
+- prompt building now emits a dedicated `Voice guidance:` block when a
+  grounded voice profile is available
+- local exemplar snippets are only included for local inference
+- external voice-generation requests may still use `external_ok` voice traits,
+  but local-only voice traits and exemplar snippets remain blocked or omitted
+- local-only voice fidelity feedback is now stored explicitly in:
+  - `voice_feedback`
+- voice fidelity feedback labels are:
+  - `authentic`
+  - `not_me`
+  - `too_formal`
+  - `too_wordy`
+  - `wrong_rhythm`
+  - `overdone_style`
+- negative voice-fidelity feedback also records deterministic low-level
+  preference signals in the `voice` category so future drafting can steer away
+  from repeated misses without auto-promoting them into canonical identity truth
+- the deterministic query eval corpus now includes voice-generation cases that
+  verify:
+  - voice-profile assembly
+  - prompt voice-guidance injection
+  - local-only exemplar handling
+  - external-safe omission of local exemplar snippets
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -370,6 +406,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - onboarding/profile/provider state must live in explicit tables, not a generic
   JSON blob
 - query usefulness feedback must remain local-only and separate from canonical
+  identity truth
+- voice exemplar snippets must remain local-only prompt context
+- voice fidelity feedback must remain local-only and separate from canonical
   identity truth
 
 ---
@@ -433,3 +472,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - rank identity evidence with recency, trust, and label-stability signals
 - store local-only answer usefulness feedback for future calibration and review
 - run a deterministic query usefulness eval corpus without calling an LLM
+- distinguish explicit “write in my voice” requests from generic preference-sensitive drafting
+- compile bounded voice guidance from structured traits, learned preferences,
+  and local writing exemplars
+- include local writing exemplar snippets only for local voice-generation runs
+- collect local-only voice fidelity feedback and convert repeated misses into
+  lower-level voice preference signals without mutating canonical attributes

@@ -1326,6 +1326,82 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
     )
 
 
+def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient):
+    response = client.post(
+        "/query/feedback",
+        json={
+            "query": "Rewrite this email so it sounds like me.",
+            "response": "Thanks for the note. I want to keep this direct and calm.",
+            "feedback": "wrong_focus",
+            "voice_feedback": "too_formal",
+            "notes": "It still sounds too polished.",
+            "query_type": "simple",
+            "backend_used": "local",
+            "confidence": "medium_confidence",
+            "intent": {
+                "source_profile": "voice_generation",
+                "intent_tags": ["voice_adaptation", "writing_task"],
+                "domain_hints": ["voice"],
+            },
+            "domains_referenced": ["voice"],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    feedback_id = response.json()["id"]
+    row = _db(client).execute(
+        """
+        SELECT query_feedback_id, feedback, notes, backend
+        FROM voice_feedback
+        WHERE query_feedback_id = ?
+        """,
+        (feedback_id,),
+    ).fetchone()
+    assert row == (
+        feedback_id,
+        "too_formal",
+        "It still sounds too polished.",
+        "local",
+    )
+
+    signal_row = _db(client).execute(
+        """
+        SELECT category, subject, signal, strength
+        FROM preference_signals
+        WHERE category = 'voice'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    assert signal_row == ("voice", "formal_tone", "avoid", 4)
+
+
+def test_post_query_feedback_rejects_voice_feedback_for_non_voice_query(client: TestClient):
+    response = client.post(
+        "/query/feedback",
+        json={
+            "query": "What are my current goals?",
+            "response": "Finish the current phase carefully.",
+            "feedback": "helpful",
+            "voice_feedback": "too_formal",
+            "query_type": "simple",
+            "backend_used": "local",
+            "confidence": "medium_confidence",
+            "intent": {
+                "source_profile": "self_question",
+                "intent_tags": ["self_model"],
+                "domain_hints": ["goals"],
+            },
+            "domains_referenced": ["goals"],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "voice_feedback is only valid for voice_generation queries."
+
+
 def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient, monkeypatch):
     _insert_attribute(
         _db(client),

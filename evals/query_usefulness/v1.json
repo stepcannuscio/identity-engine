@@ -138,6 +138,78 @@
       }
     },
     {
+      "id": "voice_generation_local_guidance",
+      "query": "Rewrite this email so it sounds like me.",
+      "backend": "local",
+      "seed": {
+        "attributes": [
+          {
+            "domain": "voice",
+            "label": "tone",
+            "value": "Calm, direct, and lightly warm.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.95
+          },
+          {
+            "domain": "voice",
+            "label": "preference_writing_style_concise_responses",
+            "value": "I prefer concise responses.",
+            "status": "confirmed",
+            "routing": "local_only",
+            "confidence": 0.93
+          }
+        ],
+        "artifacts": [
+          {
+            "title": "Email sample",
+            "text": "I cut hedging, keep the cadence steady, and avoid sounding theatrical.",
+            "domain": "voice",
+            "type": "note"
+          }
+        ]
+      },
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "voice_generation",
+        "confidence": "medium_confidence",
+        "acquisition_status": "suggested",
+        "top_source_type": "preference",
+        "has_voice_profile": true,
+        "prompt_contains_voice_guidance": true,
+        "prompt_contains_exemplar_snippets": true,
+        "would_block_external": false
+      }
+    },
+    {
+      "id": "voice_generation_external_safe_prompt",
+      "query": "Rewrite this email so it sounds like me.",
+      "backend": "external",
+      "seed": {
+        "attributes": [
+          {
+            "domain": "voice",
+            "label": "tone",
+            "value": "Calm, direct, and lightly warm.",
+            "status": "confirmed",
+            "routing": "external_ok",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "expected": {
+        "query_type": "simple",
+        "source_profile": "voice_generation",
+        "confidence": "insufficient_data",
+        "acquisition_status": "suggested",
+        "top_source_type": "identity",
+        "has_voice_profile": true,
+        "prompt_contains_voice_guidance": true,
+        "prompt_contains_exemplar_snippets": false,
+        "would_block_external": false
+      }
+    },
+    {
       "id": "thin_context_goals",
       "query": "What are my current goals?",
       "backend": "local",

@@ -130,6 +130,9 @@ def evaluate_case(case: dict[str, Any]) -> EvalCaseResult:
         "confidence": context.coverage.confidence,
         "acquisition_status": context.acquisition.status,
         "top_source_type": top_source_type,
+        "has_voice_profile": context.assembled_context.voice_profile is not None,
+        "prompt_contains_voice_guidance": "Voice guidance:" in context.messages[0]["content"],
+        "prompt_contains_exemplar_snippets": "Local exemplar snippets:" in context.messages[0]["content"],
         "would_block_external": (
             context.backend == "external" and context.assembled_context.contains_local_only
         ),
