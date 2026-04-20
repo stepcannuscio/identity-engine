@@ -1,6 +1,6 @@
 # FastAPI Server Reference
 
-`make serve` starts the Phase 3 HTTPS backend for the web UI.
+`make serve` starts the HTTPS FastAPI backend for the web UI.
 
 ## Startup
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import sys
-import uuid
 from pathlib import Path
 
 # Allow direct script execution from project root.
@@ -13,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config.llm_router import ConfigurationError, print_routing_report, resolve_router
 from db.connection import get_connection
 from engine.query_engine import query
-from engine.session import Session
+from engine.session import Session, write_session_record
 
 
 def _print_history(history: list[dict]) -> None:
@@ -34,38 +33,6 @@ def _print_status(session: Session, backend: str) -> None:
         f"attributes_retrieved={session.attributes_retrieved} "
         f"backend={backend}"
     )
-
-
-def _write_session_record(conn, session: Session) -> None:
-    record = session.to_db_record()
-    conn.execute(
-        """
-        INSERT INTO reflection_sessions (
-            id,
-            session_type,
-            summary,
-            attributes_created,
-            attributes_updated,
-            external_calls_made,
-            routing_log,
-            started_at,
-            ended_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            str(uuid.uuid4()),
-            record["session_type"],
-            record["summary"],
-            record["attributes_created"],
-            record["attributes_updated"],
-            record["external_calls_made"],
-            record["routing_log"],
-            record["started_at"],
-            record["ended_at"],
-        ),
-    )
-    conn.commit()
 
 
 def main() -> None:
@@ -118,7 +85,7 @@ def main() -> None:
         except KeyboardInterrupt:
             print("\nInterrupted.")
         finally:
-            _write_session_record(conn, session)
+            write_session_record(conn, session)
             print(f"Session summary: {session.query_count} queries made, backend={backend}.")
 
 

@@ -5,7 +5,7 @@ attributes from a short free-text note. It extracts attributes, optionally
 confirms them, checks for conflicts, and writes confirmed rows directly to the
 encrypted store without creating a reflection session.
 
-Phase 3 also exposes capture over the FastAPI backend:
+The same flow is also exposed over the FastAPI backend:
 
 - `POST /capture/preview` extracts proposed attributes without writing
 - `POST /capture` writes confirmed attributes in non-interactive mode

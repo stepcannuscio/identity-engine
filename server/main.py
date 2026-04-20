@@ -22,7 +22,7 @@ from config.llm_router import print_routing_report, resolve_router, shutdown_sta
 from engine.artifact_worker import start_worker, stop_worker
 from config.settings import DB_DIR
 from engine.prompt_builder import RoutingViolationError
-from engine.session import Session
+from engine.session import Session, write_session_record
 from server.auth import ensure_ui_passphrase_exists, router as auth_router
 from server.db import get_db_connection
 from server.middleware import SecurityMiddleware, apply_security_headers
@@ -144,44 +144,8 @@ def _write_session_record(app: FastAPI) -> None:
     if session is None:
         return
 
-    record = session.to_db_record()
-    started_at = record["started_at"]
-    ended_at = record["ended_at"]
-    if hasattr(started_at, "isoformat"):
-        started_at = started_at.isoformat()
-    if hasattr(ended_at, "isoformat"):
-        ended_at = ended_at.isoformat()
     with get_db_connection() as conn:
-        import uuid
-
-        conn.execute(
-            """
-            INSERT INTO reflection_sessions (
-                id,
-                session_type,
-                summary,
-                attributes_created,
-                attributes_updated,
-                external_calls_made,
-                routing_log,
-                started_at,
-                ended_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                record["session_type"],
-                record["summary"],
-                record["attributes_created"],
-                record["attributes_updated"],
-                record["external_calls_made"],
-                record["routing_log"],
-                started_at,
-                ended_at,
-            ),
-        )
-        conn.commit()
+        write_session_record(conn, session)
 
 
 @asynccontextmanager

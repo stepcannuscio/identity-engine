@@ -26,7 +26,7 @@ class Session:
     """In-memory session state for one interactive query run."""
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    started_at: datetime = field(default_factory=datetime.now)
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     history: list[dict] = field(default_factory=list)
     query_count: int = 0
     attributes_retrieved: int = 0
@@ -96,5 +96,44 @@ class Session:
             "external_calls_made": external_calls,
             "routing_log": json.dumps(self.routing_log),
             "started_at": self.started_at,
-            "ended_at": datetime.now(),
+            "ended_at": datetime.now(UTC),
         }
+
+
+def write_session_record(conn, session: Session) -> None:
+    """Persist one completed freeform session to ``reflection_sessions``."""
+    record = session.to_db_record()
+    started_at = record["started_at"]
+    ended_at = record["ended_at"]
+    if hasattr(started_at, "isoformat"):
+        started_at = started_at.isoformat()
+    if hasattr(ended_at, "isoformat"):
+        ended_at = ended_at.isoformat()
+    conn.execute(
+        """
+        INSERT INTO reflection_sessions (
+            id,
+            session_type,
+            summary,
+            attributes_created,
+            attributes_updated,
+            external_calls_made,
+            routing_log,
+            started_at,
+            ended_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            record["session_type"],
+            record["summary"],
+            record["attributes_created"],
+            record["attributes_updated"],
+            record["external_calls_made"],
+            record["routing_log"],
+            started_at,
+            ended_at,
+        ),
+    )
+    conn.commit()

@@ -2,6 +2,8 @@
 
 ## Purpose
 
+This is the canonical project-state document for the repository. The README is intentionally product- and architecture-focused; implementation status, open gaps, and continuation context belong here.
+
 This document captures the current system state after completing:
 
 - Privacy Broker
@@ -543,3 +545,13 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - include local writing exemplar snippets only for local voice-generation runs
 - collect local-only voice fidelity feedback and convert repeated misses into
   lower-level voice preference signals without mutating canonical attributes
+
+---
+
+# Known Implementation Gaps
+
+- Cross-platform machine security inspection is incomplete. Automated posture checks are implemented for macOS; other platforms fall back to manual review guidance.
+- Artifact parsing is intentionally narrow. The system supports local `.txt`, `.md`, `.pdf`, and `.docx` inputs, but it does not yet provide OCR, image understanding, or richer connector/import pipelines.
+- Distribution is still source-first. The project runs well for developers from this repo, but it does not yet ship as a packaged desktop app, installer, or one-command production deployment.
+- The frontend production bundle is not yet code-split aggressively enough. Current Vite builds succeed, but they emit a large-chunk warning that should be addressed before optimizing for slower machines.
+- The planned generalized `Evidence` subsystem is not yet a standalone layer. Evidence is currently represented through artifact storage, provenance helpers, and feedback tables rather than one unified evidence model.
