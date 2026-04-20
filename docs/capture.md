@@ -9,6 +9,8 @@ Phase 3 also exposes capture over the FastAPI backend:
 
 - `POST /capture/preview` extracts proposed attributes without writing
 - `POST /capture` writes confirmed attributes in non-interactive mode
+- both endpoints accept `allow_external_extraction` for explicit per-request
+  consent when the resolved backend is external
 
 ---
 
@@ -58,10 +60,12 @@ You can also run the script directly:
 Quick capture writes are atomic per attribute. There is no session object and
 no `reflection_sessions` row is created.
 
-The current broker policy preserves existing behavior for capture extraction:
-the raw capture text may still be processed by the resolved backend, but every
-saved attribute is written back as `local_only`. Future hardening for external
-capture processing should happen inside the broker rather than in callers.
+Capture extraction now fails closed on external backends by default. If the
+resolved provider is local, extraction proceeds normally. If the resolved
+provider is external, raw capture text is only sent when the request includes
+`allow_external_extraction=true`; otherwise the API returns `409
+external_extraction_consent_required`. Every saved attribute is still written
+back as `local_only`.
 
 ---
 

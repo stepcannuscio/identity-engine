@@ -76,7 +76,6 @@ export default function SessionCard({ session }) {
           {session.routing_log?.length ? (
             session.routing_log.map((entry, index) => (
               <div key={`${entry.timestamp}-${index}`} className="timeline-item">
-                <p className="timeline-query">{entry.query}</p>
                 <PrivacyStatus
                   privacy={entry.privacy}
                   compact
@@ -86,6 +85,11 @@ export default function SessionCard({ session }) {
                   {entry.backend} &middot; {entry.query_type} &middot;{' '}
                   {entry.attribute_count} attributes &middot; {formatTime(entry.timestamp)}
                 </p>
+                {entry.domains_referenced?.length ? (
+                  <p className="field-help">
+                    Domains: {entry.domains_referenced.join(', ')}
+                  </p>
+                ) : null}
               </div>
             ))
           ) : (

@@ -69,7 +69,7 @@ def _mock_capture_extraction(monkeypatch, attrs: list[dict]) -> None:
     monkeypatch.setattr(
         capture_module.PrivacyBroker,
         "extract_structured_attributes",
-        lambda self, messages, task_type="capture_extraction": SimpleNamespace(
+        lambda self, messages, task_type="capture_extraction", **kwargs: SimpleNamespace(
             content=_mock_capture_response(attrs),
             metadata=SimpleNamespace(task_type=task_type),
         ),
@@ -79,7 +79,7 @@ def _mock_capture_extraction(monkeypatch, attrs: list[dict]) -> None:
 def test_preview_capture_uses_privacy_broker(conn, config, monkeypatch):
     calls: dict[str, object] = {}
 
-    def _mock_extract(self, messages, task_type="capture_extraction"):
+    def _mock_extract(self, messages, task_type="capture_extraction", **kwargs):
         calls["messages"] = messages
         calls["task_type"] = task_type
         return SimpleNamespace(

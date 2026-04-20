@@ -18,11 +18,32 @@ router = APIRouter(tags=["artifacts"])
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown", ""}
 _DOCX_SUFFIXES = {".docx"}
 _PDF_SUFFIXES = {".pdf"}
+MAX_ARTIFACT_REQUEST_BYTES = 5 * 1024 * 1024
+MAX_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024
+MAX_ARTIFACT_TEXT_CHARS = 250_000
 
 
 class _UploadLike(Protocol):
     filename: str | None
     file: BinaryIO
+
+
+def _request_size_guard(request: Request) -> None:
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        size = int(content_length)
+    except ValueError:
+        return
+    if size > MAX_ARTIFACT_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="artifact request exceeds size limit")
+
+
+def _text_size_guard(text: str) -> str:
+    if len(text) > MAX_ARTIFACT_TEXT_CHARS:
+        raise HTTPException(status_code=413, detail="artifact text exceeds size limit")
+    return text
 
 
 def _decode_upload(upload: _UploadLike) -> str:
@@ -31,11 +52,13 @@ def _decode_upload(upload: _UploadLike) -> str:
         raise HTTPException(status_code=400, detail="unsupported artifact file type")
 
     raw = upload.file.read()
+    if len(raw) > MAX_ARTIFACT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="artifact file exceeds size limit")
     if suffix in _PDF_SUFFIXES:
         text = extract_pdf_text(raw)
         if not text.strip():
             raise HTTPException(status_code=400, detail="unable to extract text from pdf")
-        return text
+        return _text_size_guard(text)
     if suffix in _DOCX_SUFFIXES:
         try:
             text = extract_docx_text(raw)
@@ -43,9 +66,9 @@ def _decode_upload(upload: _UploadLike) -> str:
             raise HTTPException(status_code=400, detail="unable to extract text from docx") from exc
         if not text.strip():
             raise HTTPException(status_code=400, detail="unable to extract text from docx")
-        return text
+        return _text_size_guard(text)
     try:
-        return raw.decode("utf-8")
+        return _text_size_guard(raw.decode("utf-8"))
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=400, detail="artifact upload must be utf-8 text") from exc
 
@@ -75,6 +98,7 @@ def _parse_tags(raw_tags: object) -> list[str]:
 @router.post("/artifacts", response_model=ArtifactIngestResponse)
 async def create_artifact(request: Request) -> ArtifactIngestResponse:
     """Ingest a local artifact from JSON text or multipart upload."""
+    _request_size_guard(request)
     content_type = request.headers.get("content-type", "")
     text: str | None = None
     title: str | None = None
@@ -86,7 +110,13 @@ async def create_artifact(request: Request) -> ArtifactIngestResponse:
     tags: list[str] = []
 
     if "application/json" in content_type:
-        payload = await request.json()
+        raw_body = await request.body()
+        if len(raw_body) > MAX_ARTIFACT_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="artifact request exceeds size limit")
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="invalid json body") from exc
         text = payload.get("text")
         title = payload.get("title")
         artifact_type = payload.get("type")
@@ -122,6 +152,7 @@ async def create_artifact(request: Request) -> ArtifactIngestResponse:
 
     if text is None:
         raise HTTPException(status_code=400, detail="artifact text or file is required")
+    text = _text_size_guard(text)
 
     with get_db_connection() as conn:
         try:

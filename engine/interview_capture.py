@@ -24,6 +24,8 @@ def preview_interview_answer(
     answer: str,
     domain_name: str,
     provider_config,
+    *,
+    allow_external_extraction: bool = False,
 ) -> list[dict]:
     """Extract interview attributes without writing them to the database."""
     return preview_interview_answer_with_audit(
@@ -31,6 +33,7 @@ def preview_interview_answer(
         answer,
         domain_name,
         provider_config,
+        allow_external_extraction=allow_external_extraction,
     ).content
 
 
@@ -39,12 +42,22 @@ def preview_interview_answer_with_audit(
     answer: str,
     domain_name: str,
     provider_config,
+    *,
+    allow_external_extraction: bool = False,
 ) -> BrokeredResult[list[dict]]:
     """Extract interview attributes without writing them to the database."""
     validate_interview_prompt(domain_name, question)
     if not answer.strip():
         raise ValueError("Interview answer is required.")
-    result = PrivacyBroker(provider_config).extract_interview_attributes(question, answer)
+    broker = PrivacyBroker(provider_config)
+    if allow_external_extraction:
+        result = broker.extract_interview_attributes(
+            question,
+            answer,
+            allow_external_input=True,
+        )
+    else:
+        result = broker.extract_interview_attributes(question, answer)
     return BrokeredResult(content=list(result.content), metadata=result.metadata)
 
 

@@ -150,7 +150,6 @@ class QueryFeedbackResponse(BaseModel):
 class RoutingLogEntry(BaseModel):
     """One routing decision made during a query session."""
 
-    query: str
     query_type: str
     backend: str
     attribute_count: int
@@ -335,6 +334,7 @@ class TeachQuestionAnswerRequest(BaseModel):
 
     answer: str
     accepted: list["CapturePreviewWriteItem"] | None = None
+    allow_external_extraction: bool = False
 
 
 class TeachQuestionFeedbackRequest(BaseModel):
@@ -479,6 +479,7 @@ class CaptureRequest(BaseModel):
     text: str
     domain_hint: str | None = None
     accepted: list["CapturePreviewWriteItem"] | None = None
+    allow_external_extraction: bool = False
 
 
 class CapturePreviewItem(BaseModel):
@@ -524,6 +525,7 @@ class InterviewPreviewRequest(BaseModel):
     question: str
     answer: str
     accepted: list["CapturePreviewWriteItem"] | None = None
+    allow_external_extraction: bool = False
 
 
 class InterviewPreviewResponse(BaseModel):

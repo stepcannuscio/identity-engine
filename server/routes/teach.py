@@ -5,9 +5,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from engine.interview_capture import save_preview_attributes
-from engine.privacy_broker import PrivacyBroker
+from engine.privacy_broker import (
+    AuditedExternalExtractionConsentRequiredError,
+    PrivacyBroker,
+)
 from engine.security_posture import inspect_security_posture
 from engine.setup_state import (
     build_privacy_preferences,
@@ -41,6 +45,18 @@ from server.models.schemas import (
 )
 
 router = APIRouter(tags=["teach"])
+
+
+def _external_extraction_consent_response() -> JSONResponse:
+    message = "Raw user input requires explicit consent before external extraction."
+    return JSONResponse(
+        {
+            "error": "external_extraction_consent_required",
+            "detail": message,
+            "message": message,
+        },
+        status_code=409,
+    )
 
 
 def _accepted_to_dicts(items: list[CapturePreviewWriteItem] | list[dict]) -> list[dict]:
@@ -212,38 +228,50 @@ def questions(request: Request) -> TeachQuestionsResponse:
     return TeachQuestionsResponse(questions=_serialize_questions(items))
 
 
-@router.post("/teach/questions/{question_id}/answer")
+@router.post("/teach/questions/{question_id}/answer", response_model=None)
 def answer_question(
     question_id: str,
     payload: TeachQuestionAnswerRequest,
     request: Request,
-) -> dict[str, object]:
+) -> dict[str, object] | JSONResponse:
     """Save a Teach answer by extracting structured attributes and persisting them."""
-    with get_db_connection() as conn:
-        question = get_question(conn, question_id)
-        if question is None:
-            raise HTTPException(status_code=404, detail="teach question not found")
-        if not payload.answer.strip():
-            raise HTTPException(status_code=422, detail="answer is required")
-        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+    try:
+        with get_db_connection() as conn:
+            question = get_question(conn, question_id)
+            if question is None:
+                raise HTTPException(status_code=404, detail="teach question not found")
+            if not payload.answer.strip():
+                raise HTTPException(status_code=422, detail="answer is required")
+            provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
 
-        accepted = payload.accepted
-        if accepted is None:
-            result = PrivacyBroker(provider_config).extract_interview_attributes(
-                question.prompt,
-                payload.answer,
-                task_type="teach_answer_extraction",
-            )
-            accepted = [
-                {
-                    **item,
-                    "domain": question.domain or "personality",
-                }
-                for item in result.content
-            ]
+            accepted = payload.accepted
+            if accepted is None:
+                broker = PrivacyBroker(provider_config)
+                if payload.allow_external_extraction:
+                    result = broker.extract_interview_attributes(
+                        question.prompt,
+                        payload.answer,
+                        task_type="teach_answer_extraction",
+                        allow_external_input=True,
+                    )
+                else:
+                    result = broker.extract_interview_attributes(
+                        question.prompt,
+                        payload.answer,
+                        task_type="teach_answer_extraction",
+                    )
+                accepted = [
+                    {
+                        **item,
+                        "domain": question.domain or "personality",
+                    }
+                    for item in result.content
+                ]
 
-        saved = save_preview_attributes(conn, _accepted_to_dicts(accepted))
-        mark_question_answered(conn, question_id)
+            saved = save_preview_attributes(conn, _accepted_to_dicts(accepted))
+            mark_question_answered(conn, question_id)
+    except AuditedExternalExtractionConsentRequiredError:
+        return _external_extraction_consent_response()
 
     return {
         "attributes_saved": len(saved),

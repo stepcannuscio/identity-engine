@@ -1,5 +1,7 @@
 """Database schema definitions and table creation."""
 
+import json
+
 from config.provider_catalog import list_provider_definitions
 
 DOMAINS_TABLE_SQL = """
@@ -466,6 +468,50 @@ def _migrate_provider_status_table(conn) -> None:
     conn.commit()
 
 
+def _scrub_reflection_session_queries(conn) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, routing_log
+        FROM reflection_sessions
+        WHERE routing_log IS NOT NULL AND routing_log != ''
+        """
+    ).fetchall()
+
+    updates: list[tuple[str, str]] = []
+    for row in rows:
+        session_id = str(row[0])
+        raw_log = row[1]
+        if not isinstance(raw_log, str):
+            continue
+        try:
+            parsed = json.loads(raw_log)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, list):
+            continue
+
+        changed = False
+        scrubbed_entries: list[object] = []
+        for entry in parsed:
+            if not isinstance(entry, dict):
+                scrubbed_entries.append(entry)
+                continue
+            if "query" in entry:
+                changed = True
+                scrubbed_entries.append({key: value for key, value in entry.items() if key != "query"})
+            else:
+                scrubbed_entries.append(entry)
+        if changed:
+            updates.append((json.dumps(scrubbed_entries), session_id))
+
+    if updates:
+        conn.executemany(
+            "UPDATE reflection_sessions SET routing_log = ? WHERE id = ?",
+            updates,
+        )
+        conn.commit()
+
+
 def create_tables(conn) -> None:
     """Execute the full schema DDL against the given connection."""
     conn.executescript(SCHEMA_SQL)
@@ -511,6 +557,7 @@ def create_tables(conn) -> None:
             for definition in list_provider_definitions()
         ],
     )
+    _scrub_reflection_session_queries(conn)
     conn.commit()
 
 

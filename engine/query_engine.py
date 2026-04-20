@@ -144,14 +144,14 @@ def record_query_result(
     session.add_exchange(context.query, response)
     session.query_count += 1
     session.attributes_retrieved += len(context.attributes)
-    session.log_query(context.query, audit, query_type=context.query_type)
+    session.log_query(audit, query_type=context.query_type)
 
 
 def record_blocked_query(session: Session, context: QueryContext, error: Exception) -> None:
     """Persist privacy-blocked broker decisions without changing query behavior."""
     audit = getattr(error, "audit", None)
     if isinstance(audit, InferenceDecision):
-        session.log_query(context.query, audit, query_type=context.query_type)
+        session.log_query(audit, query_type=context.query_type)
 
 
 def query(

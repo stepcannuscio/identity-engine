@@ -237,12 +237,10 @@ def _is_upstream_error(exc: Exception) -> bool:
 def _query_error_response(
     exc: Exception,
     provider_config: ProviderConfig,
-    query_text: str,
 ) -> tuple[int, dict[str, object]]:
     if isinstance(exc, RoutingViolationError):
         logger.warning(
-            "Blocked external query because it would include local_only attributes. query=%r",
-            query_text,
+            "Blocked external query because it would include local_only attributes."
         )
         return (
             409,
@@ -274,9 +272,8 @@ def _query_error_response(
 
     if not provider_config.is_local and _is_upstream_error(exc):
         logger.exception(
-            "External provider request failed. provider=%s query=%r",
+            "External provider request failed. provider=%s",
             provider_config.provider,
-            query_text,
         )
         return (
             502,
@@ -290,9 +287,8 @@ def _query_error_response(
         )
 
     logger.exception(
-        "Unhandled query failure. provider=%s query=%r",
+        "Unhandled query failure. provider=%s",
         provider_config.provider,
-        query_text,
     )
     return (
         500,
@@ -367,7 +363,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
     except Exception as exc:
         if context is not None:
             record_blocked_query(request.app.state.current_session, context, exc)
-        status_code, body = _query_error_response(exc, provider_config, payload.query)
+        status_code, body = _query_error_response(exc, provider_config)
         return JSONResponse(body, status_code=status_code)
 
 
@@ -395,7 +391,7 @@ def query_stream(
                 provider_config,
             )
     except Exception as exc:
-        status_code, body = _query_error_response(exc, provider_config, payload.query)
+        status_code, body = _query_error_response(exc, provider_config)
         return JSONResponse(body, status_code=status_code)
     send_warning = payload.backend_override == "external" and _is_sensitive_query(
         payload.query,
@@ -483,7 +479,7 @@ def query_stream(
             )
         except Exception as exc:
             record_blocked_query(request.app.state.current_session, context, exc)
-            _, body = _query_error_response(exc, provider_config, payload.query)
+            _, body = _query_error_response(exc, provider_config)
             yield _event(
                 {
                     "type": "error",

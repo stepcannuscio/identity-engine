@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { capture, capturePreview } from '../../api/endpoints.js'
+import { useAppState } from '../../store/appState.js'
 
 function PreviewCard({ item, onToggle }) {
   return (
@@ -43,14 +44,17 @@ function PreviewCard({ item, onToggle }) {
 }
 
 export default function CapturePanel({ domains, onSaved }) {
+  const { backend } = useAppState()
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [domainHint, setDomainHint] = useState('')
   const [previewItems, setPreviewItems] = useState([])
+  const [allowExternalExtraction, setAllowExternalExtraction] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const requiresExternalConsent = backend === 'external'
 
   const acceptedItems = previewItems
     .filter((item) => item.accepted)
@@ -74,15 +78,17 @@ export default function CapturePanel({ domains, onSaved }) {
     setIsPreviewing(true)
 
     try {
-      const response = await capturePreview(text, domainHint)
+      const response = requiresExternalConsent
+        ? await capturePreview(text, domainHint, allowExternalExtraction)
+        : await capturePreview(text, domainHint)
       setPreviewItems(
         response.proposed.map((item) => ({
           ...item,
           accepted: true,
         })),
       )
-    } catch {
-      setError('Unable to preview capture right now.')
+    } catch (error) {
+      setError(error?.response?.data?.detail ?? 'Unable to preview capture right now.')
     } finally {
       setIsPreviewing(false)
     }
@@ -98,15 +104,18 @@ export default function CapturePanel({ domains, onSaved }) {
     setIsSaving(true)
 
     try {
-      const response = await capture(text, domainHint, acceptedItems)
+      const response = requiresExternalConsent
+        ? await capture(text, domainHint, acceptedItems, allowExternalExtraction)
+        : await capture(text, domainHint, acceptedItems)
       await onSaved()
       setSuccess(`Saved ${response.attributes_saved} attribute(s)`)
       setPreviewItems([])
       setText('')
       setDomainHint('')
+      setAllowExternalExtraction(false)
       setOpen(false)
-    } catch {
-      setError('Unable to save accepted attributes.')
+    } catch (error) {
+      setError(error?.response?.data?.detail ?? 'Unable to save accepted attributes.')
     } finally {
       setIsSaving(false)
     }
@@ -155,11 +164,23 @@ export default function CapturePanel({ domains, onSaved }) {
               type="button"
               className="button-secondary"
               onClick={handlePreview}
-              disabled={isPreviewing}
+              disabled={isPreviewing || (requiresExternalConsent && !allowExternalExtraction)}
             >
               Preview
             </button>
           </div>
+
+          {requiresExternalConsent ? (
+            <label className="field-help">
+              <input
+                type="checkbox"
+                checked={allowExternalExtraction}
+                onChange={(event) => setAllowExternalExtraction(event.target.checked)}
+              />{' '}
+              I understand this raw note may be sent to my configured external provider for
+              extraction.
+            </label>
+          ) : null}
 
           {error ? (
             <p className="field-error" role="alert">

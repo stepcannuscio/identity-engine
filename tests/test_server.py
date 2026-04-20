@@ -41,6 +41,17 @@ def _config() -> ProviderConfig:
     )
 
 
+def _external_config() -> ProviderConfig:
+    return ProviderConfig(
+        provider="anthropic",
+        api_key="test-key",  # pragma: allowlist secret
+        model="claude-sonnet-4-6",
+        is_local=False,
+        arch="apple_silicon",
+        ram_gb=36.0,
+    )
+
+
 def _domain_id(conn, domain: str) -> str:
     row = conn.execute("SELECT id FROM domains WHERE name = ?", (domain,)).fetchone()
     assert row is not None
@@ -88,7 +99,7 @@ def _mock_capture_extraction(monkeypatch, attrs: list[dict]) -> None:
     monkeypatch.setattr(
         capture_module.PrivacyBroker,
         "extract_structured_attributes",
-        lambda self, messages, task_type="capture_extraction": SimpleNamespace(
+        lambda self, messages, task_type="capture_extraction", **kwargs: SimpleNamespace(
             content=json.dumps(attrs),
             metadata=SimpleNamespace(task_type=task_type),
         ),
@@ -845,6 +856,54 @@ def test_capture_writes_attributes_with_local_only_routing(client: TestClient, m
     assert routing == "local_only"
 
 
+def test_capture_preview_requires_consent_for_external_extraction(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.capture.resolve_active_provider_config",
+        lambda conn, default_config: _external_config(),
+    )
+
+    response = client.post(
+        "/capture/preview",
+        json={"text": "I focus best in the morning."},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "external_extraction_consent_required"
+
+
+def test_capture_preview_allows_external_extraction_after_consent(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.capture.resolve_active_provider_config",
+        lambda conn, default_config: _external_config(),
+    )
+    _mock_capture_extraction(
+        monkeypatch,
+        [
+            {
+                "domain": "patterns",
+                "label": "morning_focus",
+                "value": "I focus best in the morning.",
+                "elaboration": None,
+                "mutability": "evolving",
+                "confidence": 0.7,
+            }
+        ],
+    )
+
+    response = client.post(
+        "/capture/preview",
+        json={
+            "text": "I focus best in the morning.",
+            "allow_external_extraction": True,
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["proposed"][0]["label"] == "morning_focus"
+
+
 def test_interview_preview_does_not_write_to_database(client: TestClient, monkeypatch):
     monkeypatch.setattr(
         "server.routes.interview.preview_interview_answer",
@@ -874,6 +933,26 @@ def test_interview_preview_does_not_write_to_database(client: TestClient, monkey
     assert response.json()["proposed"][0]["label"] == "career_priority"
     count = _db(client).execute("SELECT count(*) FROM attributes").fetchone()[0]
     assert count == 0
+
+
+def test_interview_preview_requires_consent_for_external_extraction(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "server.routes.interview.resolve_active_provider_config",
+        lambda conn, default_config: _external_config(),
+    )
+
+    response = client.post(
+        "/interview/preview",
+        json={
+            "domain": "goals",
+            "question": "What is the most important thing you are trying to achieve in the next six months, professionally?",
+            "answer": "Ship the backend cleanly this quarter.",
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "external_extraction_consent_required"
 
 
 def test_interview_writes_attributes_with_reflection_source(client: TestClient):
@@ -974,6 +1053,72 @@ def test_post_artifacts_rejects_text_and_file_together(client: TestClient):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "provide either text or file, not both"
+
+
+def test_post_artifacts_rejects_oversized_content_length(client: TestClient):
+    headers = _login_headers(client)
+    headers["Content-Length"] = str((5 * 1024 * 1024) + 1)
+
+    response = client.post(
+        "/artifacts",
+        json={"text": "short note"},
+        headers=headers,
+    )
+
+    assert response.status_code == 413
+
+
+def test_post_artifacts_rejects_oversized_json_text(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        json={"text": "x" * 250001},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 413
+
+
+def test_post_artifacts_rejects_oversized_file_upload(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        files={"file": ("large.txt", b"x" * ((5 * 1024 * 1024) + 1), "text/plain")},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 413
+
+
+def test_post_artifacts_rejects_docx_with_oversized_document_xml(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        files={
+            "file": (
+                "huge.docx",
+                _simple_docx_bytes("x" * ((2 * 1024 * 1024) + 1)),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unable to extract text from docx"
+
+
+def test_post_artifacts_rejects_extracted_text_over_limit(client: TestClient):
+    response = client.post(
+        "/artifacts",
+        files={
+            "file": (
+                "huge.pdf",
+                _simple_pdf_bytes("x" * 250001),
+                "application/pdf",
+            )
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 413
 
 
 def test_query_returns_409_when_external_routing_violates_local_only_policy(
@@ -1533,10 +1678,63 @@ def test_sessions_include_routing_log_entries(client: TestClient):
     session = response.json()[0]
     assert session["routing_log"][0]["backend"] == "external"
     assert session["routing_log"][0]["domains_referenced"] == ["goals", "values"]
+    assert "query" not in session["routing_log"][0]
     assert session["routing_log"][0]["warning"] is None
     assert session["routing_log"][0]["reason"] is None
     assert session["routing_log"][0]["privacy"]["execution_mode"] == "external"
     assert session["privacy"]["execution_mode"] == "external"
+
+
+def test_create_tables_scrubs_stored_query_text_from_reflection_sessions(monkeypatch):
+    with get_plain_connection(":memory:") as conn:
+        create_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO reflection_sessions (
+                id,
+                session_type,
+                summary,
+                attributes_created,
+                attributes_updated,
+                external_calls_made,
+                routing_log,
+                started_at,
+                ended_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                "freeform",
+                "1 query across session",
+                0,
+                0,
+                1,
+                json.dumps(
+                    [
+                        {
+                            "query": "What matters most to me right now?",
+                            "query_type": "open_ended",
+                            "backend": "external",
+                            "attribute_count": 4,
+                            "domains_referenced": ["goals", "values"],
+                            "timestamp": "2026-04-08T12:00:00+00:00",
+                        }
+                    ]
+                ),
+                "2026-04-08T12:00:00+00:00",
+                "2026-04-08T12:05:00+00:00",
+            ),
+        )
+        conn.commit()
+
+        create_tables(conn)
+
+        stored = conn.execute(
+            "SELECT routing_log FROM reflection_sessions"
+        ).fetchone()
+        assert stored is not None
+        assert '"query"' not in str(stored[0])
 
 
 def test_server_startup_asserts_bind_ip_is_not_zero_zero_zero_zero():
@@ -1746,6 +1944,33 @@ def test_teach_answer_saves_attributes_and_marks_question_answered(client):
         (question_id,),
     ).fetchone()
     assert stored == ("answered",)
+
+
+def test_teach_answer_requires_consent_for_external_extraction(client, monkeypatch):
+    question_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO teach_questions (
+            id, prompt, domain, intent_key, source, status, priority, onboarding_stage
+        )
+        VALUES (?, ?, ?, ?, 'catalog', 'pending', 10.0, 'teaching')
+        """,
+        (question_id, "What matters most to you at work?", "values", "values_priority"),
+    )
+    _db(client).commit()
+    monkeypatch.setattr(
+        "server.routes.teach.resolve_active_provider_config",
+        lambda conn, default_config: _external_config(),
+    )
+
+    response = client.post(
+        f"/teach/questions/{question_id}/answer",
+        json={"answer": "Clear priorities."},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "external_extraction_consent_required"
 
 
 def test_teach_feedback_dismisses_question(client):

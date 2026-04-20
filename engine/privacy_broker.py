@@ -35,18 +35,17 @@ class InferenceDecision:
     decision: str = "allowed"
     warning: str | None = None
     reason: str | None = None
+    external_input_allowed_by_user: bool = False
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_routing_log_entry(
         self,
         *,
-        query: str,
         query_type: str | None = None,
     ) -> dict[str, object]:
         """Serialize the decision into a session-safe routing-log entry."""
         resolved_query_type = query_type or self.retrieval_mode or ""
         return {
-            "query": query,
             "query_type": resolved_query_type,
             "backend": "local" if self.is_local else (self.provider or "external"),
             "attribute_count": self.attribute_count,
@@ -62,6 +61,7 @@ class InferenceDecision:
             "decision": self.decision,
             "warning": self.warning,
             "reason": self.reason,
+            "external_input_allowed_by_user": self.external_input_allowed_by_user,
             "timestamp": self.timestamp,
         }
 
@@ -76,6 +76,14 @@ class BrokeredResult(Generic[T]):
 
 class AuditedRoutingViolationError(RoutingViolationError):
     """Routing violation that carries a structured audit decision."""
+
+    def __init__(self, message: str, audit: InferenceDecision):
+        super().__init__(message)
+        self.audit = audit
+
+
+class AuditedExternalExtractionConsentRequiredError(Exception):
+    """External extraction request that was blocked pending explicit user consent."""
 
     def __init__(self, message: str, audit: InferenceDecision):
         super().__init__(message)
@@ -116,6 +124,7 @@ class PrivacyBroker:
         messages: list[dict],
         *,
         task_type: str = "capture_extraction",
+        allow_external_input: bool = False,
     ) -> BrokeredResult[str]:
         """Run structured extraction through the router.
 
@@ -124,11 +133,16 @@ class PrivacyBroker:
         ``local_only``. This broker method is where stricter external capture
         policy can be added later without changing callers.
         """
+        self._ensure_external_input_allowed(
+            task_type=task_type,
+            allow_external_input=allow_external_input,
+        )
         decision = self._decide(
             task_type=task_type,
             attributes=None,
             enforce_routing=False,
             retrieval_mode=None,
+            external_input_allowed_by_user=allow_external_input,
         )
         response = generate_response(messages, self.provider_config)
         assert isinstance(response, str)
@@ -140,20 +154,52 @@ class PrivacyBroker:
         answer: str,
         *,
         task_type: str = "interview_extraction",
+        allow_external_input: bool = False,
     ) -> BrokeredResult[list[dict]]:
         """Run question/answer extraction for the guided interview flow.
 
         This preserves the current interview behavior while moving the
         application-level inference seam out of the script and into the broker.
         """
+        self._ensure_external_input_allowed(
+            task_type=task_type,
+            allow_external_input=allow_external_input,
+        )
         decision = self._decide(
             task_type=task_type,
             attributes=None,
             enforce_routing=False,
             retrieval_mode=None,
+            external_input_allowed_by_user=allow_external_input,
         )
         extracted = extract_attributes(question, answer, self.provider_config)
         return BrokeredResult(content=extracted, metadata=decision)
+
+    def _ensure_external_input_allowed(
+        self,
+        *,
+        task_type: str,
+        allow_external_input: bool,
+    ) -> None:
+        if self.provider_config.is_local or allow_external_input:
+            return
+
+        audit = InferenceDecision(
+            provider=self.provider_config.provider,
+            model=self.provider_config.model,
+            is_local=self.provider_config.is_local,
+            task_type=task_type,
+            blocked_external_attributes_count=0,
+            routing_enforced=True,
+            decision="blocked",
+            warning="raw user input requires explicit consent before external extraction",
+            reason="external_extraction_consent_required",
+            external_input_allowed_by_user=False,
+        )
+        raise AuditedExternalExtractionConsentRequiredError(
+            "Raw user input requires explicit consent before external extraction.",
+            audit=audit,
+        )
 
     def _decide(
         self,
@@ -164,6 +210,7 @@ class PrivacyBroker:
         retrieval_mode: str | None,
         contains_local_only_context: bool | None = None,
         domains_used: list[str] | None = None,
+        external_input_allowed_by_user: bool = False,
     ) -> InferenceDecision:
         attributes = attributes or []
         blocked_count = 0
@@ -196,6 +243,7 @@ class PrivacyBroker:
             domains_used=resolved_domains_used,
             retrieval_mode=retrieval_mode,
             contains_local_only_context=resolved_contains_local_only,
+            external_input_allowed_by_user=external_input_allowed_by_user,
         )
 
         if enforce_routing and not self.provider_config.is_local:
@@ -221,6 +269,7 @@ class PrivacyBroker:
                     decision="blocked",
                     reason="local_only_context_blocked_for_external_inference",
                     warning="local_only attributes cannot be sent to external backends",
+                    external_input_allowed_by_user=external_input_allowed_by_user,
                 )
                 raise AuditedRoutingViolationError(
                     "local_only attributes cannot be sent to external backends: "

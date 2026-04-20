@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from engine.capture import capture as save_capture
 from engine.capture import preview_capture
 from engine.capture import save_preview_attributes
+from engine.privacy_broker import AuditedExternalExtractionConsentRequiredError
 from engine.setup_state import resolve_active_provider_config
 from server.db import get_db_connection
 from server.models.schemas import (
@@ -18,6 +20,18 @@ from server.models.schemas import (
 from server.routes.attributes import _serialize_attribute
 
 router = APIRouter(tags=["capture"])
+
+
+def _external_extraction_consent_response() -> JSONResponse:
+    message = "Raw user input requires explicit consent before external extraction."
+    return JSONResponse(
+        {
+            "error": "external_extraction_consent_required",
+            "detail": message,
+            "message": message,
+        },
+        status_code=409,
+    )
 
 
 def _find_conflict(conn, domain: str, label: str):
@@ -46,51 +60,79 @@ def _find_conflict(conn, domain: str, label: str):
 
 
 @router.post("/capture/preview", response_model=CapturePreviewResponse)
-def preview(payload: CaptureRequest, request: Request) -> CapturePreviewResponse:
+def preview(payload: CaptureRequest, request: Request) -> CapturePreviewResponse | JSONResponse:
     """Extract capture attributes without writing them to the database."""
     proposed: list[CapturePreviewItem] = []
-    with get_db_connection() as conn:
-        extracted = preview_capture(
-            payload.text,
-            payload.domain_hint,
-            resolve_active_provider_config(conn, request.app.state.llm_config),
-        )
-        for item in extracted:
-            conflict = _find_conflict(conn, item["domain"], item["label"])
-            proposed.append(
-                CapturePreviewItem(
-                    domain=item["domain"],
-                    label=item["label"],
-                    value=item["value"],
-                    elaboration=item["elaboration"],
-                    mutability=item["mutability"],
-                    confidence=float(item["confidence"]),
-                    conflicts_with=_serialize_attribute(conflict) if conflict is not None else None,
+    try:
+        with get_db_connection() as conn:
+            provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+            if payload.allow_external_extraction:
+                extracted = preview_capture(
+                    payload.text,
+                    payload.domain_hint,
+                    provider_config,
+                    allow_external_extraction=True,
                 )
-            )
+            else:
+                extracted = preview_capture(
+                    payload.text,
+                    payload.domain_hint,
+                    provider_config,
+                )
+            for item in extracted:
+                conflict = _find_conflict(conn, item["domain"], item["label"])
+                proposed.append(
+                    CapturePreviewItem(
+                        domain=item["domain"],
+                        label=item["label"],
+                        value=item["value"],
+                        elaboration=item["elaboration"],
+                        mutability=item["mutability"],
+                        confidence=float(item["confidence"]),
+                        conflicts_with=(
+                            _serialize_attribute(conflict) if conflict is not None else None
+                        ),
+                    )
+                )
+    except AuditedExternalExtractionConsentRequiredError:
+        return _external_extraction_consent_response()
     return CapturePreviewResponse(proposed=proposed)
 
 
 @router.post("/capture", response_model=CaptureResponse)
-def capture(payload: CaptureRequest, request: Request) -> CaptureResponse:
+def capture(payload: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
     """Persist quick-capture attributes in non-interactive mode."""
-    with get_db_connection() as conn:
-        if payload.accepted is not None:
-            saved = save_preview_attributes(
-                conn,
-                [item.model_dump() for item in payload.accepted],
-            )
-        else:
-            saved = save_capture(
-                payload.text,
-                payload.domain_hint,
-                conn,
-                resolve_active_provider_config(conn, request.app.state.llm_config),
-                confirm=False,
-            )
-        attributes = []
-        for item in saved:
-            row = _find_conflict(conn, item["domain"], item["label"])
-            if row is not None:
-                attributes.append(_serialize_attribute(row))
+    attributes = []
+    try:
+        with get_db_connection() as conn:
+            if payload.accepted is not None:
+                saved = save_preview_attributes(
+                    conn,
+                    [item.model_dump() for item in payload.accepted],
+                )
+            else:
+                provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+                if payload.allow_external_extraction:
+                    saved = save_capture(
+                        payload.text,
+                        payload.domain_hint,
+                        conn,
+                        provider_config,
+                        confirm=False,
+                        allow_external_extraction=True,
+                    )
+                else:
+                    saved = save_capture(
+                        payload.text,
+                        payload.domain_hint,
+                        conn,
+                        provider_config,
+                        confirm=False,
+                    )
+            for item in saved:
+                row = _find_conflict(conn, item["domain"], item["label"])
+                if row is not None:
+                    attributes.append(_serialize_attribute(row))
+    except AuditedExternalExtractionConsentRequiredError:
+        return _external_extraction_consent_response()
     return CaptureResponse(attributes_saved=len(attributes), attributes=attributes)

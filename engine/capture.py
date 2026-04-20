@@ -86,22 +86,39 @@ def preview_capture(
     text: str,
     domain_hint: str | None,
     provider_config,
+    *,
+    allow_external_extraction: bool = False,
 ) -> list[dict]:
     """Extract quick-capture attributes without writing them to the database."""
-    return preview_capture_with_audit(text, domain_hint, provider_config).content
+    return preview_capture_with_audit(
+        text,
+        domain_hint,
+        provider_config,
+        allow_external_extraction=allow_external_extraction,
+    ).content
 
 
 def preview_capture_with_audit(
     text: str,
     domain_hint: str | None,
     provider_config,
+    *,
+    allow_external_extraction: bool = False,
 ) -> BrokeredResult[list[dict]]:
     """Extract quick-capture attributes without writing them to the database."""
     _validate_domain_hint(domain_hint)
-    result = PrivacyBroker(provider_config).extract_structured_attributes(
-        _build_messages(text, domain_hint),
-        task_type="capture_extraction",
-    )
+    broker = PrivacyBroker(provider_config)
+    if allow_external_extraction:
+        result = broker.extract_structured_attributes(
+            _build_messages(text, domain_hint),
+            task_type="capture_extraction",
+            allow_external_input=True,
+        )
+    else:
+        result = broker.extract_structured_attributes(
+            _build_messages(text, domain_hint),
+            task_type="capture_extraction",
+        )
     return BrokeredResult(
         content=_parse_attributes(result.content),
         metadata=result.metadata,
@@ -326,6 +343,8 @@ def capture(
     conn,
     provider_config,
     confirm: bool = True,
+    *,
+    allow_external_extraction: bool = False,
 ) -> list[dict]:
     """Extract and persist quick-capture attributes.
 
@@ -339,7 +358,12 @@ def capture(
     Returns:
         The list of attribute dicts that were actually written.
     """
-    attributes = preview_capture(text, domain_hint, provider_config)
+    attributes = preview_capture(
+        text,
+        domain_hint,
+        provider_config,
+        allow_external_extraction=allow_external_extraction,
+    )
 
     if not attributes:
         return []

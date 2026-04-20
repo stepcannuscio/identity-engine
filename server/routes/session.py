@@ -41,7 +41,6 @@ def _serialize_session(row) -> SessionRecord:
     ]
     routing_log = [
         RoutingLogEntry(
-            query=str(entry.get("query", "")),
             query_type=str(entry.get("query_type", entry.get("retrieval_mode", ""))),
             backend=_backend_from_entry(entry),
             attribute_count=int(entry.get("attribute_count", 0)),

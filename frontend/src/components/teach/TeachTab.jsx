@@ -154,7 +154,9 @@ export default function TeachTab({ bootstrapQuery }) {
     securityPosture,
   } = useAppState()
   const [answer, setAnswer] = useState('')
+  const [allowExternalAnswerExtraction, setAllowExternalAnswerExtraction] = useState(false)
   const [quickNote, setQuickNote] = useState('')
+  const [allowExternalQuickNoteExtraction, setAllowExternalQuickNoteExtraction] = useState(false)
   const [artifactTitle, setArtifactTitle] = useState('')
   const [artifactText, setArtifactText] = useState('')
   const [artifactFile, setArtifactFile] = useState(null)
@@ -168,6 +170,7 @@ export default function TeachTab({ bootstrapQuery }) {
   const providers = bootstrap?.providers ?? []
   const posture = bootstrap?.security_posture ?? securityPosture
   const activeQuestion = bootstrap?.questions?.[0] ?? null
+  const requiresExternalExtractionConsent = backend === 'external'
   const recommendedProfileCode = computeRecommendedProfileCode(
     providers,
     privacyPreferenceDraft,
@@ -252,8 +255,17 @@ export default function TeachTab({ bootstrapQuery }) {
     }
     setIsSaving(true)
     try {
-      await answerTeachQuestion(activeQuestion.id, { answer })
+      await answerTeachQuestion(
+        activeQuestion.id,
+        requiresExternalExtractionConsent
+          ? {
+              answer,
+              allow_external_extraction: allowExternalAnswerExtraction,
+            }
+          : { answer },
+      )
       setAnswer('')
+      setAllowExternalAnswerExtraction(false)
       await refreshBootstrap()
       addToast({ message: 'Answer saved.', tone: 'success' })
     } catch (error) {
@@ -271,6 +283,7 @@ export default function TeachTab({ bootstrapQuery }) {
     try {
       await feedbackTeachQuestion(activeQuestion.id, feedback)
       setAnswer('')
+      setAllowExternalAnswerExtraction(false)
       await refreshBootstrap()
       addToast({ message: 'Feedback saved.', tone: 'success' })
     } catch (error) {
@@ -287,13 +300,29 @@ export default function TeachTab({ bootstrapQuery }) {
     }
     setIsSaving(true)
     try {
-      const preview = await capturePreview(text, activeQuestion?.domain ?? null)
+      const preview = requiresExternalExtractionConsent
+        ? await capturePreview(
+            text,
+            activeQuestion?.domain ?? null,
+            allowExternalQuickNoteExtraction,
+          )
+        : await capturePreview(text, activeQuestion?.domain ?? null)
       if (!preview.proposed?.length) {
         addToast({ message: 'No attributes were extracted from that note yet.' })
         return
       }
-      await capture(text, activeQuestion?.domain ?? null, toAcceptedItems(preview.proposed))
+      if (requiresExternalExtractionConsent) {
+        await capture(
+          text,
+          activeQuestion?.domain ?? null,
+          toAcceptedItems(preview.proposed),
+          allowExternalQuickNoteExtraction,
+        )
+      } else {
+        await capture(text, activeQuestion?.domain ?? null, toAcceptedItems(preview.proposed))
+      }
       setQuickNote('')
+      setAllowExternalQuickNoteExtraction(false)
       await refreshBootstrap()
       addToast({ message: 'Quick note saved.', tone: 'success' })
     } catch (error) {
@@ -515,8 +544,30 @@ export default function TeachTab({ bootstrapQuery }) {
                 onChange={(event) => setAnswer(event.target.value)}
                 placeholder="Answer in your own words."
               />
+              {requiresExternalExtractionConsent ? (
+                <label className="field-help">
+                  <input
+                    type="checkbox"
+                    checked={allowExternalAnswerExtraction}
+                    onChange={(event) =>
+                      setAllowExternalAnswerExtraction(event.target.checked)
+                    }
+                  />{' '}
+                  I understand this raw answer may be sent to my configured external provider
+                  for extraction.
+                </label>
+              ) : null}
               <div className="teach-action-row">
-                <button type="button" className="button-primary" onClick={handleAnswer} disabled={isSaving || !answer.trim()}>
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={handleAnswer}
+                  disabled={
+                    isSaving ||
+                    !answer.trim() ||
+                    (requiresExternalExtractionConsent && !allowExternalAnswerExtraction)
+                  }
+                >
                   {isSaving ? 'Saving...' : 'Save answer'}
                 </button>
                 <button type="button" className="button-secondary" onClick={() => handleQuestionFeedback('skip')} disabled={isSaving}>
@@ -552,11 +603,41 @@ export default function TeachTab({ bootstrapQuery }) {
             onChange={(event) => setQuickNote(event.target.value)}
             placeholder="Share something useful in a few sentences."
           />
+          {requiresExternalExtractionConsent ? (
+            <label className="field-help">
+              <input
+                type="checkbox"
+                checked={allowExternalQuickNoteExtraction}
+                onChange={(event) =>
+                  setAllowExternalQuickNoteExtraction(event.target.checked)
+                }
+              />{' '}
+              I understand this raw note may be sent to my configured external provider for
+              extraction.
+            </label>
+          ) : null}
           <div className="teach-action-row">
-            <button type="button" className="button-primary" onClick={handleQuickNote} disabled={isSaving || !quickNote.trim()}>
+            <button
+              type="button"
+              className="button-primary"
+              onClick={handleQuickNote}
+              disabled={
+                isSaving ||
+                !quickNote.trim() ||
+                (requiresExternalExtractionConsent && !allowExternalQuickNoteExtraction)
+              }
+            >
               Save note
             </button>
-            <button type="button" className="button-secondary" onClick={() => setQuickNote('')} disabled={isSaving}>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => {
+                setQuickNote('')
+                setAllowExternalQuickNoteExtraction(false)
+              }}
+              disabled={isSaving}
+            >
               Skip
             </button>
           </div>

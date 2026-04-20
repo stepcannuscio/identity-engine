@@ -11,7 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.llm_router import ProviderConfig
 import engine.privacy_broker as privacy_broker_module
-from engine.privacy_broker import AuditedRoutingViolationError, PrivacyBroker
+from engine.privacy_broker import (
+    AuditedExternalExtractionConsentRequiredError,
+    AuditedRoutingViolationError,
+    PrivacyBroker,
+)
 from engine.prompt_builder import RoutingViolationError
 
 
@@ -115,6 +119,7 @@ def test_structured_extraction_returns_metadata(external_config, monkeypatch):
 
     result = PrivacyBroker(external_config).extract_structured_attributes(
         [{"role": "user", "content": "I want to change jobs."}],
+        allow_external_input=True,
     )
 
     assert result.content == '[{"domain":"goals"}]'
@@ -123,6 +128,17 @@ def test_structured_extraction_returns_metadata(external_config, monkeypatch):
     assert result.metadata.routing_enforced is False
     assert result.metadata.blocked_external_attributes_count == 0
     assert result.metadata.attribute_count == 0
+    assert result.metadata.external_input_allowed_by_user is True
+
+
+def test_structured_extraction_requires_explicit_consent_for_external_backend(external_config):
+    with pytest.raises(AuditedExternalExtractionConsentRequiredError) as exc_info:
+        PrivacyBroker(external_config).extract_structured_attributes(
+            [{"role": "user", "content": "I want to change jobs."}],
+        )
+
+    assert exc_info.value.audit.reason == "external_extraction_consent_required"
+    assert exc_info.value.audit.decision == "blocked"
 
 
 def test_interview_extraction_returns_metadata(local_config, monkeypatch):

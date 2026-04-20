@@ -22,6 +22,7 @@ This document captures the current system state after completing:
 - Query Usefulness Tuning + Eval Harness
 - Query Feedback Loop
 - Voice Fidelity Tuning
+- Extraction Consent + Audit Redaction + Artifact Upload Guardrails
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -84,6 +85,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - records inference decisions
 - stored in session routing logs
 - privacy-safe metadata only
+- raw query text is not stored in routing logs or returned by session APIs
 
 ### 8. Inference Evidence Layer
 - tracks provenance for inferred attributes
@@ -156,6 +158,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - `POST /artifacts` accepts JSON text plus tagged `.txt`, `.md`, `.pdf`, and
   `.docx` uploads
 - artifacts are stored locally with raw content plus ordered chunks
+- upload handling now rejects oversized requests/files, oversized extracted
+  text, malformed DOCX payloads, and DOCX files with oversized
+  `word/document.xml`
 - upload tags are normalized into `artifact_tags` and can influence Teach
   planning and retrieval
 - chunk retrieval is deterministic keyword matching, not embeddings
@@ -239,6 +244,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - extracted attributes are preview/save capable
   - writes create or supersede canonical attributes
   - writes preserve audit/history behavior
+- raw-text extraction for capture, interview, and Teach answers now fails
+  closed on external backends unless the user explicitly opts in per request
 
 ### 19. Profile / Provider / Security Setup Layer
 - setup state is stored explicitly, not as a generic blob:
@@ -373,10 +380,12 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - `local_only` attributes MUST NEVER leave the system
 - system must **fail closed**
 - no raw prompts logged
+- no raw query text stored in session routing logs or exposed in history APIs/UI
 - no raw attribute values in audit logs
 - no supporting evidence text exposed via API/UI
 - no raw artifact content exposed via API/UI except bounded local prompt context
 - external inference must always be explicitly allowed
+- external raw-text extraction must require explicit per-request consent
 - external Teach question generation may only use sanitized metadata and must
   fail closed if sanitization cannot produce an external-safe prompt
 
@@ -398,6 +407,7 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - inferred attributes may include evidence
 - audit logs describe decisions, not content
 - provenance explains *why* a belief exists
+- legacy session routing logs are scrubbed to remove stored raw query text
 - current attribute states are `active` and `confirmed`
 - excluded/non-current states are `rejected`, `superseded`, and `retracted`
 - only one current `(domain, label)` may exist at a time
@@ -441,6 +451,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - blend bounded artifact chunks with identity and preference signals using
   query-specific source weighting
 - keep raw artifact bodies local while still grounding local answers in uploaded content
+- allow external raw-text extraction only after explicit per-request consent for
+  capture, interview, and Teach-answer flows
+- show privacy-safe session history without raw query text
 - assess whether enough grounded context exists to answer a query before calling the LLM
 - explicitly acknowledge partial or low coverage in prompts instead of generating generic answers
 - skip LLM calls and return a helpful explanation when no relevant context is available

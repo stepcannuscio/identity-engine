@@ -71,12 +71,34 @@ Supported token headers:
 - `POST /capture`
   - accepts the raw quick-capture text for non-interactive extraction
   - also accepts an optional `accepted` array of user-approved preview items
+  - accepts optional `allow_external_extraction`
+  - when the resolved backend is external and raw extraction would occur, the
+    request fails closed with `409 external_extraction_consent_required` unless
+    consent is explicitly provided
+
+### Interview / Teach
+
+- `POST /interview/preview`
+- `POST /interview`
+- `POST /teach/questions/{id}/answer`
+  - interview and Teach answer extraction follow the same external-consent rule
+    as capture
+  - accepted preview items can still be saved without fresh extraction
 
 ### Sessions
 
 - `GET /sessions` — includes stored `routing_log` entries used by the History tab
+  - routing log entries contain privacy-safe metadata only; raw query text is
+    not stored or returned
 - `GET /sessions/{id}`
 - `GET /sessions/current`
+
+### Artifacts
+
+- `POST /artifacts`
+  - accepts JSON text or tagged `.txt`, `.md`, `.pdf`, and `.docx` uploads
+  - enforces conservative request/file/text limits
+  - rejects malformed or oversized DOCX payloads before expensive parsing
 
 ## Security middleware
 
@@ -94,3 +116,5 @@ bodies or auth tokens.
 Database connections are request-scoped rather than shared across the process.
 For streaming query responses, identity retrieval happens before SSE streaming
 begins so the database connection closes immediately.
+
+Query error logs and session history also avoid storing raw query text.

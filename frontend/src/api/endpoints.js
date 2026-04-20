@@ -57,19 +57,26 @@ export const getDomains = async () => {
   return data
 }
 
-export const capturePreview = async (text, domainHint) => {
+export const capturePreview = async (text, domainHint, allowExternalExtraction = false) => {
   const { data } = await client.post('/capture/preview', {
     text,
     domain_hint: domainHint || null,
+    allow_external_extraction: allowExternalExtraction,
   })
   return data
 }
 
-export const capture = async (text, domainHint, accepted) => {
+export const capture = async (
+  text,
+  domainHint,
+  accepted,
+  allowExternalExtraction = false,
+) => {
   const { data } = await client.post('/capture', {
     text,
     domain_hint: domainHint || null,
     accepted: accepted ?? null,
+    allow_external_extraction: allowExternalExtraction,
   })
   return data
 }
@@ -79,21 +86,34 @@ export const createPreferenceSignal = async (payload) => {
   return data
 }
 
-export const previewInterview = async (domain, question, answer) => {
+export const previewInterview = async (
+  domain,
+  question,
+  answer,
+  allowExternalExtraction = false,
+) => {
   const { data } = await client.post('/interview/preview', {
     domain,
     question,
     answer,
+    allow_external_extraction: allowExternalExtraction,
   })
   return data
 }
 
-export const saveInterview = async (domain, question, answer, accepted) => {
+export const saveInterview = async (
+  domain,
+  question,
+  answer,
+  accepted,
+  allowExternalExtraction = false,
+) => {
   const { data } = await client.post('/interview', {
     domain,
     question,
     answer,
     accepted: accepted ?? null,
+    allow_external_extraction: allowExternalExtraction,
   })
   return data
 }

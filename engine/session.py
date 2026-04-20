@@ -17,7 +17,6 @@ class _RoutingLogSerializable(Protocol):
     def to_routing_log_entry(
         self,
         *,
-        query: str,
         query_type: str | None = None,
     ) -> dict[str, object]: ...
 
@@ -48,8 +47,8 @@ class Session:
 
     def log_query(
         self,
-        query: str,
-        query_type_or_audit: str | _RoutingLogSerializable,
+        query_or_audit: str | _RoutingLogSerializable,
+        query_type_or_audit: str | None = None,
         backend: str | None = None,
         attribute_count: int | None = None,
         domains_referenced: list[str] | None = None,
@@ -61,18 +60,19 @@ class Session:
         New call sites should pass an ``InferenceDecision``. The legacy scalar
         signature is still supported to keep older tests and fixtures stable.
         """
-        if not isinstance(query_type_or_audit, str):
+        if not isinstance(query_or_audit, str):
             self.routing_log.append(
-                query_type_or_audit.to_routing_log_entry(
-                    query=query,
+                query_or_audit.to_routing_log_entry(
                     query_type=query_type,
                 )
             )
             return
 
+        if query_type_or_audit is None:
+            raise TypeError("Legacy session.log_query calls require a query_type string.")
+
         self.routing_log.append(
             {
-                "query": query,
                 "query_type": query_type_or_audit,
                 "backend": backend or "local",
                 "attribute_count": attribute_count or 0,

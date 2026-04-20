@@ -162,7 +162,6 @@ describe('SessionCard', () => {
           }),
           routing_log: [
             {
-              query: 'What matters most to me right now?',
               query_type: 'open_ended',
               backend: 'external',
               attribute_count: 4,
@@ -174,7 +173,6 @@ describe('SessionCard', () => {
               }),
             },
             {
-              query: 'Tell me about my fears',
               query_type: 'open_ended',
               backend: 'external',
               attribute_count: 3,
@@ -197,11 +195,11 @@ describe('SessionCard', () => {
         'This session included a blocked external attempt to protect local-only data.',
       ),
     ).toBeInTheDocument()
-    expect(screen.queryByText('Tell me about my fears')).not.toBeInTheDocument()
+    expect(screen.queryByText('Domains: fears')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button'))
 
-    expect(screen.getByText('Tell me about my fears')).toBeInTheDocument()
+    expect(screen.getByText('Domains: fears')).toBeInTheDocument()
     expect(
       screen.getByText('Blocked to protect local-only data from being sent externally.'),
     ).toBeInTheDocument()

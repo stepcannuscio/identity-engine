@@ -742,7 +742,6 @@ def test_query_logs_normalized_audit_entry(conn, domain_ids):
     assert result == "Focused and steady."
     assert len(session.routing_log) == 1
     entry = session.routing_log[0]
-    assert entry["query"] == "What is my main goal?"
     assert entry["task_type"] == "query_generation"
     assert entry["provider"] == "anthropic"
     assert entry["is_local"] is False

@@ -13,7 +13,9 @@ Tier 2: Sensitive
 ## Rules
 
 - Default = local_only
-- External requires explicit permission
+- External inference requires explicit permission
+- Raw user text for capture, interview, and Teach-answer extraction may only be
+  sent to an external provider with explicit per-request consent
 - All outbound data is minimized
 
 ## Enforcement Points
@@ -34,6 +36,11 @@ Every external call must record:
 - attributes used
 - provider
 - reason
+
+Audit and session history must remain privacy-safe:
+- no raw prompts or raw query text in routing logs
+- no raw evidence text in audit/session payloads
+- no raw extraction input returned to the frontend
 
 The frontend only receives high-level privacy state summaries such as
 `local`, `external`, `blocked`, or `unknown`. It does not receive raw prompts,
