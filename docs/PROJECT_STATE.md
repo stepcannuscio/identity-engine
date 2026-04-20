@@ -25,6 +25,8 @@ This document captures the current system state after completing:
 - Query Feedback Loop
 - Voice Fidelity Tuning
 - Extraction Consent + Audit Redaction + Artifact Upload Guardrails
+- Frontend Route Code-Splitting
+- Generalized Evidence Layer
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -425,6 +427,45 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - local-only exemplar handling
   - external-safe omission of local exemplar snippets
 
+### 23. Frontend Route Code-Splitting Layer
+- the web app now lazy-loads top-level authenticated tabs:
+  - Teach
+  - Settings
+  - Query
+  - Graph
+  - History
+- auth/session restore, shell chrome, and bootstrap state remain eagerly loaded
+  so first paint stays predictable
+- route transitions now render through lightweight loading boundaries using the
+  same workspace-loading language already present in the app
+- Vite production builds now use explicit chunking for:
+  - React/runtime
+  - routing/state
+  - markdown/rendering
+  - per-route tab bundles
+- the previous large production chunk warning has been resolved
+
+### 24. Generalized Evidence Layer
+- the system now includes a standalone generalized evidence index backed by:
+  - `evidence_records`
+  - `evidence_links`
+- this layer stores privacy-safe summaries and links only; it does not copy raw
+  artifact bodies, raw supporting evidence text, or raw query/response text
+- artifacts, inference evidence, query usefulness feedback, and voice fidelity
+  feedback now register generalized evidence records as part of their normal
+  write paths
+- existing source tables remain the source of detail:
+  - `artifacts`
+  - `inference_evidence`
+  - `query_feedback`
+  - `voice_feedback`
+- schema initialization now backfills generalized evidence records idempotently
+  for pre-existing rows
+- the backend now exposes:
+  - `GET /evidence`
+- `GET /attributes/{id}/provenance` remains stable, but now reads through the
+  generalized evidence layer when generalized provenance entries are available
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -474,6 +515,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - voice exemplar snippets must remain local-only prompt context
 - voice fidelity feedback must remain local-only and separate from canonical
   identity truth
+- generalized evidence summaries must remain privacy-safe and must not copy raw
+  artifact content, raw supporting text, or raw feedback text
 
 ---
 
@@ -538,6 +581,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - expose privacy-safe query intent metadata for UI and local feedback workflows
 - rank identity evidence with recency, trust, and label-stability signals
 - store local-only answer usefulness feedback for future calibration and review
+- list privacy-safe generalized evidence summaries for attributes, artifacts,
+  sessions, query feedback, and voice feedback through one read model
 - run a deterministic query usefulness eval corpus without calling an LLM
 - distinguish explicit “write in my voice” requests from generic preference-sensitive drafting
 - compile bounded voice guidance from structured traits, learned preferences,
@@ -545,6 +590,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - include local writing exemplar snippets only for local voice-generation runs
 - collect local-only voice fidelity feedback and convert repeated misses into
   lower-level voice preference signals without mutating canonical attributes
+- lazy-load authenticated app tabs so slower machines do not pay the initial
+  cost of every screen up front
 
 ---
 
@@ -553,5 +600,3 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - Cross-platform machine security inspection is incomplete. Automated posture checks are implemented for macOS; other platforms fall back to manual review guidance.
 - Artifact parsing is intentionally narrow. The system supports local `.txt`, `.md`, `.pdf`, and `.docx` inputs, but it does not yet provide OCR, image understanding, or richer connector/import pipelines.
 - Distribution is still source-first. The project runs well for developers from this repo, but it does not yet ship as a packaged desktop app, installer, or one-command production deployment.
-- The frontend production bundle is not yet code-split aggressively enough. Current Vite builds succeed, but they emit a large-chunk warning that should be addressed before optimizing for slower machines.
-- The planned generalized `Evidence` subsystem is not yet a standalone layer. Evidence is currently represented through artifact storage, provenance helpers, and feedback tables rather than one unified evidence model.

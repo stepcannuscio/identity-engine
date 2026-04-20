@@ -70,6 +70,52 @@ CREATE TABLE IF NOT EXISTS inference_evidence (
 );
 """
 
+EVIDENCE_RECORDS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS evidence_records (
+    id           TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    source_type  TEXT NOT NULL,
+    routing      TEXT NOT NULL CHECK(routing IN ('local_only', 'external_ok')),
+    summary      TEXT NOT NULL,
+    source_ref   TEXT,
+    metadata_json TEXT,
+    origin_table TEXT NOT NULL,
+    origin_id    TEXT NOT NULL,
+    created_at   TIMESTAMP NOT NULL
+);
+"""
+
+EVIDENCE_RECORDS_ORIGIN_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_records_origin
+    ON evidence_records(origin_table, origin_id);
+"""
+
+EVIDENCE_LINKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS evidence_links (
+    id           TEXT PRIMARY KEY,
+    evidence_id  TEXT NOT NULL REFERENCES evidence_records(id) ON DELETE CASCADE,
+    target_type  TEXT NOT NULL CHECK(target_type IN (
+                    'attribute',
+                    'artifact',
+                    'session',
+                    'query_feedback',
+                    'voice_feedback'
+                 )),
+    target_id    TEXT NOT NULL,
+    created_at   TIMESTAMP NOT NULL
+);
+"""
+
+EVIDENCE_LINKS_TARGET_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_evidence_links_target
+    ON evidence_links(target_type, target_id, evidence_id);
+"""
+
+EVIDENCE_LINKS_UNIQUE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_link_target
+    ON evidence_links(evidence_id, target_type, target_id);
+"""
+
 ARTIFACTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS artifacts (
     id          TEXT PRIMARY KEY,
@@ -300,6 +346,11 @@ SCHEMA_SQL = "\n\n".join(
         ATTRIBUTES_CURRENT_INDEX_SQL,
         ATTRIBUTE_HISTORY_TABLE_SQL,
         INFERENCE_EVIDENCE_TABLE_SQL,
+        EVIDENCE_RECORDS_TABLE_SQL,
+        EVIDENCE_RECORDS_ORIGIN_INDEX_SQL,
+        EVIDENCE_LINKS_TABLE_SQL,
+        EVIDENCE_LINKS_TARGET_INDEX_SQL,
+        EVIDENCE_LINKS_UNIQUE_INDEX_SQL,
         ARTIFACTS_TABLE_SQL,
         ARTIFACT_CHUNKS_TABLE_SQL,
         ARTIFACT_CHUNKS_ORDER_INDEX_SQL,
@@ -523,6 +574,8 @@ def _scrub_reflection_session_queries(conn) -> None:
 
 def create_tables(conn) -> None:
     """Execute the full schema DDL against the given connection."""
+    from db.evidence import backfill_generalized_evidence
+
     conn.executescript(SCHEMA_SQL)
     if _attributes_schema_needs_migration(conn):
         _migrate_attribute_tables(conn)
@@ -567,6 +620,7 @@ def create_tables(conn) -> None:
         ],
     )
     _scrub_reflection_session_queries(conn)
+    backfill_generalized_evidence(conn)
     conn.commit()
 
 

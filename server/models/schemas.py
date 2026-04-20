@@ -520,6 +520,26 @@ class AttributeProvenanceResponse(BaseModel):
     evidence: list[ProvenanceEvidenceSummary] = []
 
 
+class EvidenceSummaryResponse(BaseModel):
+    """Privacy-safe generalized evidence item."""
+
+    kind: str
+    source_type: str
+    routing: Literal["local_only", "external_ok"]
+    summary: str
+    source_ref: str | None = None
+    metadata: dict[str, object] | None = None
+    created_at: datetime
+
+
+class EvidenceListResponse(BaseModel):
+    """Generalized evidence returned for one target."""
+
+    target_type: Literal["attribute", "artifact", "session", "query_feedback", "voice_feedback"]
+    target_id: str
+    evidence: list[EvidenceSummaryResponse] = []
+
+
 class AttributeUpdateRequest(BaseModel):
     """Updatable attribute fields."""
 

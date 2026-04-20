@@ -88,6 +88,8 @@ def test_all_tables_created(conn):
         "attributes",
         "attribute_history",
         "inference_evidence",
+        "evidence_records",
+        "evidence_links",
         "reflection_sessions",
         "preference_signals",
         "query_feedback",
@@ -247,6 +249,86 @@ def test_create_tables_is_idempotent(conn):
         ).fetchall()
     }
     assert "attributes" in tables
+
+
+def test_create_tables_backfills_evidence_without_duplicates(conn):
+    domain_id = _domain_id(conn)
+    artifact_id = str(uuid.uuid4())
+    attribute_id = str(uuid.uuid4())
+    query_feedback_id = str(uuid.uuid4())
+    voice_feedback_id = str(uuid.uuid4())
+
+    conn.execute(
+        """
+        INSERT INTO artifacts (id, domain_id, type, title, source, content, created_at)
+        VALUES (?, ?, 'note', 'Weekly note', 'capture', 'local artifact text', '2026-04-20T10:00:00+00:00')
+        """,
+        (artifact_id, domain_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO artifact_chunks (id, artifact_id, chunk_index, content, metadata, created_at)
+        VALUES (?, ?, 0, 'local artifact text', '{"word_count": 3}', '2026-04-20T10:00:00+00:00')
+        """,
+        (str(uuid.uuid4()), artifact_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO attributes (
+            id, domain_id, label, value, elaboration, mutability, source, confidence,
+            routing, status, created_at, updated_at, last_confirmed
+        )
+        VALUES (?, ?, 'focus_window', 'Morning', NULL, 'stable', 'inferred', 0.8,
+                'local_only', 'active', '2026-04-20T10:00:00+00:00',
+                '2026-04-20T10:00:00+00:00', '2026-04-20T10:00:00+00:00')
+        """,
+        (attribute_id, domain_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO inference_evidence (
+            id, attribute_id, source_type, source_ref, supporting_text, weight, created_at
+        )
+        VALUES (?, ?, 'capture', 'cap-1', 'Private supporting note.', 0.6, '2026-04-20T10:00:01+00:00')
+        """,
+        (str(uuid.uuid4()), attribute_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO query_feedback (
+            id, session_id, query_text, response_text, feedback, notes, backend, query_type,
+            source_profile, confidence, intent_tags_json, domain_hints_json, domains_json, created_at
+        )
+        VALUES (?, 'session-1', 'private query', 'private response', 'helpful', NULL, 'local',
+                'simple', 'general', 'medium_confidence', '[]', '[]', '[]',
+                '2026-04-20T10:00:02+00:00')
+        """,
+        (query_feedback_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO voice_feedback (
+            id, query_feedback_id, session_id, query_text, response_text, feedback, notes, backend,
+            query_type, source_profile, intent_tags_json, domains_json, created_at
+        )
+        VALUES (?, ?, 'session-1', 'private query', 'private response', 'too_formal', NULL, 'local',
+                'simple', 'voice_generation', '[]', '[]', '2026-04-20T10:00:03+00:00')
+        """,
+        (voice_feedback_id, query_feedback_id),
+    )
+    conn.commit()
+
+    create_tables(conn)
+    first_count = conn.execute("SELECT count(*) FROM evidence_records").fetchone()[0]
+    first_link_count = conn.execute("SELECT count(*) FROM evidence_links").fetchone()[0]
+
+    create_tables(conn)
+    second_count = conn.execute("SELECT count(*) FROM evidence_records").fetchone()[0]
+    second_link_count = conn.execute("SELECT count(*) FROM evidence_links").fetchone()[0]
+
+    assert first_count == 4
+    assert second_count == first_count
+    assert second_link_count == first_link_count
 
 
 def test_seed_domains_is_idempotent(conn):

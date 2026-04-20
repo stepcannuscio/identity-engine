@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import App from '../App.jsx'
 import { getTeachBootstrap } from '../api/endpoints.js'
@@ -122,5 +123,21 @@ describe('App', () => {
     })
 
     expect(await screen.findByText('Settings tab stub')).toBeInTheDocument()
+  })
+
+  it('navigates between authenticated tabs through lazy route boundaries', async () => {
+    const user = userEvent.setup()
+    useAuth.mockReturnValue(createAuth({ isAuthenticated: true }))
+
+    renderWithProviders(<App />, {
+      route: '/query',
+      appState: { token: 'session-token' },
+    })
+
+    expect(await screen.findByText('Query tab stub')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('link', { name: 'History' }))
+
+    expect(await screen.findByText('History tab stub')).toBeInTheDocument()
   })
 })

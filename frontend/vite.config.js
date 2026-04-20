@@ -3,6 +3,49 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules') && !id.includes('/src/components/')) {
+            return undefined
+          }
+          if (id.includes('react-router-dom') || id.includes('@tanstack/react-query')) {
+            return 'routing-and-state'
+          }
+          if (
+            id.includes('react-markdown') ||
+            id.includes('remark-gfm') ||
+            id.includes('lucide-react')
+          ) {
+            return 'markdown-and-rendering'
+          }
+          if (
+            id.includes('/node_modules/react/') ||
+            id.includes('/node_modules/react-dom/')
+          ) {
+            return 'react-core'
+          }
+          if (id.includes('/src/components/teach/TeachTab.jsx')) {
+            return 'route-teach'
+          }
+          if (id.includes('/src/components/settings/SettingsTab.jsx')) {
+            return 'route-settings'
+          }
+          if (id.includes('/src/components/query/QueryTab.jsx')) {
+            return 'route-query'
+          }
+          if (id.includes('/src/components/graph/GraphTab.jsx')) {
+            return 'route-graph'
+          }
+          if (id.includes('/src/components/history/HistoryTab.jsx')) {
+            return 'route-history'
+          }
+          return undefined
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': {

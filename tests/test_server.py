@@ -157,6 +157,7 @@ def client(monkeypatch):
     monkeypatch.setattr("server.routes.artifacts.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.attributes.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.capture.get_db_connection", _get_db_connection)
+    monkeypatch.setattr("server.routes.evidence.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.interview.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.preferences.get_db_connection", _get_db_connection)
     monkeypatch.setattr("server.routes.session.get_db_connection", _get_db_connection)
@@ -1549,6 +1550,31 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
         "preference_sensitive",
     )
 
+    evidence_rows = _db(client).execute(
+        """
+        SELECT er.kind, er.summary, el.target_type, el.target_id
+        FROM evidence_records er
+        JOIN evidence_links el ON el.evidence_id = er.id
+        WHERE er.origin_table = 'query_feedback' AND er.origin_id = ?
+        ORDER BY el.target_type, el.target_id
+        """,
+        (feedback_id,),
+    ).fetchall()
+    assert evidence_rows == [
+        (
+            "query_feedback",
+            "Local query feedback marked as helpful for a local response.",
+            "query_feedback",
+            feedback_id,
+        ),
+        (
+            "query_feedback",
+            "Local query feedback marked as helpful for a local response.",
+            "session",
+            str(getattr(_app(client).state.current_session, "id")),
+        ),
+    ]
+
 
 def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient):
     response = client.post(
@@ -1599,6 +1625,98 @@ def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient
         """
     ).fetchone()
     assert signal_row == ("voice", "formal_tone", "avoid", 4)
+
+    voice_feedback_id = _db(client).execute(
+        """
+        SELECT id
+        FROM voice_feedback
+        WHERE query_feedback_id = ?
+        """,
+        (feedback_id,),
+    ).fetchone()[0]
+    evidence_rows = _db(client).execute(
+        """
+        SELECT er.kind, er.summary, el.target_type, el.target_id
+        FROM evidence_records er
+        JOIN evidence_links el ON el.evidence_id = er.id
+        WHERE er.origin_table = 'voice_feedback' AND er.origin_id = ?
+        ORDER BY el.target_type, el.target_id
+        """,
+        (voice_feedback_id,),
+    ).fetchall()
+    assert evidence_rows == [
+        (
+            "voice_feedback",
+            "Local voice feedback marked the response as too_formal.",
+            "query_feedback",
+            feedback_id,
+        ),
+        (
+            "voice_feedback",
+            "Local voice feedback marked the response as too_formal.",
+            "session",
+            str(getattr(_app(client).state.current_session, "id")),
+        ),
+        (
+            "voice_feedback",
+            "Local voice feedback marked the response as too_formal.",
+            "voice_feedback",
+            voice_feedback_id,
+        ),
+    ]
+
+
+def test_get_evidence_returns_privacy_safe_summaries_only(client: TestClient):
+    response = client.post(
+        "/query/feedback",
+        json={
+            "query": "How should I structure the morning?",
+            "response": "Start with the hardest task first.",
+            "feedback": "missed_context",
+            "notes": "It ignored my existing calendar constraints.",
+            "query_type": "simple",
+            "backend_used": "local",
+            "confidence": "medium_confidence",
+            "intent": {
+                "source_profile": "general",
+                "intent_tags": ["planning"],
+                "domain_hints": ["goals"],
+            },
+            "domains_referenced": ["goals"],
+        },
+        headers=_login_headers(client),
+    )
+    assert response.status_code == 200
+    feedback_id = response.json()["id"]
+
+    evidence_response = client.get(
+        f"/evidence?target_type=query_feedback&target_id={feedback_id}",
+        headers=_login_headers(client),
+    )
+
+    assert evidence_response.status_code == 200
+    body = evidence_response.json()
+    assert body["target_type"] == "query_feedback"
+    assert body["target_id"] == feedback_id
+    assert body["evidence"] == [
+        {
+            "kind": "query_feedback",
+            "source_type": "user_feedback",
+            "routing": "local_only",
+            "summary": "Local query feedback marked as missed_context for a local response.",
+            "source_ref": feedback_id,
+            "metadata": {
+                "backend": "local",
+                "confidence": "medium_confidence",
+                "query_type": "simple",
+                "source_profile": "general",
+            },
+            "created_at": body["evidence"][0]["created_at"],
+        }
+    ]
+    assert "How should I structure the morning?" not in evidence_response.text
+    assert "Start with the hardest task first." not in evidence_response.text
+    assert "It ignored my existing calendar constraints." not in evidence_response.text
 
 
 def test_post_query_feedback_rejects_voice_feedback_for_non_voice_query(client: TestClient):

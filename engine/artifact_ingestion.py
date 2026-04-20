@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import uuid
 
+from db.evidence import register_artifact_evidence
+
 DEFAULT_CHUNK_WORD_TARGET = 450
 TITLE_MAX_LENGTH = 120
 _WORD_RE = re.compile(r"\S+")
@@ -262,5 +264,6 @@ def ingest_artifact(
                 for tag in normalized_tags
             ],
         )
+    register_artifact_evidence(conn, artifact_id=artifact_id)
     conn.commit()
     return ArtifactIngestResult(artifact_id=artifact_id, chunk_count=len(chunks))

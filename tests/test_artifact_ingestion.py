@@ -118,3 +118,58 @@ def test_ingest_artifact_stores_normalized_tags(conn):
     ).fetchall()
 
     assert [row[0] for row in tags] == ["planning", "roadmap"]
+
+
+def test_ingest_artifact_registers_generalized_evidence(conn):
+    result = ingest_artifact(
+        conn,
+        text="I keep a local note about roadmap planning.",
+        title="Roadmap",
+        artifact_type="document",
+        source="upload",
+        domain="goals",
+    )
+
+    evidence_row = conn.execute(
+        """
+        SELECT kind, source_type, routing, summary, source_ref
+        FROM evidence_records
+        WHERE origin_table = 'artifacts' AND origin_id = ?
+        """,
+        (result.artifact_id,),
+    ).fetchone()
+    link_row = conn.execute(
+        """
+        SELECT target_type, target_id
+        FROM evidence_links
+        WHERE evidence_id = (
+            SELECT id FROM evidence_records
+            WHERE origin_table = 'artifacts' AND origin_id = ?
+        )
+        """,
+        (result.artifact_id,),
+    ).fetchone()
+
+    assert evidence_row == (
+        "artifact",
+        "upload",
+        "local_only",
+        "Local artifact stored from upload as document with 1 chunk(s).",
+        result.artifact_id,
+    )
+    assert link_row == ("artifact", result.artifact_id)
+
+
+def test_failed_artifact_ingest_does_not_create_generalized_evidence(conn):
+    with pytest.raises(ValueError, match="Unknown artifact domain"):
+        ingest_artifact(
+            conn,
+            text="This write should fail before any evidence registration.",
+            title="Broken",
+            artifact_type="document",
+            source="upload",
+            domain="missing-domain",
+        )
+
+    count = conn.execute("SELECT count(*) FROM evidence_records").fetchone()[0]
+    assert count == 0

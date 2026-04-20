@@ -54,16 +54,38 @@ Supported token headers:
   - query failures now distinguish privacy routing blocks, missing backend configuration,
     and upstream provider failures
 - `POST /query/feedback` — stores local-only answer usefulness feedback for calibration
+  - optional `voice_feedback` is accepted only for `voice_generation` responses
+  - query and voice feedback writes also register privacy-safe generalized evidence summaries
 
 ### Attributes
 
 - `GET /attributes`
 - `GET /attributes/{id}`
+- `GET /attributes/{id}/provenance`
+  - returns privacy-safe evidence summaries for inferred attributes
+  - never returns raw supporting evidence text
 - `POST /attributes`
 - `PUT /attributes/{id}`
 - `DELETE /attributes/{id}`
 - `POST /attributes/{id}/confirm`
 - `GET /domains`
+
+### Evidence
+
+- `GET /evidence`
+  - required query params:
+    - `target_type`
+    - `target_id`
+  - optional query param:
+    - `kind`
+  - supported `target_type` values:
+    - `attribute`
+    - `artifact`
+    - `session`
+    - `query_feedback`
+    - `voice_feedback`
+  - returns privacy-safe generalized evidence summaries only
+  - never returns raw artifact content, raw supporting text, raw query text, or raw response text
 
 ### Capture
 
@@ -99,6 +121,13 @@ Supported token headers:
   - accepts JSON text or tagged `.txt`, `.md`, `.pdf`, and `.docx` uploads
   - enforces conservative request/file/text limits
   - rejects malformed or oversized DOCX payloads before expensive parsing
+- `POST /artifacts/{artifact_id}/analyze`
+  - enqueues local-only artifact analysis and returns current analysis status
+- `GET /artifacts/{artifact_id}/analysis`
+  - returns the last persisted local-only analysis payload
+- `POST /artifacts/{artifact_id}/promote`
+  - promotes selected reviewed candidates into canonical attributes or preference signals
+  - artifact ingestion also registers a privacy-safe generalized evidence summary for the stored artifact
 
 ## Security middleware
 

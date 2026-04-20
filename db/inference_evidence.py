@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import uuid
 
+from db.evidence import register_inference_evidence_record
 from config.settings import INFERRED
 
 
@@ -125,6 +126,8 @@ def record_inference_evidence_batch(
             for record in records
         ],
     )
+    for record in records:
+        register_inference_evidence_record(conn, evidence_id=record.id)
     conn.commit()
     return records
 

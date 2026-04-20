@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import json
 import uuid
 
+from db.evidence import register_query_feedback_evidence
+
 
 @dataclass(frozen=True)
 class QueryFeedbackInput:
@@ -63,6 +65,6 @@ def record_query_feedback(conn, payload: QueryFeedbackInput) -> str:
             json.dumps(sorted(set(payload.domains_referenced))),
         ),
     )
+    register_query_feedback_evidence(conn, feedback_id=feedback_id)
     conn.commit()
     return feedback_id
-

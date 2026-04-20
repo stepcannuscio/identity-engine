@@ -148,6 +148,8 @@ def test_record_inference_evidence_rejects_invalid_weight_without_echoing_text(c
 
     assert evidence_text not in str(excinfo.value)
     assert evidence_text not in caplog.text
+    count = conn.execute("SELECT count(*) FROM evidence_records").fetchone()[0]
+    assert count == 0
 
 
 def test_record_inference_evidence_rejects_missing_attribute(conn):
@@ -210,3 +212,47 @@ def test_get_inference_evidence_for_attribute_returns_empty_list_when_absent(con
     attribute_id = _insert_attribute(conn, label="untested_inference", source="inferred")
 
     assert get_inference_evidence_for_attribute(conn, attribute_id) == []
+
+
+def test_record_inference_evidence_registers_generalized_evidence(conn):
+    attribute_id = _insert_attribute(conn, label="writing_style", source="inferred", domain="voice")
+
+    record = record_inference_evidence(
+        conn,
+        attribute_id,
+        InferenceEvidenceInput(
+            source_type="journal",
+            source_ref="journal-3",
+            supporting_text="I prefer fewer words and calmer pacing.",
+            weight=0.75,
+        ),
+    )
+
+    evidence_row = conn.execute(
+        """
+        SELECT kind, source_type, routing, summary, source_ref, metadata_json
+        FROM evidence_records
+        WHERE origin_table = 'inference_evidence' AND origin_id = ?
+        """,
+        (record.id,),
+    ).fetchone()
+    link_row = conn.execute(
+        """
+        SELECT target_type, target_id
+        FROM evidence_links
+        WHERE evidence_id = (
+            SELECT id FROM evidence_records
+            WHERE origin_table = 'inference_evidence' AND origin_id = ?
+        )
+        """,
+        (record.id,),
+    ).fetchone()
+
+    assert evidence_row is not None
+    assert evidence_row[0] == "inference_evidence"
+    assert evidence_row[1] == "journal"
+    assert evidence_row[2] == "local_only"
+    assert evidence_row[3] == "Derived from journal entry; 7-word supporting note kept local."
+    assert evidence_row[4] == "journal-3"
+    assert '"weight": 0.75' in str(evidence_row[5])
+    assert link_row == ("attribute", attribute_id)

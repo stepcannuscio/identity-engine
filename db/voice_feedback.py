@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import json
 import uuid
 
+from db.evidence import register_voice_feedback_evidence
+
 
 @dataclass(frozen=True)
 class VoiceFeedbackInput:
@@ -60,5 +62,6 @@ def record_voice_feedback(conn, payload: VoiceFeedbackInput) -> str:
             json.dumps(sorted(set(payload.domains_referenced))),
         ),
     )
+    register_voice_feedback_evidence(conn, feedback_id=feedback_id)
     conn.commit()
     return feedback_id
