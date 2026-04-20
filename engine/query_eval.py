@@ -134,7 +134,8 @@ def evaluate_case(case: dict[str, Any]) -> EvalCaseResult:
         "prompt_contains_voice_guidance": "Voice guidance:" in context.messages[0]["content"],
         "prompt_contains_exemplar_snippets": "Local exemplar snippets:" in context.messages[0]["content"],
         "would_block_external": (
-            context.backend == "external" and context.assembled_context.contains_local_only
+            context.backend == "external"
+            and any(attr.get("routing") == "local_only" for attr in context.attributes)
         ),
     }
     expected = cast(dict[str, Any], case["expected"])

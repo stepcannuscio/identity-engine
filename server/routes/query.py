@@ -207,7 +207,9 @@ def _should_short_circuit_insufficient(context: QueryContext) -> bool:
         return False
     if context.coverage.confidence != "insufficient_data":
         return False
-    if context.backend != "local" and context.assembled_context.contains_local_only:
+    if context.backend != "local" and any(
+        attr.get("routing") == "local_only" for attr in context.attributes
+    ):
         # Let the privacy broker raise the routing violation instead of silently
         # returning an "insufficient data" message that hides the block.
         return False
@@ -219,6 +221,13 @@ def _contains_local_only_context(context) -> bool:
     if assembled is not None:
         return bool(getattr(assembled, "contains_local_only", False))
     return any(attr.get("routing") == "local_only" for attr in context.attributes)
+
+
+def _had_local_only_stripped(context) -> bool:
+    assembled = getattr(context, "assembled_context", None)
+    if assembled is not None:
+        return bool(getattr(assembled, "had_local_only_stripped", False))
+    return False
 
 
 def _domains_used(context) -> list[str] | None:
@@ -362,6 +371,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
             attributes=context.attributes,
             retrieval_mode=context.query_type,
             contains_local_only_context=_contains_local_only_context(context),
+            local_only_stripped_for_external=_had_local_only_stripped(context),
             domains_used=_domains_used(context),
         )
         result = brokered.content
@@ -502,6 +512,7 @@ def query_stream(
                 stream=True,
                 retrieval_mode=context.query_type,
                 contains_local_only_context=_contains_local_only_context(context),
+                local_only_stripped_for_external=_had_local_only_stripped(context),
                 domains_used=_domains_used(context),
             )
             response_stream = brokered.content

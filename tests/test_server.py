@@ -1634,6 +1634,11 @@ def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient
         "I worry about missing major deadlines.",
         routing="local_only",
     )
+    # Bypass the insufficient_data short-circuit so the broker is always reached.
+    monkeypatch.setattr(
+        "server.routes.query._should_short_circuit_insufficient",
+        lambda context: False,
+    )
     monkeypatch.setattr(
         "server.routes.query.resolve_active_provider_config",
         lambda *args, **kwargs: ProviderConfig(

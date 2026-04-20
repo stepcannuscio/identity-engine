@@ -110,6 +110,29 @@ def test_external_backend_blocks_local_only_query_generation(external_config):
     assert exc_info.value.audit.retrieval_mode == "simple"
 
 
+def test_external_backend_allows_query_when_local_only_was_stripped_upstream(external_config, monkeypatch):
+    """Broker allows request when local_only data was stripped upstream (audit flag only)."""
+    monkeypatch.setattr(
+        privacy_broker_module,
+        "generate_response",
+        lambda messages, provider_config, stream=False: "answer with stripped context",
+    )
+
+    result = PrivacyBroker(external_config).generate_grounded_response(
+        [{"role": "user", "content": "What are my goals?"}],
+        attributes=[],
+        contains_local_only_context=True,
+        local_only_stripped_for_external=True,
+        retrieval_mode="simple",
+    )
+
+    assert result.content == "answer with stripped context"
+    assert result.metadata.decision == "allowed"
+    assert result.metadata.contains_local_only_context is True
+    assert result.metadata.local_only_stripped_for_external is True
+    assert result.metadata.blocked_external_attributes_count == 0
+
+
 def test_structured_extraction_returns_metadata(external_config, monkeypatch):
     monkeypatch.setattr(
         privacy_broker_module,

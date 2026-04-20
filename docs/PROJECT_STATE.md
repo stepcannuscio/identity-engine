@@ -71,7 +71,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 ### 4. Privacy Broker
 - central inference boundary
 - enforces routing rules
-- blocks unsafe external inference
+- `local_only` identity attributes, preferences, and artifacts are stripped
+  from the outgoing attribute list before the broker is called for external backends;
+  the broker is a last-line-of-defense fail-closed check, not the primary strip point
+- audit trail records `contains_local_only_context` (data was present) and
+  `local_only_stripped_for_external` (data was silently removed) separately
 
 ### 5. Prompt Builder
 - formatting only
@@ -149,8 +153,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - low and medium confidence append a brief hedge to the system prompt so the
   model acknowledges limitations
 - `insufficient_data` short-circuits the LLM call and returns a canned message
-  suggesting next steps (unless privacy routing would otherwise force a
-  `blocked` decision — in that case the privacy broker still fires)
+  suggesting next steps (unless the stripped attribute list still contains
+  `local_only` items — in that case the privacy broker still fires)
 - classification and counts are surfaced on query responses as
   `metadata.confidence` and `metadata.coverage`
 

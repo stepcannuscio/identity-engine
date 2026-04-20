@@ -750,7 +750,8 @@ def test_query_logs_normalized_audit_entry(conn, domain_ids):
     assert entry["domains_referenced"] == ["goals"]
 
 
-def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn, domain_ids):
+def test_query_strips_local_only_attribute_for_external_backend_and_proceeds(conn, domain_ids):
+    """Local_only attribute is stripped; query short-circuits with insufficient_data (not blocked)."""
     _insert_attribute(
         conn,
         domain_ids["fears"],
@@ -767,35 +768,40 @@ def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn,
         api_key="test-key",  # pragma: allowlist secret
     )
 
-    blocked_audit = InferenceDecision(
-        provider="anthropic",
-        model="claude-sonnet-4-6",
-        is_local=False,
-        task_type="query_generation",
-        blocked_external_attributes_count=1,
-        routing_enforced=True,
-        attribute_count=1,
-        domains_used=["fears"],
-        retrieval_mode="simple",
-        contains_local_only_context=True,
-        decision="blocked",
-        reason="local_only_context_blocked_for_external_inference",
-        warning="local_only attributes cannot be sent to external backends",
-    )
+    result = query("What am I afraid of?", session, conn, config)
 
-    with patch(
-        "engine.query_engine.PrivacyBroker.generate_grounded_response",
-        side_effect=AuditedRoutingViolationError(
-            "local_only attributes cannot be sent to external backends: fear_of_failure",
-            audit=blocked_audit,
-        ),
-    ), pytest.raises(RoutingViolationError):
-        query("What am I afraid of?", session, conn, config)
-
-    assert session.query_count == 0
+    assert session.query_count == 1
     assert len(session.routing_log) == 1
     entry = session.routing_log[0]
-    assert entry["decision"] == "blocked"
+    assert entry["decision"] == "skipped_insufficient_data"
+    assert entry["contains_local_only_context"] is True
+    assert entry["local_only_stripped_for_external"] is True
+    assert result == INSUFFICIENT_DATA_MESSAGE
+
+
+def test_external_query_unrelated_to_identity_proceeds_despite_local_only_data(conn, domain_ids):
+    """Regression: 'what is the weather in Seattle?' must not raise a routing error."""
+    _insert_attribute(
+        conn,
+        domain_ids["patterns"],
+        "morning_focus",
+        "I focus best in the morning.",
+        confidence=0.8,
+        routing="local_only",
+    )
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+
+    result = query("what is the weather today in Seattle?", session, conn, config)
+
+    assert session.query_count == 1
+    assert session.routing_log[0]["decision"] != "blocked"
+    assert result is not None
 
 
 def test_query_blocks_external_backend_when_only_artifact_context_is_available(conn, monkeypatch):

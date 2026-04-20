@@ -105,6 +105,7 @@ class AssembledContext:
     domain_hints: list[str] = field(default_factory=list)
     was_trimmed: bool = False
     contains_local_only: bool = False
+    had_local_only_stripped: bool = False
     evidence_items: list[EvidenceItem] = field(default_factory=list)
     preference_attributes: list[dict] = field(default_factory=list)
     preference_summary: PreferenceSummaryPayload = field(
@@ -600,7 +601,9 @@ def assemble_query_context(
         attribute.get("routing") == "local_only" for attribute in attributes
     ) or any(
         attribute.get("routing") == "local_only" for attribute in preference_attributes
-    ) or bool(artifact_chunks)
+    ) or any(
+        chunk.get("routing") == "local_only" for chunk in artifact_chunks
+    )
     artifact_sources = sorted(
         {
             str(chunk.get("title", "")).strip()

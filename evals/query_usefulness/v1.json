@@ -245,7 +245,7 @@
         "confidence": "insufficient_data",
         "acquisition_status": "not_needed",
         "top_source_type": "identity",
-        "would_block_external": true
+        "would_block_external": false
       }
     }
   ]

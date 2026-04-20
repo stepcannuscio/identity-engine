@@ -8,7 +8,7 @@ the pipeline can either hedge or skip LLM inference when ground-truth is thin.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace as dc_replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -61,6 +61,19 @@ def _preference_attributes_for_backend(
     ]
 
 
+def _identity_attributes_for_backend(
+    assembled_context: AssembledContext,
+    backend: str,
+) -> list[dict]:
+    if backend == "local":
+        return assembled_context.attributes
+    return [
+        attribute
+        for attribute in assembled_context.attributes
+        if attribute.get("routing") != "local_only"
+    ]
+
+
 def _should_reroute_to_artifact_grounded_self(
     source_profile: str,
     assembled_context: AssembledContext,
@@ -105,7 +118,14 @@ def _build_query_context(
         domain_hints=domain_hints,
     )
     backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    identity_attributes = _identity_attributes_for_backend(assembled_context, backend)
     preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
+    if backend == "external" and (
+        len(identity_attributes) < len(assembled_context.attributes)
+        or len(preference_attributes) < len(assembled_context.preference_attributes)
+        or any(chunk.get("routing") == "local_only" for chunk in assembled_context.artifact_chunks)
+    ):
+        assembled_context = dc_replace(assembled_context, had_local_only_stripped=True)
     coverage = evaluate_coverage(assembled_context, backend=backend)
     acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
     messages = build_prompt(
@@ -122,7 +142,7 @@ def _build_query_context(
         domain_hints=domain_hints,
         classification_reason="",
         assembled_context=assembled_context,
-        attributes=assembled_context.attributes + preference_attributes,
+        attributes=identity_attributes + preference_attributes,
         messages=messages,
         backend=backend,
         requested_backend=requested_backend,
@@ -212,7 +232,7 @@ def _privacy_would_block(context: QueryContext) -> bool:
     """
     if context.backend == "local" or context.forced_response is not None:
         return False
-    return bool(context.assembled_context.contains_local_only)
+    return any(attr.get("routing") == "local_only" for attr in context.attributes)
 
 
 def build_insufficient_data_decision(
@@ -231,6 +251,7 @@ def build_insufficient_data_decision(
         domains_used=context.assembled_context.domains_used,
         retrieval_mode=context.query_type,
         contains_local_only_context=context.assembled_context.contains_local_only,
+        local_only_stripped_for_external=context.assembled_context.had_local_only_stripped,
         decision="skipped_insufficient_data",
         reason="coverage_evaluator_reported_insufficient_data",
         timestamp=datetime.now(UTC).isoformat(),
@@ -267,7 +288,7 @@ def apply_local_fallback_audit(
     """Annotate a successful local-fallback response for UI and logging."""
     if not getattr(context, "local_fallback_used", False):
         return audit
-    return replace(
+    return dc_replace(
         audit,
         warning="Used a local-only fallback because uploaded artifact evidence was local.",
         reason="used_local_artifact_fallback",
@@ -321,6 +342,7 @@ def query(
             attributes=context.attributes,
             retrieval_mode=context.query_type,
             contains_local_only_context=context.assembled_context.contains_local_only,
+            local_only_stripped_for_external=context.assembled_context.had_local_only_stripped,
             domains_used=context.assembled_context.domains_used,
         )
     except RoutingViolationError as exc:
