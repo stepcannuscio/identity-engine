@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel
+
+
+class ArtifactAnalysisStatus(str, Enum):
+    NOT_ANALYZED = "not_analyzed"
+    QUEUED = "queued"
+    RUNNING = "running"
+    ANALYZED = "analyzed"
+    FALLBACK_ANALYZED = "fallback_analyzed"
+    FAILED = "failed"
 
 
 class LoginRequest(BaseModel):
@@ -185,7 +195,7 @@ class ArtifactIngestResponse(BaseModel):
     artifact_id: str
     chunk_count: int
     tags: list[str] = []
-    analysis_status: Literal["not_analyzed", "analyzed"] = "not_analyzed"
+    analysis_status: ArtifactAnalysisStatus = ArtifactAnalysisStatus.NOT_ANALYZED
 
 
 class ArtifactAnalysisAttributeCandidate(BaseModel):
@@ -217,7 +227,7 @@ class ArtifactAnalysisResponse(BaseModel):
     """Local-only artifact analysis payload."""
 
     artifact_id: str
-    analysis_status: Literal["not_analyzed", "analyzed"]
+    analysis_status: ArtifactAnalysisStatus
     analysis_method: Literal["model", "heuristic_fallback"] | None = None
     analysis_warning: str | None = None
     content_kind: str | None = None
@@ -226,6 +236,10 @@ class ArtifactAnalysisResponse(BaseModel):
     candidate_attributes: list["ArtifactAnalysisAttributeCandidate"] = []
     candidate_preferences: list["ArtifactAnalysisPreferenceCandidate"] = []
     analyzed_at: datetime | None = None
+    queued_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    can_retry: bool = False
 
 
 class ArtifactPromoteRequest(BaseModel):

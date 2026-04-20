@@ -134,6 +134,9 @@ def client(monkeypatch):
     monkeypatch.setattr("server.main.print_routing_report", lambda config: None)
     monkeypatch.setattr("server.main.ensure_ui_passphrase_exists", lambda: None)
     monkeypatch.setattr("server.main.shutdown_started_ollama", lambda: None)
+    monkeypatch.setattr("server.main.start_worker", lambda config: None)
+    monkeypatch.setattr("server.main.stop_worker", lambda: None)
+    monkeypatch.setattr("server.routes.artifacts.enqueue_analysis", lambda artifact_id: None)
     monkeypatch.setattr(
         "server.auth.get_ui_passphrase",
         lambda: "correct horse battery staple",
@@ -2314,7 +2317,7 @@ def test_post_artifacts_accepts_compressed_pdf_upload(client):
     assert "Planning roadmap" in row[1]
 
 
-def test_post_artifact_analyze_returns_local_candidates(client, monkeypatch):
+def test_post_artifact_analyze_enqueues_and_returns_202(client, monkeypatch):
     create_response = client.post(
         "/artifacts",
         json={
@@ -2331,74 +2334,89 @@ def test_post_artifact_analyze_returns_local_candidates(client, monkeypatch):
         "server.routes.artifacts.resolve_local_provider_config",
         lambda *args, **kwargs: _config(),
     )
-    monkeypatch.setattr(
-        "server.routes.artifacts.analyze_artifact",
-        lambda conn, artifact_id, provider_config: SimpleNamespace(
-            artifact_id=artifact_id,
-            analyzed_at="2026-04-20T12:00:00+00:00",
-            content_kind="recipe_collection",
-            summary="A local collection of dinner recipes.",
-            descriptor_tokens=["recipe", "dinner", "meal"],
-            candidate_attributes=[
-                {
-                    "candidate_id": "attribute_0_dinner_recipes",
-                    "domain": "patterns",
-                    "label": "dinner_recipes",
-                    "value": "The artifact tracks dinner recipes I have made.",
-                    "elaboration": None,
-                    "mutability": "evolving",
-                    "confidence": 0.7,
-                    "status": "pending",
-                },
-            ],
-            candidate_preferences=[
-                {
-                    "candidate_id": "preference_0_food_pasta",
-                    "category": "food",
-                    "subject": "pasta",
-                    "signal": "like",
-                    "strength": 3,
-                    "summary": "Pasta appears repeatedly in the recipe list.",
-                    "status": "pending",
-                },
-            ],
-        ),
-    )
 
     response = client.post(
         f"/artifacts/{artifact_id}/analyze",
         headers=_login_headers(client),
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
-    assert body["analysis_status"] == "analyzed"
-    assert body["analysis_method"] == "model"
-    assert body["content_kind"] == "recipe_collection"
-    assert body["candidate_attributes"][0]["candidate_id"] == "attribute_0_dinner_recipes"
-    assert body["candidate_preferences"][0]["candidate_id"] == "preference_0_food_pasta"
+    assert body["analysis_status"] == "queued"
+    assert body["queued_at"] is not None
+    assert body["artifact_id"] == artifact_id
 
 
-def test_post_artifact_analyze_falls_back_when_local_model_times_out(client, monkeypatch):
+def test_post_artifact_analyze_idempotent_when_already_queued(client, monkeypatch):
     create_response = client.post(
         "/artifacts",
-        json={
-            "text": "Lasagna\nTikka masala\nPasta bake",
-            "title": "Dinner recipes",
-            "type": "document",
-            "source": "upload",
-        },
+        json={"text": "Some notes.", "title": "Notes"},
+        headers=_login_headers(client),
+    )
+    artifact_id = create_response.json()["artifact_id"]
+    monkeypatch.setattr(
+        "server.routes.artifacts.resolve_local_provider_config",
+        lambda *args, **kwargs: _config(),
+    )
+
+    client.post(f"/artifacts/{artifact_id}/analyze", headers=_login_headers(client))
+    response = client.post(f"/artifacts/{artifact_id}/analyze", headers=_login_headers(client))
+
+    body = response.json()
+    assert body["analysis_status"] == "queued"
+
+
+def test_post_artifact_analyze_returns_existing_when_already_analyzed(client, monkeypatch):
+    create_response = client.post(
+        "/artifacts",
+        json={"text": "Some notes.", "title": "Notes"},
+        headers=_login_headers(client),
+    )
+    artifact_id = create_response.json()["artifact_id"]
+
+    conn = client.app.state.test_db
+    analyzed_meta = {
+        "analysis": {
+            "status": "analyzed",
+            "content_kind": "notes",
+            "summary": "Pre-existing analysis.",
+            "descriptor_tokens": ["notes"],
+            "candidate_attributes": [],
+            "candidate_preferences": [],
+            "analyzed_at": "2026-04-20T12:00:00+00:00",
+            "analysis_method": "model",
+            "analysis_warning": None,
+            "queued_at": "2026-04-20T11:59:00+00:00",
+            "started_at": "2026-04-20T11:59:01+00:00",
+            "completed_at": "2026-04-20T12:00:00+00:00",
+        }
+    }
+    conn.execute(
+        "UPDATE artifacts SET metadata = ? WHERE id = ?",
+        (json.dumps(analyzed_meta), artifact_id),
+    )
+    conn.commit()
+
+    response = client.post(f"/artifacts/{artifact_id}/analyze", headers=_login_headers(client))
+
+    body = response.json()
+    assert body["analysis_status"] == "analyzed"
+    assert body["summary"] == "Pre-existing analysis."
+
+
+def test_post_artifact_analyze_409_when_no_local_provider(client, monkeypatch):
+    from config.llm_router import ConfigurationError
+
+    create_response = client.post(
+        "/artifacts",
+        json={"text": "Some notes.", "title": "Notes"},
         headers=_login_headers(client),
     )
     artifact_id = create_response.json()["artifact_id"]
 
     monkeypatch.setattr(
         "server.routes.artifacts.resolve_local_provider_config",
-        lambda *args, **kwargs: _config(),
-    )
-    monkeypatch.setattr(
-        "engine.artifact_analysis.PrivacyBroker.extract_structured_attributes",
-        lambda *args, **kwargs: (_ for _ in ()).throw(requests.exceptions.ReadTimeout("timed out")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ConfigurationError("no local provider")),
     )
 
     response = client.post(
@@ -2406,13 +2424,7 @@ def test_post_artifact_analyze_falls_back_when_local_model_times_out(client, mon
         headers=_login_headers(client),
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["analysis_status"] == "analyzed"
-    assert body["analysis_method"] == "heuristic_fallback"
-    assert "timed out" in body["analysis_warning"].lower()
-    assert body["content_kind"] == "recipe_collection"
-    assert "recipe_collection" in body["descriptor_tokens"] or "recipes" in body["descriptor_tokens"]
+    assert response.status_code == 409
 
 
 def test_post_artifact_promote_writes_selected_candidates(client):

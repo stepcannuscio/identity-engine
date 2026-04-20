@@ -10,7 +10,13 @@ from typing import BinaryIO, Literal, Protocol, TypeGuard, cast
 from fastapi import APIRouter, HTTPException, Request
 
 from config.llm_router import ConfigurationError
-from engine.artifact_analysis import analyze_artifact, get_artifact_analysis, promote_artifact_analysis
+from engine.artifact_analysis import (
+    analyze_artifact,
+    enqueue_artifact_analysis,
+    get_artifact_analysis,
+    promote_artifact_analysis,
+)
+from engine.artifact_worker import enqueue_analysis
 from engine.artifact_ingestion import get_artifact_record, ingest_artifact
 from engine.local_document_parser import extract_docx_text, extract_pdf_text
 from engine.setup_state import resolve_local_provider_config
@@ -19,6 +25,7 @@ from server.models.schemas import (
     ArtifactAnalysisAttributeCandidate,
     ArtifactAnalysisPreferenceCandidate,
     ArtifactAnalysisResponse,
+    ArtifactAnalysisStatus,
     ArtifactIngestResponse,
     ArtifactPromoteRequest,
     ArtifactPromoteResponse,
@@ -106,9 +113,36 @@ def _parse_tags(raw_tags: object) -> list[str]:
     raise HTTPException(status_code=400, detail="tags must be a list or comma-separated string")
 
 
+_TERMINAL_STATUSES = {
+    ArtifactAnalysisStatus.ANALYZED,
+    ArtifactAnalysisStatus.FALLBACK_ANALYZED,
+    ArtifactAnalysisStatus.FAILED,
+}
+
+_VALID_STATUSES = {s.value for s in ArtifactAnalysisStatus}
+
+
+def _parse_iso(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _analysis_response(artifact_id: str, analysis: dict[str, object] | None) -> ArtifactAnalysisResponse:
     if not isinstance(analysis, dict):
-        return ArtifactAnalysisResponse(artifact_id=artifact_id, analysis_status="not_analyzed")
+        return ArtifactAnalysisResponse(
+            artifact_id=artifact_id,
+            analysis_status=ArtifactAnalysisStatus.NOT_ANALYZED,
+        )
+
+    raw_status = str(analysis.get("status", "not_analyzed")).strip()
+    try:
+        status = ArtifactAnalysisStatus(raw_status)
+    except ValueError:
+        status = ArtifactAnalysisStatus.NOT_ANALYZED
 
     analysis_method_value = str(analysis.get("analysis_method", "")).strip()
     if analysis_method_value not in {"model", "heuristic_fallback"}:
@@ -153,19 +187,12 @@ def _analysis_response(artifact_id: str, analysis: dict[str, object] | None) -> 
             status=cast(Literal["pending", "promoted"], status_value),
         )
 
-    analyzed_at = analysis.get("analyzed_at")
-    parsed_analyzed_at = None
-    if isinstance(analyzed_at, str) and analyzed_at.strip():
-        try:
-            parsed_analyzed_at = datetime.fromisoformat(analyzed_at.replace("Z", "+00:00"))
-        except ValueError:
-            parsed_analyzed_at = None
     descriptor_tokens = analysis.get("descriptor_tokens")
     attribute_candidates = analysis.get("candidate_attributes")
     preference_candidates = analysis.get("candidate_preferences")
     return ArtifactAnalysisResponse(
         artifact_id=artifact_id,
-        analysis_status="analyzed",
+        analysis_status=status,
         analysis_method=cast(Literal["model", "heuristic_fallback"] | None, analysis_method_value or None),
         analysis_warning=str(analysis.get("analysis_warning", "")).strip() or None,
         content_kind=str(analysis.get("content_kind", "")).strip() or None,
@@ -189,7 +216,11 @@ def _analysis_response(artifact_id: str, analysis: dict[str, object] | None) -> 
             )
             if candidate is not None
         ] if isinstance(preference_candidates, list) else [],
-        analyzed_at=parsed_analyzed_at,
+        analyzed_at=_parse_iso(analysis.get("analyzed_at")),
+        queued_at=_parse_iso(analysis.get("queued_at")),
+        started_at=_parse_iso(analysis.get("started_at")),
+        completed_at=_parse_iso(analysis.get("completed_at")),
+        can_retry=status == ArtifactAnalysisStatus.FAILED,
     )
 
 
@@ -272,18 +303,30 @@ async def create_artifact(request: Request) -> ArtifactIngestResponse:
         artifact_id=result.artifact_id,
         chunk_count=result.chunk_count,
         tags=sorted({tag.strip().lower() for tag in tags if tag.strip()}),
-        analysis_status="not_analyzed",
+        analysis_status=ArtifactAnalysisStatus.NOT_ANALYZED,
     )
 
 
-@router.post("/artifacts/{artifact_id}/analyze", response_model=ArtifactAnalysisResponse)
+@router.post("/artifacts/{artifact_id}/analyze", response_model=ArtifactAnalysisResponse, status_code=202)
 def analyze_uploaded_artifact(artifact_id: str, request: Request) -> ArtifactAnalysisResponse:
-    """Analyze one artifact locally and return reviewable candidates."""
+    """Enqueue local artifact analysis and return immediately with queued/current status."""
     with get_db_connection() as conn:
         if get_artifact_record(conn, artifact_id) is None:
             raise HTTPException(status_code=404, detail="artifact not found")
+
+        analysis = get_artifact_analysis(conn, artifact_id)
+        current_status = ArtifactAnalysisStatus(
+            str((analysis or {}).get("status", "not_analyzed"))
+        ) if analysis else ArtifactAnalysisStatus.NOT_ANALYZED
+
+        if current_status in {ArtifactAnalysisStatus.QUEUED, ArtifactAnalysisStatus.RUNNING}:
+            return _analysis_response(artifact_id, analysis)
+
+        if current_status in _TERMINAL_STATUSES and current_status != ArtifactAnalysisStatus.FAILED:
+            return _analysis_response(artifact_id, analysis)
+
         try:
-            provider_config = resolve_local_provider_config(request.app.state.llm_config)
+            resolve_local_provider_config(request.app.state.llm_config)
         except ConfigurationError as exc:
             raise HTTPException(
                 status_code=409,
@@ -291,24 +334,14 @@ def analyze_uploaded_artifact(artifact_id: str, request: Request) -> ArtifactAna
                     "Artifact analysis requires a local model. Enable a local provider to analyze uploads."
                 ),
             ) from exc
+
         try:
-            result = analyze_artifact(conn, artifact_id, provider_config)
+            job_analysis = enqueue_artifact_analysis(conn, artifact_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _analysis_response(
-        artifact_id,
-        {
-            "analyzed_at": result.analyzed_at,
-            "analysis_method": getattr(result, "analysis_method", "model"),
-            "analysis_warning": getattr(result, "analysis_warning", None),
-            "content_kind": result.content_kind,
-            "summary": result.summary,
-            "descriptor_tokens": result.descriptor_tokens,
-            "candidate_attributes": result.candidate_attributes,
-            "candidate_preferences": result.candidate_preferences,
-        },
-    )
+    enqueue_analysis(artifact_id)
+    return _analysis_response(artifact_id, job_analysis)
 
 
 @router.post("/artifacts/{artifact_id}/promote", response_model=ArtifactPromoteResponse)

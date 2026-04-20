@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   analyzeArtifact,
@@ -51,8 +51,8 @@ export default function TeachTab({ bootstrapQuery }) {
   const [artifactAnalysis, setArtifactAnalysis] = useState(null)
   const [selectedAttributeIds, setSelectedAttributeIds] = useState(new Set())
   const [selectedPreferenceIds, setSelectedPreferenceIds] = useState(new Set())
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isPromoting, setIsPromoting] = useState(false)
+  const pollRef = useRef(null)
 
   const bootstrap = bootstrapQuery.data
   const activeQuestion = bootstrap?.questions?.[0] ?? null
@@ -60,6 +60,46 @@ export default function TeachTab({ bootstrapQuery }) {
   const localAnalysisAvailable = providerStatuses.some(
     (provider) => provider.is_local && provider.available,
   )
+
+  const TERMINAL_STATUSES = new Set(['analyzed', 'fallback_analyzed', 'failed'])
+  const isAnalyzing =
+    artifactAnalysis != null &&
+    !TERMINAL_STATUSES.has(artifactAnalysis?.analysis_status)
+
+  const stopPolling = () => {
+    if (pollRef.current != null) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  const startPolling = (id) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const analysis = await getArtifactAnalysis(id)
+        setAnalysisState(analysis)
+        if (TERMINAL_STATUSES.has(analysis?.analysis_status)) {
+          stopPolling()
+          if (analysis.analysis_status === 'failed') {
+            addToast({ message: analysis.analysis_warning ?? 'Analysis failed. You can retry.', tone: 'error' })
+          } else {
+            addToast({
+              message:
+                analysis.analysis_method === 'heuristic_fallback'
+                  ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
+                  : 'Upload analyzed locally.',
+              tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
+            })
+          }
+        }
+      } catch {
+        stopPolling()
+      }
+    }, 3000)
+  }
+
+  useEffect(() => stopPolling, [])
 
   const setAnalysisState = (analysis) => {
     setArtifactAnalysis(analysis)
@@ -192,13 +232,17 @@ export default function TeachTab({ bootstrapQuery }) {
       if (localAnalysisAvailable) {
         const analysis = await analyzeArtifact(response.artifact_id)
         setAnalysisState(analysis)
-        addToast({
-          message:
-            analysis.analysis_method === 'heuristic_fallback'
-              ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
-              : 'Upload analyzed locally.',
-          tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
-        })
+        if (!TERMINAL_STATUSES.has(analysis?.analysis_status)) {
+          startPolling(response.artifact_id)
+        } else if (analysis.analysis_status !== 'failed') {
+          addToast({
+            message:
+              analysis.analysis_method === 'heuristic_fallback'
+                ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
+                : 'Upload analyzed locally.',
+            tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
+          })
+        }
       }
     } catch (error) {
       addToast({ message: error?.response?.data?.detail ?? 'Unable to save that upload.' })
@@ -211,23 +255,29 @@ export default function TeachTab({ bootstrapQuery }) {
     if (!artifactId) {
       return
     }
-    setIsAnalyzing(true)
     try {
-      const analysis = artifactAnalysis?.analysis_status === 'analyzed'
+      const alreadyTerminal =
+        TERMINAL_STATUSES.has(artifactAnalysis?.analysis_status) &&
+        artifactAnalysis?.analysis_status !== 'failed'
+      const analysis = alreadyTerminal
         ? await getArtifactAnalysis(artifactId)
         : await analyzeArtifact(artifactId)
       setAnalysisState(analysis)
-      addToast({
-        message:
-          analysis.analysis_method === 'heuristic_fallback'
-            ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
-            : 'Upload analyzed locally.',
-        tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
-      })
+      if (TERMINAL_STATUSES.has(analysis?.analysis_status)) {
+        if (analysis.analysis_status !== 'failed') {
+          addToast({
+            message:
+              analysis.analysis_method === 'heuristic_fallback'
+                ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
+                : 'Upload analyzed locally.',
+            tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
+          })
+        }
+      } else {
+        startPolling(artifactId)
+      }
     } catch (error) {
       addToast({ message: error?.response?.data?.detail ?? 'Unable to analyze that upload.' })
-    } finally {
-      setIsAnalyzing(false)
     }
   }
 
@@ -475,7 +525,11 @@ export default function TeachTab({ bootstrapQuery }) {
                 onClick={handleAnalyzeArtifact}
                 disabled={!localAnalysisAvailable || isAnalyzing || isSaving}
               >
-                {isAnalyzing ? 'Analyzing...' : 'Analyze upload'}
+                {artifactAnalysis?.analysis_status === 'queued'
+                  ? 'Queued...'
+                  : isAnalyzing
+                    ? 'Analyzing...'
+                    : 'Analyze upload'}
               </button>
               {!localAnalysisAvailable ? (
                 <span className="field-help">
@@ -484,7 +538,25 @@ export default function TeachTab({ bootstrapQuery }) {
               ) : null}
             </div>
           ) : null}
-          {artifactAnalysis?.analysis_status === 'analyzed' ? (
+          {artifactAnalysis?.analysis_status === 'failed' ? (
+            <div className="teach-analysis">
+              <p className="field-help">
+                <strong>Analysis failed:</strong>{' '}
+                {artifactAnalysis.analysis_warning ?? 'An unexpected error occurred.'}
+              </p>
+              <div className="teach-action-row">
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={handleAnalyzeArtifact}
+                  disabled={!localAnalysisAvailable || isSaving}
+                >
+                  Retry analysis
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {['analyzed', 'fallback_analyzed'].includes(artifactAnalysis?.analysis_status) ? (
             <div className="teach-analysis">
               <p className="field-help">
                 <strong>Local summary:</strong> {artifactAnalysis.summary}

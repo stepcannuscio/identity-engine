@@ -186,11 +186,7 @@ export const uploadArtifact = async ({
 }
 
 export const analyzeArtifact = async (artifactId) => {
-  const { data } = await client.post(
-    `/artifacts/${artifactId}/analyze`,
-    null,
-    withSlowRequestTimeout(),
-  )
+  const { data } = await client.post(`/artifacts/${artifactId}/analyze`, null)
   return data
 }
 

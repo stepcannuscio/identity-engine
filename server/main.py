@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from config.llm_router import print_routing_report, resolve_router, shutdown_started_ollama
+from engine.artifact_worker import start_worker, stop_worker
 from config.settings import DB_DIR
 from engine.prompt_builder import RoutingViolationError
 from engine.session import Session
@@ -200,10 +201,12 @@ async def lifespan(app: FastAPI):
     app.state.login_locks = {}
     app.state.current_session = Session()
 
+    start_worker(llm_config)
     print(f"Identity engine server ready at https://{bind_ip}:{PORT}")
     try:
         yield
     finally:
+        stop_worker()
         app.state.active_sessions.clear()
         _write_session_record(app)
         shutdown_started_ollama()

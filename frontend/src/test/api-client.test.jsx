@@ -143,7 +143,7 @@ describe('api client', () => {
     )
   })
 
-  it('uses the slow timeout for artifact analysis and promotion', async () => {
+  it('enqueues artifact analysis without slow timeout and uses slow timeout for promotion', async () => {
     const postSpy = vi.spyOn(client, 'post').mockResolvedValue({ data: { artifact_id: 'artifact-1' } })
 
     await analyzeArtifact('artifact-1')
@@ -153,7 +153,6 @@ describe('api client', () => {
       1,
       '/artifacts/artifact-1/analyze',
       null,
-      { timeout: SLOW_REQUEST_TIMEOUT_MS },
     )
     expect(postSpy).toHaveBeenNthCalledWith(
       2,

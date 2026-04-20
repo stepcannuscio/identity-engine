@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 import requests
 
@@ -230,9 +230,15 @@ def _parse_analysis_response(raw: str, artifact_id: str) -> ArtifactAnalysisResu
     )
 
 
-def _analysis_payload(result: ArtifactAnalysisResult) -> dict[str, object]:
+def _analysis_payload(
+    result: ArtifactAnalysisResult,
+    *,
+    queued_at: str | None = None,
+    started_at: str | None = None,
+) -> dict[str, object]:
+    status = "fallback_analyzed" if result.analysis_method == "heuristic_fallback" else "analyzed"
     return {
-        "status": "analyzed",
+        "status": status,
         "content_kind": result.content_kind,
         "summary": result.summary,
         "descriptor_tokens": result.descriptor_tokens,
@@ -241,6 +247,9 @@ def _analysis_payload(result: ArtifactAnalysisResult) -> dict[str, object]:
         "analyzed_at": result.analyzed_at,
         "analysis_method": result.analysis_method,
         "analysis_warning": result.analysis_warning,
+        "queued_at": queued_at,
+        "started_at": started_at,
+        "completed_at": result.analyzed_at,
     }
 
 
@@ -377,20 +386,8 @@ def _build_fallback_analysis(
     )
 
 
-def analyze_artifact(
-    conn,
-    artifact_id: str,
-    provider_config,
-) -> ArtifactAnalysisResult:
-    """Analyze one stored artifact with a local model and persist the result in metadata."""
-    if not getattr(provider_config, "is_local", False):
-        raise ValueError("Artifact analysis requires a local provider.")
-
-    artifact = get_artifact_record(conn, artifact_id)
-    if artifact is None:
-        raise ValueError("artifact not found")
-
-    tags = get_artifact_tags(conn, artifact_id)
+def _call_provider(artifact_id: str, artifact: dict[str, object], tags: list[str], provider_config) -> ArtifactAnalysisResult:
+    """Call the local model and return a result, falling back to heuristics on timeout."""
     messages = [
         {"role": "system", "content": _ANALYSIS_PROMPT},
         {
@@ -401,7 +398,7 @@ def analyze_artifact(
                     "domain": artifact["domain"],
                     "type": artifact["type"],
                     "source": artifact["source"],
-                    "filename": artifact["metadata"].get("filename"),
+                    "filename": cast(dict[str, object], artifact["metadata"]).get("filename"),
                     "tags": tags,
                     "content": artifact["content"],
                 },
@@ -418,28 +415,144 @@ def analyze_artifact(
             timeout_seconds=_ARTIFACT_ANALYSIS_TIMEOUT_SECONDS,
         ).content
         assert isinstance(raw, str)
-        result = _parse_analysis_response(raw, artifact_id)
+        return _parse_analysis_response(raw, artifact_id)
     except (requests.exceptions.Timeout, requests.exceptions.RequestException, ValueError) as exc:
         logger.warning(
             "Artifact analysis fell back to deterministic local heuristics for artifact %s: %s",
             artifact_id,
             exc,
         )
-        result = _build_fallback_analysis(
-            artifact_id,
-            artifact,
-            tags,
-            warning=_FALLBACK_WARNING,
-        )
+        return _build_fallback_analysis(artifact_id, artifact, tags, warning=_FALLBACK_WARNING)
 
+
+def analyze_artifact(
+    conn,
+    artifact_id: str,
+    provider_config,
+) -> ArtifactAnalysisResult:
+    """Analyze one stored artifact with a local model and persist the result in metadata."""
+    if not getattr(provider_config, "is_local", False):
+        raise ValueError("Artifact analysis requires a local provider.")
+
+    artifact = get_artifact_record(conn, artifact_id)
+    if artifact is None:
+        raise ValueError("artifact not found")
+
+    tags = get_artifact_tags(conn, artifact_id)
+    result = _call_provider(artifact_id, artifact, tags, provider_config)
     metadata = dict(artifact["metadata"])
     metadata["analysis"] = _analysis_payload(result)
     update_artifact_metadata(conn, artifact_id, metadata)
     return result
 
 
+def enqueue_artifact_analysis(conn, artifact_id: str) -> dict[str, object]:
+    """Write queued status to metadata and return the status dict.
+
+    Idempotent: if already queued, returns current state without updating queued_at.
+    """
+    artifact = get_artifact_record(conn, artifact_id)
+    if artifact is None:
+        raise ValueError("artifact not found")
+    metadata = dict(artifact["metadata"])
+    raw_analysis = metadata.get("analysis")
+    existing: dict[str, object] = raw_analysis if isinstance(raw_analysis, dict) else {}
+    if str(existing.get("status", "")) == "queued":
+        return existing
+    new_analysis: dict[str, object] = {
+        **existing,
+        "status": "queued",
+        "queued_at": datetime.now(UTC).isoformat(),
+        "started_at": None,
+        "completed_at": None,
+    }
+    metadata["analysis"] = new_analysis
+    update_artifact_metadata(conn, artifact_id, metadata)
+    return new_analysis
+
+
+def run_analysis_for_worker(artifact_id: str, llm_config: Any) -> None:
+    """Execute analysis for one artifact in a background worker thread."""
+    from config.llm_router import ConfigurationError
+    from engine.setup_state import resolve_local_provider_config
+    from server.db import get_db_connection
+
+    with get_db_connection() as conn:
+        artifact = get_artifact_record(conn, artifact_id)
+        if artifact is None:
+            logger.warning("Worker: artifact %s not found, skipping.", artifact_id)
+            return
+        metadata = dict(artifact["metadata"])
+        raw_analysis = metadata.get("analysis")
+        analysis: dict[str, object] = raw_analysis if isinstance(raw_analysis, dict) else {}
+        status = str(analysis.get("status", "not_analyzed"))
+        if status != "queued":
+            logger.debug("Worker: artifact %s status is %r, skipping.", artifact_id, status)
+            return
+        _queued_at_raw = analysis.get("queued_at")
+        queued_at: str | None = str(_queued_at_raw) if isinstance(_queued_at_raw, str) else None
+        started_at = datetime.now(UTC).isoformat()
+        metadata["analysis"] = {**analysis, "status": "running", "started_at": started_at}
+        update_artifact_metadata(conn, artifact_id, metadata)
+
+    try:
+        provider_config = resolve_local_provider_config(llm_config)
+    except ConfigurationError:
+        logger.error("Worker: no local provider available for artifact %s.", artifact_id)
+        _write_failed_status(artifact_id, queued_at, started_at, "no local provider available")
+        return
+
+    try:
+        with get_db_connection() as conn:
+            artifact = get_artifact_record(conn, artifact_id)
+            if artifact is None:
+                return
+            tags = get_artifact_tags(conn, artifact_id)
+        result = _call_provider(artifact_id, artifact, tags, provider_config)
+        with get_db_connection() as conn:
+            artifact = get_artifact_record(conn, artifact_id)
+            if artifact is None:
+                return
+            metadata = dict(artifact["metadata"])
+            metadata["analysis"] = _analysis_payload(result, queued_at=queued_at, started_at=started_at)
+            update_artifact_metadata(conn, artifact_id, metadata)
+    except Exception as exc:
+        logger.exception("Worker: unexpected error analyzing artifact %s.", artifact_id)
+        _write_failed_status(artifact_id, queued_at, started_at, f"unexpected error: {type(exc).__name__}")
+
+
+def _write_failed_status(
+    artifact_id: str,
+    queued_at: object,
+    started_at: object,
+    reason: str,
+) -> None:
+    from server.db import get_db_connection
+
+    try:
+        with get_db_connection() as conn:
+            artifact = get_artifact_record(conn, artifact_id)
+            if artifact is None:
+                return
+            metadata = dict(artifact["metadata"])
+            raw_analysis = metadata.get("analysis")
+            existing: dict[str, object] = raw_analysis if isinstance(raw_analysis, dict) else {}
+            failed_analysis: dict[str, object] = {
+                **existing,
+                "status": "failed",
+                "analysis_warning": reason,
+                "queued_at": queued_at,
+                "started_at": started_at,
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+            metadata["analysis"] = failed_analysis
+            update_artifact_metadata(conn, artifact_id, metadata)
+    except Exception:
+        logger.exception("Worker: failed to write failed status for artifact %s.", artifact_id)
+
+
 def get_artifact_analysis(conn, artifact_id: str) -> dict[str, object] | None:
-    """Return the persisted analysis payload for one artifact if present."""
+    """Return the persisted analysis payload for one artifact, or None if not found."""
     artifact = get_artifact_record(conn, artifact_id)
     if artifact is None:
         return None

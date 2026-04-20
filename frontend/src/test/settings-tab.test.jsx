@@ -5,6 +5,7 @@ import SettingsTab from '../components/settings/SettingsTab.jsx'
 import TeachTab from '../components/teach/TeachTab.jsx'
 import {
   analyzeArtifact,
+  getArtifactAnalysis,
   promoteArtifact,
   updateSecurityCheckOverride,
   uploadArtifact,
@@ -119,6 +120,10 @@ function createBootstrapQuery(data) {
 }
 
 describe('TeachTab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('keeps setup panels off the page after onboarding is complete', () => {
     const bootstrap = createBootstrapData()
 
@@ -231,6 +236,106 @@ describe('TeachTab', () => {
         ],
       })
     })
+  })
+
+  it('shows queued state after enqueue and polls until analyzed', async () => {
+    const user = userEvent.setup()
+    const bootstrap = createBootstrapData()
+
+    uploadArtifact.mockResolvedValue({ artifact_id: 'artifact-1', chunk_count: 1, analysis_status: 'not_analyzed' })
+    analyzeArtifact.mockResolvedValue({
+      artifact_id: 'artifact-1',
+      analysis_status: 'queued',
+      queued_at: '2026-04-20T12:00:00Z',
+      started_at: null,
+      completed_at: null,
+    })
+    getArtifactAnalysis
+      .mockResolvedValueOnce({
+        artifact_id: 'artifact-1',
+        analysis_status: 'running',
+        queued_at: '2026-04-20T12:00:00Z',
+        started_at: '2026-04-20T12:00:01Z',
+      })
+      .mockResolvedValueOnce({
+        artifact_id: 'artifact-1',
+        analysis_status: 'analyzed',
+        analysis_method: 'model',
+        analysis_warning: null,
+        summary: 'A local collection of dinner recipes the user has made.',
+        descriptor_tokens: ['recipe', 'dinner'],
+        candidate_attributes: [],
+        candidate_preferences: [],
+      })
+
+    renderWithProviders(<TeachTab bootstrapQuery={createBootstrapQuery(bootstrap)} />, {
+      appState: { teachState: bootstrap },
+    })
+
+    await user.type(screen.getByPlaceholderText('Document title'), 'Dinner recipes')
+    await user.type(screen.getByPlaceholderText('Paste text here, or choose a file below.'), 'Lasagna')
+    await user.click(screen.getByRole('button', { name: 'Save upload' }))
+
+    await waitFor(() => expect(analyzeArtifact).toHaveBeenCalledWith('artifact-1'))
+    await waitFor(() => expect(screen.getByRole('button', { name: /queued/i })).toBeInTheDocument())
+
+    await waitFor(() => expect(getArtifactAnalysis).toHaveBeenCalledTimes(2), { timeout: 10000 })
+    expect(await screen.findByText(/local collection of dinner recipes/i)).toBeInTheDocument()
+  }, 15000)
+
+  it('shows failed state with retry button when analysis fails', async () => {
+    const user = userEvent.setup()
+    const bootstrap = createBootstrapData()
+
+    uploadArtifact.mockResolvedValue({ artifact_id: 'artifact-1', chunk_count: 1, analysis_status: 'not_analyzed' })
+    analyzeArtifact.mockResolvedValue({
+      artifact_id: 'artifact-1',
+      analysis_status: 'queued',
+      queued_at: '2026-04-20T12:00:00Z',
+    })
+    getArtifactAnalysis.mockResolvedValue({
+      artifact_id: 'artifact-1',
+      analysis_status: 'failed',
+      analysis_warning: 'no local provider available',
+    })
+
+    renderWithProviders(<TeachTab bootstrapQuery={createBootstrapQuery(bootstrap)} />, {
+      appState: { teachState: bootstrap },
+    })
+
+    await user.type(screen.getByPlaceholderText('Paste text here, or choose a file below.'), 'Notes')
+    await user.click(screen.getByRole('button', { name: 'Save upload' }))
+
+    await waitFor(() => expect(getArtifactAnalysis).toHaveBeenCalled(), { timeout: 10000 })
+    expect(await screen.findByRole('button', { name: 'Retry analysis' })).toBeInTheDocument()
+    expect(screen.getByText(/no local provider available/i, { exact: false })).toBeInTheDocument()
+  }, 15000)
+
+  it('shows fallback_analyzed warning in analysis results', async () => {
+    const user = userEvent.setup()
+    const bootstrap = createBootstrapData()
+
+    uploadArtifact.mockResolvedValue({ artifact_id: 'artifact-1', chunk_count: 1, analysis_status: 'not_analyzed' })
+    analyzeArtifact.mockResolvedValue({
+      artifact_id: 'artifact-1',
+      analysis_status: 'fallback_analyzed',
+      analysis_method: 'heuristic_fallback',
+      analysis_warning: 'The local model timed out, so this upload was analyzed with a lightweight local fallback.',
+      summary: 'This upload appears to be a general note.',
+      descriptor_tokens: ['notes'],
+      candidate_attributes: [],
+      candidate_preferences: [],
+    })
+
+    renderWithProviders(<TeachTab bootstrapQuery={createBootstrapQuery(bootstrap)} />, {
+      appState: { teachState: bootstrap },
+    })
+
+    await user.type(screen.getByPlaceholderText('Paste text here, or choose a file below.'), 'Notes')
+    await user.click(screen.getByRole('button', { name: 'Save upload' }))
+
+    expect(await screen.findByText(/general note/i)).toBeInTheDocument()
+    expect(await screen.findByText(/timed out/i)).toBeInTheDocument()
   })
 })
 
