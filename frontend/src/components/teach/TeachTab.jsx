@@ -197,6 +197,16 @@ export default function TeachTab({ bootstrapQuery }) {
     await queryClient.invalidateQueries({ queryKey: ['domains'] })
   }
 
+  const applyBootstrapUpdate = async (nextBootstrap) => {
+    if (nextBootstrap) {
+      queryClient.setQueryData(['teachBootstrap'], nextBootstrap)
+      await queryClient.invalidateQueries({ queryKey: ['attributes'] })
+      await queryClient.invalidateQueries({ queryKey: ['domains'] })
+      return
+    }
+    await refreshBootstrap()
+  }
+
   const handleProfileSave = async (profileCode, markComplete = false) => {
     const profile = bootstrap?.profiles?.find((item) => item.code === profileCode)
     const preferred =
@@ -255,7 +265,7 @@ export default function TeachTab({ bootstrapQuery }) {
     }
     setIsSaving(true)
     try {
-      await answerTeachQuestion(
+      const response = await answerTeachQuestion(
         activeQuestion.id,
         requiresExternalExtractionConsent
           ? {
@@ -266,7 +276,7 @@ export default function TeachTab({ bootstrapQuery }) {
       )
       setAnswer('')
       setAllowExternalAnswerExtraction(false)
-      await refreshBootstrap()
+      await applyBootstrapUpdate(response?.next ?? null)
       addToast({ message: 'Answer saved.', tone: 'success' })
     } catch (error) {
       addToast({ message: error?.response?.data?.detail ?? 'Unable to save that answer.' })
@@ -281,10 +291,10 @@ export default function TeachTab({ bootstrapQuery }) {
     }
     setIsSaving(true)
     try {
-      await feedbackTeachQuestion(activeQuestion.id, feedback)
+      const nextBootstrap = await feedbackTeachQuestion(activeQuestion.id, feedback)
       setAnswer('')
       setAllowExternalAnswerExtraction(false)
-      await refreshBootstrap()
+      await applyBootstrapUpdate(nextBootstrap ?? null)
       addToast({ message: 'Feedback saved.', tone: 'success' })
     } catch (error) {
       addToast({ message: error?.response?.data?.detail ?? 'Unable to save feedback.' })

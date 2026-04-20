@@ -27,6 +27,7 @@ from db.inference_evidence import InferenceEvidenceInput, record_inference_evide
 from db.schema import create_tables, seed_domains
 from engine.privacy_broker import InferenceDecision
 from engine.prompt_builder import RoutingViolationError
+from engine.setup_state import get_provider_statuses
 from server.main import assert_safe_bind_ip, create_app
 
 
@@ -222,6 +223,51 @@ def test_login_rate_limit_returns_429_after_five_failures(client: TestClient):
 
     response = client.post("/auth/login", json={"passphrase": "wrong"})
     assert response.status_code == 429
+
+
+def test_get_provider_statuses_is_read_only_by_default(monkeypatch):
+    class RecordingConnection:
+        def __init__(self):
+            self.executemany_calls = 0
+            self.commit_calls = 0
+
+        def executemany(self, *_args, **_kwargs):
+            self.executemany_calls += 1
+            raise AssertionError("get_provider_statuses() should not persist without persist=True")
+
+        def commit(self):
+            self.commit_calls += 1
+            raise AssertionError("get_provider_statuses() should not commit without persist=True")
+
+    monkeypatch.setattr("engine.setup_state.detect_hardware", lambda: {"recommended_tier": "local_small"})
+    monkeypatch.setattr("engine.setup_state._ollama_is_running", lambda: True)
+    monkeypatch.setattr("engine.setup_state._ollama_has_model", lambda model: True)
+    monkeypatch.setattr("engine.setup_state.has_api_key", lambda provider: provider == "anthropic")
+
+    conn = RecordingConnection()
+    statuses = get_provider_statuses(conn)
+
+    assert statuses
+    assert conn.executemany_calls == 0
+    assert conn.commit_calls == 0
+
+
+def test_get_provider_statuses_can_persist_when_requested(monkeypatch):
+    monkeypatch.setattr("engine.setup_state.detect_hardware", lambda: {"recommended_tier": "local_small"})
+    monkeypatch.setattr("engine.setup_state._ollama_is_running", lambda: True)
+    monkeypatch.setattr("engine.setup_state._ollama_has_model", lambda model: True)
+    monkeypatch.setattr("engine.setup_state.has_api_key", lambda provider: provider == "anthropic")
+
+    with get_plain_connection(":memory:") as conn:
+        create_tables(conn)
+        statuses = get_provider_statuses(conn, persist=True)
+        stored = conn.execute(
+            "SELECT provider, configured, validated FROM provider_status ORDER BY provider"
+        ).fetchall()
+
+    assert statuses
+    assert stored
+    assert any(row[0] == "anthropic" and row[1] == 1 and row[2] == 1 for row in stored)
 
 
 def test_protected_route_without_token_returns_401(client: TestClient):
@@ -1944,6 +1990,147 @@ def test_teach_answer_saves_attributes_and_marks_question_answered(client):
         (question_id,),
     ).fetchone()
     assert stored == ("answered",)
+
+
+def test_teach_answer_response_does_not_repeat_answered_question(client):
+    prompt = "What do you believe separates good engineers from great ones?"
+    intent_key = "beliefs_what_do_you_believe_separates_good_engineers_from_great_ones"
+    question_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO teach_questions (
+            id, prompt, domain, intent_key, source, status, priority, onboarding_stage
+        )
+        VALUES (?, ?, ?, ?, 'catalog', 'pending', 10.0, 'teaching')
+        """,
+        (question_id, prompt, "beliefs", intent_key),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/questions/{question_id}/answer",
+        json={
+            "answer": "Strong engineers pair craft with judgment.",
+            "accepted": [
+                {
+                    "domain": "beliefs",
+                    "label": "engineering_judgment",
+                    "value": "I think great engineers combine technical skill with judgment.",
+                    "elaboration": None,
+                    "mutability": "stable",
+                    "confidence": 0.9,
+                }
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    stored = _db(client).execute(
+        "SELECT status FROM teach_questions WHERE id = ?",
+        (question_id,),
+    ).fetchone()
+    assert stored == ("answered",)
+    next_questions = response.json()["next"]["questions"]
+    assert next_questions
+    assert all(item["intent_key"] != intent_key for item in next_questions)
+
+
+def test_teach_answer_response_dismisses_legacy_duplicate_pending_question(client):
+    prompt = "What do you believe about privacy in the modern world?"
+    intent_key = "beliefs_what_do_you_believe_about_privacy_in_the_modern_world"
+    question_id = str(uuid.uuid4())
+    duplicate_id = str(uuid.uuid4())
+    _db(client).executemany(
+        """
+        INSERT INTO teach_questions (
+            id, prompt, domain, intent_key, source, status, priority, onboarding_stage
+        )
+        VALUES (?, ?, ?, ?, 'catalog', 'pending', 10.0, 'teaching')
+        """,
+        [
+            (question_id, prompt, "beliefs", intent_key),
+            (duplicate_id, prompt, "beliefs", intent_key),
+        ],
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/questions/{question_id}/answer",
+        json={
+            "answer": "Privacy should preserve agency and dignity.",
+            "accepted": [
+                {
+                    "domain": "beliefs",
+                    "label": "privacy_agency",
+                    "value": "I believe privacy protects agency and dignity.",
+                    "elaboration": None,
+                    "mutability": "stable",
+                    "confidence": 0.9,
+                }
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    rows = _db(client).execute(
+        "SELECT id, status FROM teach_questions WHERE intent_key = ? ORDER BY id",
+        (intent_key,),
+    ).fetchall()
+    statuses = {str(row[0]): str(row[1]) for row in rows}
+    assert statuses[question_id] == "answered"
+    assert statuses[duplicate_id] == "dismissed"
+    next_questions = response.json()["next"]["questions"]
+    assert all(item["intent_key"] != intent_key for item in next_questions)
+
+
+def test_teach_answer_response_dismisses_legacy_duplicate_pending_prompt(client):
+    prompt = "What do you believe about privacy in the modern world?"
+    question_id = str(uuid.uuid4())
+    duplicate_id = str(uuid.uuid4())
+    _db(client).executemany(
+        """
+        INSERT INTO teach_questions (
+            id, prompt, domain, intent_key, source, status, priority, onboarding_stage
+        )
+        VALUES (?, ?, ?, ?, 'catalog', 'pending', 10.0, 'teaching')
+        """,
+        [
+            (question_id, prompt, "beliefs", "beliefs_privacy_original"),
+            (duplicate_id, prompt, "beliefs", "beliefs_privacy_duplicate"),
+        ],
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/questions/{question_id}/answer",
+        json={
+            "answer": "Privacy should preserve agency and dignity.",
+            "accepted": [
+                {
+                    "domain": "beliefs",
+                    "label": "privacy_agency",
+                    "value": "I believe privacy protects agency and dignity.",
+                    "elaboration": None,
+                    "mutability": "stable",
+                    "confidence": 0.9,
+                }
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    rows = _db(client).execute(
+        "SELECT id, status FROM teach_questions WHERE prompt = ? ORDER BY id",
+        (prompt,),
+    ).fetchall()
+    statuses = {str(row[0]): str(row[1]) for row in rows}
+    assert statuses[question_id] == "answered"
+    assert statuses[duplicate_id] == "dismissed"
+    next_questions = response.json()["next"]["questions"]
+    assert all(item["prompt"] != prompt for item in next_questions)
 
 
 def test_teach_answer_requires_consent_for_external_extraction(client, monkeypatch):

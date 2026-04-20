@@ -35,6 +35,10 @@ def _slug(value: str) -> str:
     return normalized or "question"
 
 
+def _normalize_prompt(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -75,11 +79,71 @@ def _feedback_counts(conn) -> dict[str, int]:
     return {str(row[0]): int(row[1]) for row in rows}
 
 
-def _pending_intents(conn) -> set[str]:
-    rows = conn.execute(
-        "SELECT intent_key FROM teach_questions WHERE status = 'pending'"
-    ).fetchall()
+def _seen_intents(conn) -> set[str]:
+    rows = conn.execute("SELECT intent_key FROM teach_questions").fetchall()
     return {str(row[0]) for row in rows}
+
+
+def _seen_prompts(conn) -> set[str]:
+    rows = conn.execute("SELECT prompt FROM teach_questions").fetchall()
+    return {_normalize_prompt(str(row[0])) for row in rows}
+
+
+def _prune_stale_pending_questions(conn) -> None:
+    """Dismiss duplicate pending questions and stale pending rows for completed intents."""
+    rows = conn.execute(
+        """
+        SELECT id, intent_key, prompt, status
+        FROM teach_questions
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        """
+    ).fetchall()
+    completed_intents = {
+        str(row[1])
+        for row in rows
+        if str(row[3]) in {"answered", "dismissed"}
+    }
+    completed_prompts = {
+        _normalize_prompt(str(row[2]))
+        for row in rows
+        if str(row[3]) in {"answered", "dismissed"}
+    }
+    kept_pending: set[str] = set()
+    kept_pending_prompts: set[str] = set()
+    stale_pending_ids: list[str] = []
+
+    for row in rows:
+        question_id = str(row[0])
+        intent_key = str(row[1])
+        prompt = _normalize_prompt(str(row[2]))
+        status = str(row[3])
+        if status != "pending":
+            continue
+        if (
+            intent_key in completed_intents
+            or prompt in completed_prompts
+            or intent_key in kept_pending
+            or prompt in kept_pending_prompts
+        ):
+            stale_pending_ids.append(question_id)
+            continue
+        kept_pending.add(intent_key)
+        kept_pending_prompts.add(prompt)
+
+    if not stale_pending_ids:
+        return
+
+    now = _now()
+    conn.executemany(
+        """
+        UPDATE teach_questions
+        SET status = 'dismissed',
+            updated_at = ?
+        WHERE id = ?
+        """,
+        [(now, question_id) for question_id in stale_pending_ids],
+    )
+    conn.commit()
 
 
 def build_question_generation_messages(
@@ -169,7 +233,8 @@ def ensure_question_queue(
     """Ensure there are enough pending Teach questions for under-covered domains."""
     counts = _domain_attribute_counts(conn)
     feedback_counts = _feedback_counts(conn)
-    pending_intents = _pending_intents(conn)
+    seen_intents = _seen_intents(conn)
+    seen_prompts = _seen_prompts(conn)
     tags = _artifact_tags(conn)
 
     ranked_domains = sorted(
@@ -192,7 +257,8 @@ def ensure_question_queue(
         chosen_catalog = None
         for question in questions:
             intent_key = f"{domain}_{_slug(question)}"
-            if intent_key in pending_intents:
+            normalized_prompt = _normalize_prompt(question)
+            if intent_key in seen_intents or normalized_prompt in seen_prompts:
                 continue
             chosen_catalog = (question, intent_key)
             break
@@ -206,14 +272,15 @@ def ensure_question_queue(
                 source="catalog",
                 priority=max(1.0, 10.0 - attribute_count - feedback_count),
             )
-            pending_intents.add(intent_key)
+            seen_intents.add(intent_key)
+            seen_prompts.add(_normalize_prompt(prompt))
             current_pending += 1
 
         if current_pending >= limit:
             break
 
         generated_intent = f"{domain}_generated_follow_up"
-        if generated_intent in pending_intents:
+        if generated_intent in seen_intents:
             continue
 
         messages = build_question_generation_messages(
@@ -239,7 +306,7 @@ def ensure_question_queue(
         if parsed is None:
             continue
         prompt, intent_key = parsed
-        if intent_key in pending_intents:
+        if intent_key in seen_intents or _normalize_prompt(prompt) in seen_prompts:
             continue
         _insert_question(
             conn,
@@ -249,7 +316,8 @@ def ensure_question_queue(
             source="generated",
             priority=max(0.5, 9.0 - attribute_count - feedback_count),
         )
-        pending_intents.add(intent_key)
+        seen_intents.add(intent_key)
+        seen_prompts.add(_normalize_prompt(prompt))
         current_pending += 1
 
     conn.commit()
@@ -257,6 +325,7 @@ def ensure_question_queue(
 
 def get_next_questions(conn, provider_config: ProviderConfig, *, limit: int = QUESTION_LIMIT) -> list[TeachQuestion]:
     """Return the next pending Teach questions after refreshing the queue."""
+    _prune_stale_pending_questions(conn)
     ensure_question_queue(conn, provider_config, limit=max(limit, QUESTION_LIMIT))
     now = _now()
     rows = conn.execute(

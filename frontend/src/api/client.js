@@ -2,10 +2,19 @@ import axios from 'axios'
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '/api' : '')
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10000
+export const SLOW_REQUEST_TIMEOUT_MS = 120000
+
+export function withSlowRequestTimeout(config = {}) {
+  return {
+    ...config,
+    timeout: SLOW_REQUEST_TIMEOUT_MS,
+  }
+}
 
 const client = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: DEFAULT_REQUEST_TIMEOUT_MS,
 })
 
 client.interceptors.request.use((config) => {

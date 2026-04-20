@@ -233,6 +233,9 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - `teach_question_feedback`
 - Teach questions are seeded from the canonical interview catalog and then
   refreshed dynamically from coverage gaps, artifact tags, and feedback history
+- Teach queue refresh now deduplicates by `intent_key` and normalized prompt
+  text, dismissing stale pending duplicates so previously answered or dismissed
+  prompts do not reappear
 - generated questions use a sanitized metadata-only prompt:
   - domain names
   - coverage counts

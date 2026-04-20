@@ -174,8 +174,53 @@ def update_app_settings(
     return get_app_settings(conn)
 
 
-def get_provider_statuses(conn) -> list[ProviderStatus]:
-    """Return current provider readiness and sync it into provider_status."""
+def _persist_provider_statuses(conn, statuses: list[ProviderStatus]) -> None:
+    """Persist the latest provider readiness snapshot when a caller explicitly requests it."""
+    now = datetime.now(UTC).isoformat()
+    conn.executemany(
+        """
+        INSERT INTO provider_status (
+            provider,
+            deployment,
+            trust_boundary,
+            auth_strategy,
+            configured,
+            validated,
+            last_validated_at,
+            last_error,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider) DO UPDATE SET
+            deployment = excluded.deployment,
+            trust_boundary = excluded.trust_boundary,
+            auth_strategy = excluded.auth_strategy,
+            configured = excluded.configured,
+            validated = excluded.validated,
+            last_validated_at = excluded.last_validated_at,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at
+        """,
+        [
+            (
+                status.provider,
+                status.deployment,
+                status.trust_boundary,
+                status.auth_strategy,
+                1 if status.configured else 0,
+                1 if status.validated else 0,
+                now,
+                status.reason,
+                now,
+            )
+            for status in statuses
+        ],
+    )
+    conn.commit()
+
+
+def get_provider_statuses(conn, *, persist: bool = False) -> list[ProviderStatus]:
+    """Return current provider readiness and optionally sync it into provider_status."""
     hardware = detect_hardware()
     local_tier = hardware["recommended_tier"]
     local_model = TIER_MODELS.get(local_tier)
@@ -231,47 +276,9 @@ def get_provider_statuses(conn) -> list[ProviderStatus]:
             )
         )
 
-    now = datetime.now(UTC).isoformat()
-    conn.executemany(
-        """
-        INSERT INTO provider_status (
-            provider,
-            deployment,
-            trust_boundary,
-            auth_strategy,
-            configured,
-            validated,
-            last_validated_at,
-            last_error,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider) DO UPDATE SET
-            deployment = excluded.deployment,
-            trust_boundary = excluded.trust_boundary,
-            auth_strategy = excluded.auth_strategy,
-            configured = excluded.configured,
-            validated = excluded.validated,
-            last_validated_at = excluded.last_validated_at,
-            last_error = excluded.last_error,
-            updated_at = excluded.updated_at
-        """,
-        [
-            (
-                status.provider,
-                status.deployment,
-                status.trust_boundary,
-                status.auth_strategy,
-                1 if status.configured else 0,
-                1 if status.validated else 0,
-                now,
-                status.reason,
-                now,
-            )
-            for status in statuses
-        ],
-    )
-    conn.commit()
+    if persist:
+        _persist_provider_statuses(conn, statuses)
+
     return statuses
 
 

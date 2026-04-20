@@ -1,4 +1,4 @@
-import client from './client.js'
+import client, { withSlowRequestTimeout } from './client.js'
 
 export const login = async (passphrase) => {
   const { data } = await client.post('/auth/login', { passphrase })
@@ -58,11 +58,15 @@ export const getDomains = async () => {
 }
 
 export const capturePreview = async (text, domainHint, allowExternalExtraction = false) => {
-  const { data } = await client.post('/capture/preview', {
-    text,
-    domain_hint: domainHint || null,
-    allow_external_extraction: allowExternalExtraction,
-  })
+  const { data } = await client.post(
+    '/capture/preview',
+    {
+      text,
+      domain_hint: domainHint || null,
+      allow_external_extraction: allowExternalExtraction,
+    },
+    withSlowRequestTimeout(),
+  )
   return data
 }
 
@@ -72,12 +76,16 @@ export const capture = async (
   accepted,
   allowExternalExtraction = false,
 ) => {
-  const { data } = await client.post('/capture', {
-    text,
-    domain_hint: domainHint || null,
-    accepted: accepted ?? null,
-    allow_external_extraction: allowExternalExtraction,
-  })
+  const { data } = await client.post(
+    '/capture',
+    {
+      text,
+      domain_hint: domainHint || null,
+      accepted: accepted ?? null,
+      allow_external_extraction: allowExternalExtraction,
+    },
+    withSlowRequestTimeout(),
+  )
   return data
 }
 
@@ -92,12 +100,16 @@ export const previewInterview = async (
   answer,
   allowExternalExtraction = false,
 ) => {
-  const { data } = await client.post('/interview/preview', {
-    domain,
-    question,
-    answer,
-    allow_external_extraction: allowExternalExtraction,
-  })
+  const { data } = await client.post(
+    '/interview/preview',
+    {
+      domain,
+      question,
+      answer,
+      allow_external_extraction: allowExternalExtraction,
+    },
+    withSlowRequestTimeout(),
+  )
   return data
 }
 
@@ -108,13 +120,17 @@ export const saveInterview = async (
   accepted,
   allowExternalExtraction = false,
 ) => {
-  const { data } = await client.post('/interview', {
-    domain,
-    question,
-    answer,
-    accepted: accepted ?? null,
-    allow_external_extraction: allowExternalExtraction,
-  })
+  const { data } = await client.post(
+    '/interview',
+    {
+      domain,
+      question,
+      answer,
+      accepted: accepted ?? null,
+      allow_external_extraction: allowExternalExtraction,
+    },
+    withSlowRequestTimeout(),
+  )
   return data
 }
 
@@ -149,19 +165,23 @@ export const uploadArtifact = async ({
     if (tags?.length) {
       formData.append('tags', JSON.stringify(tags))
     }
-    const { data } = await client.post('/artifacts', formData)
+    const { data } = await client.post('/artifacts', formData, withSlowRequestTimeout())
     return data
   }
 
-  const { data } = await client.post('/artifacts', {
-    text,
-    title: title || null,
-    type: type || null,
-    source: source || null,
-    domain: domain || null,
-    metadata: metadata ?? null,
-    tags: tags ?? [],
-  })
+  const { data } = await client.post(
+    '/artifacts',
+    {
+      text,
+      title: title || null,
+      type: type || null,
+      source: source || null,
+      domain: domain || null,
+      metadata: metadata ?? null,
+      tags: tags ?? [],
+    },
+    withSlowRequestTimeout(),
+  )
   return data
 }
 
@@ -191,7 +211,11 @@ export const getTeachQuestions = async () => {
 }
 
 export const answerTeachQuestion = async (questionId, payload) => {
-  const { data } = await client.post(`/teach/questions/${questionId}/answer`, payload)
+  const { data } = await client.post(
+    `/teach/questions/${questionId}/answer`,
+    payload,
+    withSlowRequestTimeout(),
+  )
   return data
 }
 

@@ -1,5 +1,6 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useQuery } from '@tanstack/react-query'
 import { vi } from 'vitest'
 import CapturePanel from '../components/graph/CapturePanel.jsx'
 import TeachTab from '../components/teach/TeachTab.jsx'
@@ -9,6 +10,7 @@ import {
   capture,
   capturePreview,
   feedbackTeachQuestion,
+  getTeachBootstrap,
   saveProviderCredentials,
   saveSetupProfile,
   uploadArtifact,
@@ -19,72 +21,133 @@ vi.mock('../api/endpoints.js', () => ({
   capture: vi.fn(),
   capturePreview: vi.fn(),
   feedbackTeachQuestion: vi.fn(),
+  getTeachBootstrap: vi.fn(),
   saveProviderCredentials: vi.fn(),
   saveSetupProfile: vi.fn(),
   uploadArtifact: vi.fn(),
 }))
 
-function createBootstrapQuery(overrides = {}) {
+function createBootstrapData(overrides = {}) {
   return {
-    isLoading: false,
-    data: {
-      cards: [
-        {
-          title: 'Teach the engine',
-          body: 'Share helpful information at your own pace.',
-        },
-      ],
-      privacy_preferences: [
-        {
-          code: 'balanced',
-          label: 'Balanced',
-          description: 'Balance privacy and capability.',
-        },
-      ],
-      profiles: [
-        {
-          code: 'balanced_hybrid',
-          label: 'Balanced hybrid',
-          description: 'Use a mix of local and external support.',
-          recommendation_reason: 'Good default for mixed setups.',
-          provider_scope: 'mixed',
-          default_backend: 'external',
-          provider_options: ['anthropic'],
-          recommended_provider: 'anthropic',
-          available: true,
-          requires_external_provider: true,
-        },
-      ],
-      providers: [
-        {
-          provider: 'anthropic',
-          label: 'Anthropic',
-          deployment: 'external',
-          trust_boundary: 'third_party_external',
-          available: true,
-          auth_strategy: 'api_key',
-          credential_fields: [{ name: 'api_key', label: 'API key', secret: true }],
-        },
-      ],
-      security_posture: {
-        supported: true,
-        platform: 'macos',
-        checks: [],
+    cards: [
+      {
+        title: 'Teach the engine',
+        body: 'Share helpful information at your own pace.',
       },
-      questions: [
-        {
-          id: 'question-1',
-          prompt: 'What matters most to you right now?',
-          domain: 'values',
-          source: 'seed',
-        },
-      ],
-      ...overrides,
+    ],
+    privacy_preferences: [
+      {
+        code: 'balanced',
+        label: 'Balanced',
+        description: 'Balance privacy and capability.',
+      },
+    ],
+    profiles: [
+      {
+        code: 'balanced_hybrid',
+        label: 'Balanced hybrid',
+        description: 'Use a mix of local and external support.',
+        recommendation_reason: 'Good default for mixed setups.',
+        provider_scope: 'mixed',
+        default_backend: 'external',
+        provider_options: ['anthropic'],
+        recommended_provider: 'anthropic',
+        available: true,
+        requires_external_provider: true,
+      },
+    ],
+    providers: [
+      {
+        provider: 'anthropic',
+        label: 'Anthropic',
+        deployment: 'external',
+        trust_boundary: 'third_party_external',
+        available: true,
+        auth_strategy: 'api_key',
+        credential_fields: [{ name: 'api_key', label: 'API key', secret: true }],
+      },
+    ],
+    security_posture: {
+      supported: true,
+      platform: 'macos',
+      checks: [],
     },
+    questions: [
+      {
+        id: 'question-1',
+        prompt: 'What matters most to you right now?',
+        domain: 'values',
+        source: 'seed',
+        intent_key: 'values_what_matters_most_to_you_right_now',
+        status: 'pending',
+        priority: 10,
+      },
+    ],
+    ...overrides,
   }
 }
 
+function createBootstrapQuery(overrides = {}) {
+  return {
+    isLoading: false,
+    data: createBootstrapData(overrides),
+  }
+}
+
+function TeachTabHarness() {
+  const bootstrapQuery = useQuery({
+    queryKey: ['teachBootstrap'],
+    queryFn: getTeachBootstrap,
+    retry: false,
+  })
+
+  return <TeachTab bootstrapQuery={bootstrapQuery} />
+}
+
 describe('external extraction consent UI', () => {
+  it('advances to the returned next question after saving an answer', async () => {
+    const user = userEvent.setup()
+    getTeachBootstrap.mockResolvedValueOnce(createBootstrapData())
+    answerTeachQuestion.mockResolvedValue({
+      next: createBootstrapData({
+        questions: [
+          {
+            id: 'question-2',
+            prompt: 'What tone do you default to when you are most yourself?',
+            domain: 'voice',
+            source: 'catalog',
+            intent_key: 'voice_what_tone_do_you_default_to_when_you_are_most_yourself',
+            status: 'pending',
+            priority: 10,
+          },
+        ],
+      }),
+    })
+
+    renderWithProviders(<TeachTabHarness />, {
+      appState: { backend: 'local' },
+    })
+
+    expect(await screen.findByText('What matters most to you right now?')).toBeInTheDocument()
+
+    await user.type(
+      screen.getByPlaceholderText(/answer in your own words\./i),
+      'Honest relationships matter most to me.',
+    )
+    await user.click(screen.getByRole('button', { name: 'Save answer' }))
+
+    await waitFor(() => {
+      expect(answerTeachQuestion).toHaveBeenCalledWith('question-1', {
+        answer: 'Honest relationships matter most to me.',
+      })
+    })
+
+    expect(
+      await screen.findByText('What tone do you default to when you are most yourself?'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('What matters most to you right now?')).not.toBeInTheDocument()
+  })
+
   it('requires explicit consent before external quick-capture preview', async () => {
     const user = userEvent.setup()
     capturePreview.mockResolvedValue({
