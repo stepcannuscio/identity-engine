@@ -7,6 +7,7 @@ import GraphTab from './components/graph/GraphTab.jsx'
 import HistoryTab from './components/history/HistoryTab.jsx'
 import Shell from './components/layout/Shell.jsx'
 import QueryTab from './components/query/QueryTab.jsx'
+import SettingsTab from './components/settings/SettingsTab.jsx'
 import TeachTab from './components/teach/TeachTab.jsx'
 import { useAuth } from './hooks/useAuth.js'
 import { useAppState } from './store/appState.js'
@@ -40,6 +41,7 @@ function AuthGate({ auth, bootstrapQuery }) {
     <Routes>
       <Route path="/" element={<Navigate to={resolvedOnboardingCompleted ? '/query' : '/teach'} replace />} />
       <Route path="/teach" element={<TeachTab bootstrapQuery={bootstrapQuery} />} />
+      <Route path="/settings" element={<SettingsTab bootstrapQuery={bootstrapQuery} />} />
       <Route path="/query" element={<QueryTab />} />
       <Route path="/graph" element={<GraphTab />} />
       <Route path="/history" element={<HistoryTab />} />

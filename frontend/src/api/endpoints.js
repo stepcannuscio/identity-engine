@@ -241,6 +241,11 @@ export const saveSetupProfile = async (payload) => {
   return data
 }
 
+export const updateSecurityCheckOverride = async (checkCode, payload) => {
+  const { data } = await client.post(`/setup/security-posture/checks/${checkCode}`, payload)
+  return data
+}
+
 export const getSecurityPosture = async () => {
   const { data } = await client.get('/setup/security-posture')
   return data

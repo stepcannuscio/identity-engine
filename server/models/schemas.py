@@ -245,6 +245,7 @@ class SecurityCheckResponse(BaseModel):
     status: Literal["enabled", "disabled", "unknown"]
     recommended_value: str = ""
     action_required: bool = False
+    user_marked_complete: bool = False
     summary: str
     recommendation: str
 
@@ -255,6 +256,12 @@ class SecurityPostureResponse(BaseModel):
     platform: str
     supported: bool
     checks: list[SecurityCheckResponse]
+
+
+class SecurityCheckOverrideRequest(BaseModel):
+    """Manual completion override for a machine-security recommendation."""
+
+    completed: bool
 
 
 class SetupOptionsResponse(BaseModel):

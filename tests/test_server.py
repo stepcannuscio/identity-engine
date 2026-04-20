@@ -1909,12 +1909,13 @@ def test_security_posture_route_returns_inspected_checks(client, monkeypatch):
                 "status": "enabled",
                 "recommended_value": "Enabled with a personal recovery key stored locally.",
                 "action_required": False,
+                "user_marked_complete": False,
                 "summary": "Enabled.",
                 "recommendation": "Keep it on.",
             }
         ],
     }
-    monkeypatch.setattr("server.routes.setup.inspect_security_posture", lambda: posture)
+    monkeypatch.setattr("server.routes.setup.resolve_security_posture", lambda conn: posture)
 
     response = client.get("/setup/security-posture", headers=_login_headers(client))
 
@@ -1928,7 +1929,7 @@ def test_teach_bootstrap_returns_cards_and_questions(client, monkeypatch):
         "supported": True,
         "checks": [],
     }
-    monkeypatch.setattr("server.routes.teach.inspect_security_posture", lambda: posture)
+    monkeypatch.setattr("server.routes.teach.resolve_security_posture", lambda conn: posture)
     monkeypatch.setattr(
         "server.routes.teach.get_provider_statuses",
         lambda conn: [
@@ -1951,6 +1952,48 @@ def test_teach_bootstrap_returns_cards_and_questions(client, monkeypatch):
     body = response.json()
     assert body["cards"][0]["type"] == "welcome"
     assert body["questions"]
+
+
+def test_security_posture_override_persists_unknown_check_completion(client, monkeypatch):
+    posture = {
+        "platform": "macos",
+        "supported": True,
+        "checks": [
+            {
+                "code": "personal_recovery_key",
+                "label": "Personal recovery key",
+                "status": "unknown",
+                "recommended_value": "Enabled.",
+                "action_required": True,
+                "summary": "A personal recovery key keeps recovery under your control.",
+                "recommendation": "Prefer a personal recovery key.",
+            }
+        ],
+    }
+    monkeypatch.setattr("server.routes.setup.inspect_security_posture", lambda: posture)
+    monkeypatch.setattr("engine.security_posture.inspect_security_posture", lambda: posture)
+
+    response = client.post(
+        "/setup/security-posture/checks/personal_recovery_key",
+        json={"completed": True},
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["checks"][0]["user_marked_complete"] is True
+    assert body["checks"][0]["action_required"] is False
+
+    stored = _db(client).execute(
+        "SELECT is_complete FROM security_check_overrides WHERE check_code = ?",
+        ("personal_recovery_key",),
+    ).fetchone()
+    assert stored == (1,)
+
+    teach_response = client.get("/teach/bootstrap", headers=_login_headers(client))
+
+    assert teach_response.status_code == 200
+    assert teach_response.json()["security_posture"]["checks"][0]["user_marked_complete"] is True
 
 
 def test_teach_answer_saves_attributes_and_marks_question_answered(client):

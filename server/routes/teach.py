@@ -12,7 +12,7 @@ from engine.privacy_broker import (
     AuditedExternalExtractionConsentRequiredError,
     PrivacyBroker,
 )
-from engine.security_posture import inspect_security_posture
+from engine.security_posture import resolve_security_posture
 from engine.setup_state import (
     build_privacy_preferences,
     build_recommended_profiles,
@@ -155,7 +155,8 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
             )
         )
 
-    posture = inspect_security_posture()
+        posture = resolve_security_posture(conn)
+
     security = SecurityPostureResponse(
         platform=str(posture["platform"]),
         supported=bool(posture["supported"]),

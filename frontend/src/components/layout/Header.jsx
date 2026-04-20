@@ -8,7 +8,7 @@ export default function Header() {
   )
   const tooltip =
     backend === 'local' && !externalReady
-      ? 'Configure an external provider in Teach before switching'
+      ? 'Configure an external provider in Settings before switching'
       : backend === 'local'
         ? 'Queries processed on your device'
         : 'Queries sent to your configured external provider'

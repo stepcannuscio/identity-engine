@@ -9,11 +9,7 @@ import {
   answerTeachQuestion,
   capture,
   capturePreview,
-  feedbackTeachQuestion,
   getTeachBootstrap,
-  saveProviderCredentials,
-  saveSetupProfile,
-  uploadArtifact,
 } from '../api/endpoints.js'
 
 vi.mock('../api/endpoints.js', () => ({
@@ -24,6 +20,7 @@ vi.mock('../api/endpoints.js', () => ({
   getTeachBootstrap: vi.fn(),
   saveProviderCredentials: vi.fn(),
   saveSetupProfile: vi.fn(),
+  updateSecurityCheckOverride: vi.fn(),
   uploadArtifact: vi.fn(),
 }))
 

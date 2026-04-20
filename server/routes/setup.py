@@ -8,7 +8,11 @@ from fastapi import APIRouter, HTTPException, Request
 
 from config.provider_catalog import get_provider_definition, list_external_provider_ids
 from config.settings import set_api_key
-from engine.security_posture import inspect_security_posture
+from engine.security_posture import (
+    inspect_security_posture,
+    resolve_security_posture,
+    set_security_check_override,
+)
 from engine.setup_state import (
     build_privacy_preferences,
     build_recommended_profiles,
@@ -25,6 +29,7 @@ from server.models.schemas import (
     ProviderCredentialRequest,
     ProviderStatusResponse,
     SecurityCheckResponse,
+    SecurityCheckOverrideRequest,
     SecurityPostureResponse,
     SetupOptionsResponse,
     SetupProfileRequest,
@@ -222,11 +227,46 @@ def save_profile(payload: SetupProfileRequest, request: Request) -> SetupOptions
 
 @router.get("/setup/security-posture", response_model=SecurityPostureResponse)
 def security_posture(request: Request) -> SecurityPostureResponse:
-    """Return read-only machine security recommendations."""
+    """Return machine security recommendations with persisted manual confirmations."""
     _ = request
-    posture = inspect_security_posture()
+    with get_db_connection() as conn:
+        posture = resolve_security_posture(conn)
     return SecurityPostureResponse(
         platform=str(posture["platform"]),
         supported=bool(posture["supported"]),
         checks=[SecurityCheckResponse(**check) for check in posture["checks"]],  # type: ignore[arg-type]
+    )
+
+
+@router.post("/setup/security-posture/checks/{check_code}", response_model=SecurityPostureResponse)
+def update_security_check(
+    check_code: str,
+    payload: SecurityCheckOverrideRequest,
+    request: Request,
+) -> SecurityPostureResponse:
+    """Persist a manual completion override for an unknown security check."""
+    _ = request
+    posture = inspect_security_posture()
+    checks = {
+        str(check["code"]): check
+        for check in cast(list[dict[str, object]], posture["checks"])
+        if isinstance(check, dict)
+    }
+    selected_check = checks.get(check_code)
+    if selected_check is None:
+        raise HTTPException(status_code=404, detail="security check not found")
+    if str(selected_check.get("status")) != "unknown":
+        raise HTTPException(
+            status_code=422,
+            detail="only checks with unknown status can be marked complete manually",
+        )
+
+    with get_db_connection() as conn:
+        set_security_check_override(conn, check_code, is_complete=payload.completed)
+        resolved = resolve_security_posture(conn)
+
+    return SecurityPostureResponse(
+        platform=str(resolved["platform"]),
+        supported=bool(resolved["supported"]),
+        checks=[SecurityCheckResponse(**check) for check in resolved["checks"]],  # type: ignore[arg-type]
     )

@@ -220,12 +220,16 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 ### 18. Unified Onboarding + Teach Layer
 - the web UI now includes a first-class `Teach` tab that is also the default
   destination after first login until onboarding is complete
+- after onboarding, Teach stays focused on ongoing intake:
+  - guided questions
+  - quick-note capture
+  - tagged file uploads
+- setup-heavy panels are shown inside Teach only while onboarding is incomplete
 - Teach supports:
   - guided questions
   - quick-note capture
   - tagged file uploads
-  - profile/provider setup
-  - security recommendations
+  - onboarding-time profile/provider/security setup
 - onboarding is resumable and skippable; completion state is stored in
   `app_settings`
 - Teach question planning is stored explicitly in:
@@ -253,12 +257,18 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 ### 19. Profile / Provider / Security Setup Layer
 - setup state is stored explicitly, not as a generic blob:
   - `app_settings`
+  - `security_check_overrides`
   - `provider_status`
 - setup state now persists:
   - `privacy_preference`
   - `active_profile`
   - `preferred_provider`
   - `preferred_backend`
+- the web UI now includes a dedicated `Settings` tab for:
+  - privacy preference updates
+  - model/profile changes
+  - provider credential management
+  - security recommendation review
 - provider setup now uses a shared provider catalog rather than hard-coded cards
 - provider metadata now distinguishes:
   - deployment location (`local` vs `external`)
@@ -283,6 +293,10 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - `POST /setup/providers/{provider}/credentials`
   - `POST /setup/profile`
   - `GET /setup/security-posture`
+- unknown security checks can now be manually marked complete by the user from
+  Settings without changing the machine-inspected status value
+- manual security confirmations are persisted per check code and suppress the
+  `update recommended` state for unresolved-but-confirmed items
 - macOS security posture checks are read-only and recommendation-first:
   - FileVault
   - personal recovery key availability when detectable

@@ -21,6 +21,10 @@ vi.mock('../components/query/QueryTab.jsx', () => ({
   default: () => <div>Query tab stub</div>,
 }))
 
+vi.mock('../components/settings/SettingsTab.jsx', () => ({
+  default: () => <div>Settings tab stub</div>,
+}))
+
 vi.mock('../components/teach/TeachTab.jsx', () => ({
   default: () => <div>Teach tab stub</div>,
 }))
@@ -113,10 +117,10 @@ describe('App', () => {
     useAuth.mockReturnValue(createAuth({ isAuthenticated: true }))
 
     renderWithProviders(<App />, {
-      route: '/graph',
+      route: '/settings',
       appState: { token: 'session-token' },
     })
 
-    expect(await screen.findByText('Graph tab stub')).toBeInTheDocument()
+    expect(await screen.findByText('Settings tab stub')).toBeInTheDocument()
   })
 })

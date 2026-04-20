@@ -18,7 +18,7 @@ describe('Header', () => {
     expect(button).toBeDisabled()
     expect(button).toHaveAttribute(
       'title',
-      'Configure an external provider in Teach before switching',
+      'Configure an external provider in Settings before switching',
     )
   })
 
@@ -101,9 +101,10 @@ describe('TabBar', () => {
     expect(graphLink).toHaveClass('active')
   })
 
-  it('includes the Teach tab', () => {
+  it('includes the Teach and Settings tabs', () => {
     renderWithProviders(<TabBar isAuthenticated />)
 
     expect(screen.getByRole('link', { name: 'Teach' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument()
   })
 })

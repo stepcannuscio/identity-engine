@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import platform
 import subprocess
+from typing import Any, cast
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,43 @@ class SecurityCheck:
     action_required: bool
     summary: str
     recommendation: str
+
+
+def get_security_check_overrides(conn) -> dict[str, bool]:
+    """Return persisted user confirmations for security checks."""
+    rows = conn.execute(
+        """
+        SELECT check_code, is_complete
+        FROM security_check_overrides
+        """
+    ).fetchall()
+    return {
+        str(row[0]): bool(row[1])
+        for row in rows
+    }
+
+
+def set_security_check_override(conn, check_code: str, *, is_complete: bool) -> None:
+    """Persist or clear a manual completion override for one check."""
+    if not is_complete:
+        conn.execute(
+            "DELETE FROM security_check_overrides WHERE check_code = ?",
+            (check_code,),
+        )
+        conn.commit()
+        return
+
+    conn.execute(
+        """
+        INSERT INTO security_check_overrides (check_code, is_complete)
+        VALUES (?, 1)
+        ON CONFLICT(check_code) DO UPDATE SET
+            is_complete = 1,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (check_code,),
+    )
+    conn.commit()
 
 
 def _run(command: list[str]) -> tuple[int, str]:
@@ -163,3 +201,35 @@ def inspect_security_posture() -> dict[str, object]:
             for check in checks
         ],
     }
+
+
+def apply_security_check_overrides(
+    posture: dict[str, object],
+    overrides: dict[str, bool],
+) -> dict[str, object]:
+    """Merge persisted user confirmations into the current posture snapshot."""
+    resolved_checks: list[dict[str, object]] = []
+    raw_checks = cast(list[dict[str, Any]], posture.get("checks", []))
+    for raw_check in raw_checks:
+        if not isinstance(raw_check, dict):
+            continue
+        check = dict(raw_check)
+        user_marked_complete = bool(overrides.get(str(check.get("code", "")), False))
+        check["user_marked_complete"] = user_marked_complete
+        if user_marked_complete:
+            check["action_required"] = False
+        resolved_checks.append(check)
+
+    return {
+        "platform": posture["platform"],
+        "supported": posture["supported"],
+        "checks": resolved_checks,
+    }
+
+
+def resolve_security_posture(conn) -> dict[str, object]:
+    """Return the current posture merged with persisted manual confirmations."""
+    return apply_security_check_overrides(
+        inspect_security_posture(),
+        get_security_check_overrides(conn),
+    )
