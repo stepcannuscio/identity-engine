@@ -18,6 +18,8 @@ from engine.privacy_broker import PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
 from engine.query_engine import (
     QueryContext,
+    apply_local_fallback_audit,
+    build_forced_artifact_response_decision,
     build_insufficient_data_decision,
     prepare_query,
     record_blocked_query,
@@ -93,13 +95,7 @@ def _is_sensitive_query(query_text: str, attributes: list[dict]) -> bool:
 
 
 def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
-    domains = sorted(
-        {
-            str(attr.get("domain", ""))
-            for attr in context.attributes
-            if attr.get("domain")
-        }
-    )
+    domains = list(getattr(context.assembled_context, "domains_used", []))
     coverage = context.coverage
     acquisition = getattr(context, "acquisition", None)
     if acquisition is None:
@@ -113,6 +109,7 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
         ),
         attributes_used=len(context.attributes),
         backend_used=context.backend,
+        requested_backend=getattr(context, "requested_backend", context.backend),
         domains_referenced=domains,
         duration_ms=duration_ms,
         privacy=privacy,
@@ -206,6 +203,8 @@ def record_feedback(
 
 
 def _should_short_circuit_insufficient(context: QueryContext) -> bool:
+    if getattr(context, "forced_response", None):
+        return False
     if context.coverage.confidence != "insufficient_data":
         return False
     if context.backend != "local" and context.assembled_context.contains_local_only:
@@ -227,6 +226,10 @@ def _domains_used(context) -> list[str] | None:
     if assembled is not None:
         return list(getattr(assembled, "domains_used", []))
     return None
+
+
+def _provider_for_context(context, default_provider: ProviderConfig):
+    return getattr(context, "provider_config", default_provider)
 
 
 def _is_upstream_error(exc: Exception) -> bool:
@@ -319,8 +322,26 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
                 conn,
                 provider_config,
             )
+        forced_response = getattr(context, "forced_response", None)
+        if forced_response is not None:
+            audit = build_forced_artifact_response_decision(context, provider_config)
+            record_query_result(
+                request.app.state.current_session,
+                context,
+                forced_response,
+                audit,
+            )
+            duration_ms = int((time.monotonic() - started) * 1000)
+            return QueryResponse(
+                response=forced_response,
+                metadata=_metadata_from_context(
+                    context,
+                    duration_ms,
+                    privacy_state_from_decision(audit),
+                ),
+            )
         if _should_short_circuit_insufficient(context):
-            audit = build_insufficient_data_decision(context, provider_config)
+            audit = build_insufficient_data_decision(context, _provider_for_context(context, provider_config))
             record_query_result(
                 request.app.state.current_session,
                 context,
@@ -336,7 +357,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
                     privacy_state_from_decision(audit),
                 ),
             )
-        brokered = PrivacyBroker(provider_config).generate_grounded_response(
+        brokered = PrivacyBroker(_provider_for_context(context, provider_config)).generate_grounded_response(
             context.messages,
             attributes=context.attributes,
             retrieval_mode=context.query_type,
@@ -345,25 +366,29 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
         )
         result = brokered.content
         assert isinstance(result, str)
+        brokered_metadata = apply_local_fallback_audit(brokered.metadata, context)
         duration_ms = int((time.monotonic() - started) * 1000)
         record_query_result(
             request.app.state.current_session,
             context,
             result,
-            brokered.metadata,
+            brokered_metadata,
         )
         return QueryResponse(
             response=result,
             metadata=_metadata_from_context(
                 context,
                 duration_ms,
-                privacy_state_from_decision(brokered.metadata),
+                privacy_state_from_decision(brokered_metadata),
             ),
         )
     except Exception as exc:
         if context is not None:
             record_blocked_query(request.app.state.current_session, context, exc)
-        status_code, body = _query_error_response(exc, provider_config)
+        status_code, body = _query_error_response(
+            exc,
+            _provider_for_context(context, provider_config) if context is not None else provider_config,
+        )
         return JSONResponse(body, status_code=status_code)
 
 
@@ -391,7 +416,10 @@ def query_stream(
                 provider_config,
             )
     except Exception as exc:
-        status_code, body = _query_error_response(exc, provider_config)
+        status_code, body = _query_error_response(
+            exc,
+            _provider_for_context(context, provider_config) if context is not None else provider_config,
+        )
         return JSONResponse(body, status_code=status_code)
     send_warning = payload.backend_override == "external" and _is_sensitive_query(
         payload.query,
@@ -408,7 +436,7 @@ def query_stream(
                     "content": _metadata_from_context(
                         context,
                         0,
-                        privacy_state_from_provider(provider_config),
+                        privacy_state_from_provider(_provider_for_context(context, provider_config)),
                     ).model_dump(mode="json"),
                 }
             )
@@ -423,8 +451,31 @@ def query_stream(
                     }
                 )
 
+            forced_response = getattr(context, "forced_response", None)
+            if forced_response is not None:
+                audit = build_forced_artifact_response_decision(context, provider_config)
+                record_query_result(
+                    request.app.state.current_session,
+                    context,
+                    forced_response,
+                    audit,
+                )
+                yield _event({"type": "token", "content": forced_response})
+                duration_ms = int((time.monotonic() - started) * 1000)
+                yield _event(
+                    {
+                        "type": "metadata",
+                        "content": _metadata_from_context(
+                            context,
+                            duration_ms,
+                            privacy_state_from_decision(audit),
+                        ).model_dump(mode="json"),
+                    }
+                )
+                return
+
             if _should_short_circuit_insufficient(context):
-                audit = build_insufficient_data_decision(context, provider_config)
+                audit = build_insufficient_data_decision(context, _provider_for_context(context, provider_config))
                 record_query_result(
                     request.app.state.current_session,
                     context,
@@ -445,7 +496,7 @@ def query_stream(
                 )
                 return
 
-            brokered = PrivacyBroker(provider_config).generate_grounded_response(
+            brokered = PrivacyBroker(_provider_for_context(context, provider_config)).generate_grounded_response(
                 context.messages,
                 attributes=context.attributes,
                 stream=True,
@@ -461,11 +512,12 @@ def query_stream(
 
             full_response = "".join(collected)
             duration_ms = int((time.monotonic() - started) * 1000)
+            brokered_metadata = apply_local_fallback_audit(brokered.metadata, context)
             record_query_result(
                 request.app.state.current_session,
                 context,
                 full_response,
-                brokered.metadata,
+                brokered_metadata,
             )
             yield _event(
                 {
@@ -473,13 +525,16 @@ def query_stream(
                     "content": _metadata_from_context(
                         context,
                         duration_ms,
-                        privacy_state_from_decision(brokered.metadata),
+                        privacy_state_from_decision(brokered_metadata),
                     ).model_dump(mode="json"),
                 }
             )
         except Exception as exc:
             record_blocked_query(request.app.state.current_session, context, exc)
-            _, body = _query_error_response(exc, provider_config)
+            _, body = _query_error_response(
+                exc,
+                _provider_for_context(context, provider_config),
+            )
             yield _event(
                 {
                     "type": "error",

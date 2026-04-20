@@ -13,11 +13,14 @@ import {
 } from '../api/endpoints.js'
 
 vi.mock('../api/endpoints.js', () => ({
+  analyzeArtifact: vi.fn(),
   answerTeachQuestion: vi.fn(),
   capture: vi.fn(),
   capturePreview: vi.fn(),
   feedbackTeachQuestion: vi.fn(),
+  getArtifactAnalysis: vi.fn(),
   getTeachBootstrap: vi.fn(),
+  promoteArtifact: vi.fn(),
   saveProviderCredentials: vi.fn(),
   saveSetupProfile: vi.fn(),
   updateSecurityCheckOverride: vi.fn(),

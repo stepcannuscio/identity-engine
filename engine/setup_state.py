@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from config.llm_router import (
+    ConfigurationError,
     ProviderConfig,
     TIER_MODELS,
     _ollama_has_model,
     _ollama_is_running,
     detect_hardware,
     resolve_external_router,
+    resolve_local_router,
     resolve_provider_router,
 )
 from config.provider_catalog import (
@@ -444,3 +446,27 @@ def resolve_active_provider_config(
     if not default_config.is_local:
         return default_config
     return resolve_external_router()
+
+
+def resolve_local_provider_config(default_config: ProviderConfig) -> ProviderConfig:
+    """Resolve a usable local provider config for local-only analysis or fallback."""
+    if default_config.is_local:
+        if _ollama_is_running() and _ollama_has_model(default_config.model):
+            return default_config
+        raise ConfigurationError("Local Ollama inference is not available.")
+
+    hardware = detect_hardware()
+    tier = hardware["recommended_tier"]
+    model = TIER_MODELS.get(tier)
+    if not model:
+        raise ConfigurationError("Local inference is not available on this hardware.")
+    if not _ollama_is_running() or not _ollama_has_model(model):
+        raise ConfigurationError("Local Ollama inference is not available.")
+    return ProviderConfig(
+        provider="ollama",
+        api_key=None,
+        model=model,
+        is_local=True,
+        arch=hardware["arch"],
+        ram_gb=hardware["ram_gb"],
+    )

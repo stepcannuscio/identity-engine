@@ -8,9 +8,11 @@ import json
 import re
 import uuid
 
+from config.llm_router import ConfigurationError
 from config.llm_router import ProviderConfig
 from engine.interview_catalog import DOMAINS
 from engine.privacy_broker import PrivacyBroker
+from engine.setup_state import resolve_local_provider_config
 
 QUESTION_LIMIT = 3
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
@@ -191,6 +193,17 @@ def _parse_generated_question(raw: str, domain: str) -> tuple[str, str] | None:
     return question, intent_key
 
 
+def _dynamic_generation_available(provider_config: ProviderConfig) -> bool:
+    """Return True when dynamic follow-up generation can run without side effects."""
+    if getattr(provider_config, "is_local", False):
+        try:
+            resolve_local_provider_config(provider_config)
+        except ConfigurationError:
+            return False
+        return True
+    return bool(getattr(provider_config, "api_key", None))
+
+
 def _insert_question(
     conn,
     *,
@@ -247,6 +260,7 @@ def ensure_question_queue(
         "SELECT COUNT(*) FROM teach_questions WHERE status = 'pending'"
     ).fetchone()
     current_pending = int(pending_count[0]) if pending_count is not None else 0
+    generation_available: bool | None = None
 
     for domain, attribute_count in ranked_domains:
         if current_pending >= limit:
@@ -281,6 +295,10 @@ def ensure_question_queue(
 
         generated_intent = f"{domain}_generated_follow_up"
         if generated_intent in seen_intents:
+            continue
+        if generation_available is None:
+            generation_available = _dynamic_generation_available(provider_config)
+        if not generation_available:
             continue
 
         messages = build_question_generation_messages(

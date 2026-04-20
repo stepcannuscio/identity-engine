@@ -39,6 +39,10 @@ _SOURCE_PROFILE_CONFIG = {
         "weights": {"identity": 1.00, "preference": 0.55, "artifact": 0.25},
         "caps": {"identity": 6, "preference": 2, "artifact": 1},
     },
+    "artifact_grounded_self": {
+        "weights": {"identity": 0.60, "preference": 0.35, "artifact": 1.00},
+        "caps": {"identity": 2, "preference": 1, "artifact": 4},
+    },
     "evidence_based": {
         "weights": {"identity": 0.75, "preference": 0.35, "artifact": 1.00},
         "caps": {"identity": 3, "preference": 1, "artifact": 4},
@@ -289,6 +293,7 @@ def _trust_bonus(item: EvidenceItem) -> float:
 def _profile_bonus(item: EvidenceItem, source_profile: str) -> float:
     profile_source_map = {
         "self_question": "identity",
+        "artifact_grounded_self": "artifact",
         "evidence_based": "artifact",
         "preference_sensitive": "preference",
     }
@@ -339,7 +344,7 @@ def _effective_score(
     score += _profile_bonus(item, source_profile)
     score += _domain_match_bonus(item, matched_domains, task_profiles)
 
-    if source_profile == "evidence_based" and item.source_type == "artifact":
+    if source_profile in {"evidence_based", "artifact_grounded_self"} and item.source_type == "artifact":
         if (item.source or item.title_or_label) not in selected_artifact_sources:
             score += 0.10
 

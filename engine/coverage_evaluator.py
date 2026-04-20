@@ -101,6 +101,7 @@ _PROFILE_THRESHOLDS: dict[str, tuple[int, int, int, int]] = {
     "preference_sensitive": (60, 42, 25, 25),
     "voice_generation":     (62, 44, 25, 25),
     "self_question":        (70, 50, 30, 30),
+    "artifact_grounded_self": (60, 35, 20, 20),
     "evidence_based":       (60, 40, 20, 20),
 }
 
@@ -398,7 +399,7 @@ def _apply_guardrails(
 
     # Guardrail 2: evidence-based queries can lean on artifacts more, but only
     # when the evidence is meaningfully grounded.
-    if source_profile == "evidence_based" and artifact_score > 0:
+    if source_profile in {"evidence_based", "artifact_grounded_self"} and artifact_score > 0:
         strong_single_source = artifact_score >= 8.0 and has_identity_support
         if len(artifact_sources) < 2 and not strong_single_source:
             high_cap = float(high_t - 1)

@@ -11,6 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+import zlib
 from zipfile import ZipFile
 
 import pytest
@@ -107,6 +108,21 @@ def _mock_capture_extraction(monkeypatch, attrs: list[dict]) -> None:
     )
 
 
+def _mock_teach_question_generation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "engine.teach_planner.PrivacyBroker.generate_grounded_response",
+        lambda self, messages, **kwargs: SimpleNamespace(
+            content=json.dumps(
+                {
+                    "question": "What feels most important to teach next?",
+                    "intent_key": "generated_follow_up",
+                }
+            ),
+            metadata=SimpleNamespace(task_type=kwargs.get("task_type", "teach_question_generation")),
+        ),
+    )
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr("server.main.get_bind_ip", lambda: "127.0.0.1")
@@ -122,6 +138,7 @@ def client(monkeypatch):
         "server.auth.get_ui_passphrase",
         lambda: "correct horse battery staple",
     )
+    _mock_teach_question_generation(monkeypatch)
 
     db_context = get_plain_connection(":memory:")
     conn = db_context.__enter__()
@@ -176,6 +193,19 @@ def _simple_pdf_bytes(text: str) -> bytes:
         b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n"
         b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>endobj\n"
         + f"4 0 obj<< /Length {len(content)} >>stream\n".encode("latin-1")
+        + content
+        + b"\nendstream endobj\ntrailer<< /Root 1 0 R >>\n%%EOF"
+    )
+
+
+def _compressed_pdf_bytes(text: str) -> bytes:
+    content = zlib.compress(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("latin-1"))
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n"
+        b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n"
+        b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>endobj\n"
+        + f"4 0 obj<< /Length {len(content)} /Filter /FlateDecode >>stream\n".encode("latin-1")
         + content
         + b"\nendstream endobj\ntrailer<< /Root 1 0 R >>\n%%EOF"
     )
@@ -2258,3 +2288,223 @@ def test_post_artifacts_accepts_pdf_docx_and_tags(client):
         "SELECT tag FROM artifact_tags ORDER BY tag ASC"
     ).fetchall()
     assert [row[0] for row in tags] == ["planning", "roadmap"]
+
+
+def test_post_artifacts_accepts_compressed_pdf_upload(client):
+    response = client.post(
+        "/artifacts",
+        files={
+            "file": (
+                "compressed-notes.pdf",
+                _compressed_pdf_bytes("Planning roadmap"),
+                "application/pdf",
+            )
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    artifact_id = response.json()["artifact_id"]
+    row = _db(client).execute(
+        "SELECT title, content FROM artifacts WHERE id = ?",
+        (artifact_id,),
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "compressed-notes"
+    assert "Planning roadmap" in row[1]
+
+
+def test_post_artifact_analyze_returns_local_candidates(client, monkeypatch):
+    create_response = client.post(
+        "/artifacts",
+        json={
+            "text": "Lasagna, tikka masala, and pasta bake are dinner recipes I have made.",
+            "title": "Dinner recipes",
+            "type": "document",
+            "source": "upload",
+        },
+        headers=_login_headers(client),
+    )
+    artifact_id = create_response.json()["artifact_id"]
+
+    monkeypatch.setattr(
+        "server.routes.artifacts.resolve_local_provider_config",
+        lambda *args, **kwargs: _config(),
+    )
+    monkeypatch.setattr(
+        "server.routes.artifacts.analyze_artifact",
+        lambda conn, artifact_id, provider_config: SimpleNamespace(
+            artifact_id=artifact_id,
+            analyzed_at="2026-04-20T12:00:00+00:00",
+            content_kind="recipe_collection",
+            summary="A local collection of dinner recipes.",
+            descriptor_tokens=["recipe", "dinner", "meal"],
+            candidate_attributes=[
+                {
+                    "candidate_id": "attribute_0_dinner_recipes",
+                    "domain": "patterns",
+                    "label": "dinner_recipes",
+                    "value": "The artifact tracks dinner recipes I have made.",
+                    "elaboration": None,
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                    "status": "pending",
+                },
+            ],
+            candidate_preferences=[
+                {
+                    "candidate_id": "preference_0_food_pasta",
+                    "category": "food",
+                    "subject": "pasta",
+                    "signal": "like",
+                    "strength": 3,
+                    "summary": "Pasta appears repeatedly in the recipe list.",
+                    "status": "pending",
+                },
+            ],
+        ),
+    )
+
+    response = client.post(
+        f"/artifacts/{artifact_id}/analyze",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_status"] == "analyzed"
+    assert body["analysis_method"] == "model"
+    assert body["content_kind"] == "recipe_collection"
+    assert body["candidate_attributes"][0]["candidate_id"] == "attribute_0_dinner_recipes"
+    assert body["candidate_preferences"][0]["candidate_id"] == "preference_0_food_pasta"
+
+
+def test_post_artifact_analyze_falls_back_when_local_model_times_out(client, monkeypatch):
+    create_response = client.post(
+        "/artifacts",
+        json={
+            "text": "Lasagna\nTikka masala\nPasta bake",
+            "title": "Dinner recipes",
+            "type": "document",
+            "source": "upload",
+        },
+        headers=_login_headers(client),
+    )
+    artifact_id = create_response.json()["artifact_id"]
+
+    monkeypatch.setattr(
+        "server.routes.artifacts.resolve_local_provider_config",
+        lambda *args, **kwargs: _config(),
+    )
+    monkeypatch.setattr(
+        "engine.artifact_analysis.PrivacyBroker.extract_structured_attributes",
+        lambda *args, **kwargs: (_ for _ in ()).throw(requests.exceptions.ReadTimeout("timed out")),
+    )
+
+    response = client.post(
+        f"/artifacts/{artifact_id}/analyze",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_status"] == "analyzed"
+    assert body["analysis_method"] == "heuristic_fallback"
+    assert "timed out" in body["analysis_warning"].lower()
+    assert body["content_kind"] == "recipe_collection"
+    assert "recipe_collection" in body["descriptor_tokens"] or "recipes" in body["descriptor_tokens"]
+
+
+def test_post_artifact_promote_writes_selected_candidates(client):
+    create_response = client.post(
+        "/artifacts",
+        json={
+            "text": "Lasagna, tikka masala, and pasta bake are dinner recipes I have made.",
+            "title": "Dinner recipes",
+            "type": "document",
+            "source": "upload",
+        },
+        headers=_login_headers(client),
+    )
+    artifact_id = create_response.json()["artifact_id"]
+    metadata = {
+        "analysis": {
+            "status": "analyzed",
+            "content_kind": "recipe_collection",
+            "summary": "A local collection of dinner recipes.",
+            "descriptor_tokens": ["recipe", "dinner", "meal"],
+            "candidate_attributes": [
+                {
+                    "candidate_id": "attribute_0_dinner_recipes",
+                    "domain": "patterns",
+                    "label": "dinner_recipes",
+                    "value": "The artifact tracks dinner recipes I have made.",
+                    "elaboration": None,
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                    "status": "pending",
+                },
+            ],
+            "candidate_preferences": [
+                {
+                    "candidate_id": "preference_0_food_pasta",
+                    "category": "food",
+                    "subject": "pasta",
+                    "signal": "like",
+                    "strength": 3,
+                    "summary": "Pasta appears repeatedly in the recipe list.",
+                    "status": "pending",
+                },
+            ],
+        }
+    }
+    _db(client).execute(
+        "UPDATE artifacts SET metadata = ? WHERE id = ?",
+        (json.dumps(metadata, sort_keys=True), artifact_id),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/artifacts/{artifact_id}/promote",
+        json={
+            "selected_attributes": [
+                {
+                    "candidate_id": "attribute_0_dinner_recipes",
+                    "domain": "patterns",
+                    "label": "dinner_recipes",
+                    "value": "The artifact tracks dinner recipes I have made.",
+                    "elaboration": None,
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                    "status": "pending",
+                },
+            ],
+            "selected_preferences": [
+                {
+                    "candidate_id": "preference_0_food_pasta",
+                    "category": "food",
+                    "subject": "pasta",
+                    "signal": "like",
+                    "strength": 3,
+                    "summary": "Pasta appears repeatedly in the recipe list.",
+                    "status": "pending",
+                },
+            ],
+        },
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["promoted_attribute_ids"]
+    assert body["promoted_preference_signal_ids"]
+    stored_attribute = _db(client).execute(
+        "SELECT source, routing FROM attributes WHERE label = 'dinner_recipes'"
+    ).fetchone()
+    assert stored_attribute == ("explicit", "local_only")
+    stored_signal = _db(client).execute(
+        "SELECT category, subject, signal FROM preference_signals WHERE subject = 'pasta'"
+    ).fetchone()
+    assert stored_signal == ("food", "pasta", "like")
+    assert body["analysis"]["candidate_attributes"][0]["status"] == "promoted"
+    assert body["analysis"]["candidate_preferences"][0]["status"] == "promoted"

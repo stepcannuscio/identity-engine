@@ -31,6 +31,11 @@ def conn():
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _disable_dynamic_generation_probes(monkeypatch):
+    monkeypatch.setattr("engine.teach_planner._dynamic_generation_available", lambda provider_config: False)
+
+
 def _config():
     return ProviderConfig(
         provider="ollama",
@@ -62,6 +67,22 @@ def test_get_next_questions_seeds_catalog_questions(conn):
     assert questions
     assert questions[0].source == "catalog"
     assert questions[0].domain is not None
+
+
+def test_get_next_questions_skips_dynamic_generation_when_local_provider_is_unavailable(
+    conn,
+    monkeypatch,
+):
+    monkeypatch.setattr("engine.teach_planner._dynamic_generation_available", lambda provider_config: False)
+    monkeypatch.setattr(
+        "engine.teach_planner.PrivacyBroker.generate_grounded_response",
+        lambda *args, **kwargs: pytest.fail("dynamic generation should be skipped when no local model is ready"),
+    )
+
+    questions = get_next_questions(conn, _config(), limit=1)
+
+    assert questions
+    assert questions[0].source == "catalog"
 
 
 def test_feedback_dismisses_the_current_question(conn):
@@ -196,6 +217,7 @@ def test_ensure_question_queue_skips_generated_prompt_that_was_already_seen(conn
     )
     conn.commit()
 
+    monkeypatch.setattr("engine.teach_planner._dynamic_generation_available", lambda provider_config: True)
     monkeypatch.setattr(
         "engine.teach_planner.PrivacyBroker.generate_grounded_response",
         lambda self, messages, **kwargs: SimpleNamespace(

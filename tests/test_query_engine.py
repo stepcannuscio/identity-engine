@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from config.llm_router import ConfigurationError
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
 from engine.artifact_ingestion import ingest_artifact
@@ -797,7 +798,7 @@ def test_query_logs_blocked_audit_entry_without_incrementing_success_count(conn,
     assert entry["decision"] == "blocked"
 
 
-def test_query_blocks_external_backend_when_only_artifact_context_is_available(conn):
+def test_query_blocks_external_backend_when_only_artifact_context_is_available(conn, monkeypatch):
     ingest_artifact(
         conn,
         text="My notes on writing keep returning to concise drafts and heavy revision.",
@@ -813,15 +814,86 @@ def test_query_blocks_external_backend_when_only_artifact_context_is_available(c
         model="claude-sonnet-4-6",
         api_key="test-key",  # pragma: allowlist secret
     )
+    monkeypatch.setattr(
+        "engine.query_engine.resolve_local_provider_config",
+        lambda provider_config: (_ for _ in ()).throw(ConfigurationError("Local Ollama inference is not available.")),
+    )
 
-    with pytest.raises(RoutingViolationError):
-        query("What patterns exist in my writing?", session, conn, config)
+    result = query("What patterns exist in my writing?", session, conn, config)
 
+    assert "local uploaded artifacts" in result
     assert len(session.routing_log) == 1
-    assert session.routing_log[0]["decision"] == "blocked"
+    assert session.routing_log[0]["decision"] == "skipped_local_fallback_unavailable"
     assert session.routing_log[0]["contains_local_only_context"] is True
-    assert session.routing_log[0]["blocked_external_attributes_count"] == 0
-    assert session.routing_log[0]["reason"] == "local_only_context_blocked_for_external_inference"
+    assert session.routing_log[0]["reason"] == "local_only_artifact_evidence_requires_local_model"
+
+
+def test_prepare_query_reroutes_self_question_to_artifact_grounded_self(conn):
+    ingest_artifact(
+        conn,
+        text="Lasagna. Tikka masala. Pasta bake. These are dinner recipes I have made repeatedly.",
+        title="Dinner recipes",
+        artifact_type="document",
+        source="upload",
+        domain="patterns",
+        filename="dinner-recipes.md",
+        tags=["recipes", "dinner"],
+    )
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    prepared = prepare_query(
+        "What are my 5 favorite recipes I've made for dinner?",
+        session,
+        conn,
+        config,
+    )
+
+    assert prepared.source_profile == "artifact_grounded_self"
+    assert prepared.coverage.counts.artifacts >= 1
+    assert "[artifact]" in prepared.messages[0]["content"]
+    assert "Artifact-grounded answer guidance:" in prepared.messages[0]["content"]
+
+
+def test_prepare_query_uses_local_fallback_for_external_artifact_grounded_query(conn, monkeypatch):
+    ingest_artifact(
+        conn,
+        text="Lasagna. Tikka masala. Pasta bake. These are dinner recipes I have made repeatedly.",
+        title="Dinner recipes",
+        artifact_type="document",
+        source="upload",
+        domain="patterns",
+        filename="dinner-recipes.md",
+        tags=["recipes", "dinner"],
+    )
+    session = Session()
+    config = SimpleNamespace(
+        is_local=False,
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        api_key="test-key",  # pragma: allowlist secret
+    )
+    monkeypatch.setattr(
+        "engine.query_engine.resolve_local_provider_config",
+        lambda provider_config: SimpleNamespace(
+            is_local=True,
+            provider="ollama",
+            model="llama3.1:8b",
+            api_key=None,
+        ),
+    )
+
+    prepared = prepare_query(
+        "What are my 5 favorite recipes I've made for dinner?",
+        session,
+        conn,
+        config,
+    )
+
+    assert prepared.source_profile == "artifact_grounded_self"
+    assert prepared.backend == "local"
+    assert prepared.requested_backend == "external"
+    assert prepared.local_fallback_used is True
 
 
 def test_prepare_query_attaches_coverage_assessment(conn, domain_ids):

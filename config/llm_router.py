@@ -558,34 +558,35 @@ def generate_response(
     messages: list[dict],
     config: ProviderConfig,
     stream: bool = False,
+    timeout_seconds: int | None = None,
 ) -> str | Generator[str, None, None]:
     """Generate a plain-text response from a full message array.
 
     Uses the same backend routing policy as extract_attributes() and enforces
     a 120-second timeout across all providers.
     """
-    timeout_seconds = 120
+    resolved_timeout = timeout_seconds or 120
 
     if config.is_local:
         if stream:
-            return _stream_ollama(messages, config.model, timeout=timeout_seconds)
-        return _call_ollama(messages, config.model, timeout=timeout_seconds)
+            return _stream_ollama(messages, config.model, timeout=resolved_timeout)
+        return _call_ollama(messages, config.model, timeout=resolved_timeout)
     if config.provider == "anthropic":
         assert config.api_key is not None
         if stream:
             return _stream_anthropic(
-                messages, config.model, config.api_key, timeout=timeout_seconds
+                messages, config.model, config.api_key, timeout=resolved_timeout
             )
         return _call_anthropic(
-            messages, config.model, config.api_key, timeout=timeout_seconds
+            messages, config.model, config.api_key, timeout=resolved_timeout
         )
     if config.provider == "groq":
         assert config.api_key is not None
         if stream:
             return _stream_groq(
-                messages, config.model, config.api_key, timeout=timeout_seconds
+                messages, config.model, config.api_key, timeout=resolved_timeout
             )
-        return _call_groq(messages, config.model, config.api_key, timeout=timeout_seconds)
+        return _call_groq(messages, config.model, config.api_key, timeout=resolved_timeout)
     raise ConfigurationError(f"Unknown provider: {config.provider!r}")
 
 

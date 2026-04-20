@@ -8,8 +8,9 @@ the pipeline can either hedge or skip LLM inference when ground-truth is thin.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Any
 
 from engine.acquisition_planner import AcquisitionPlan, build_acquisition_plan
 from engine.context_assembler import AssembledContext, assemble_query_context
@@ -22,6 +23,7 @@ from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import build_query_plan
 from engine.session import Session
+from engine.setup_state import resolve_local_provider_config
 
 
 @dataclass
@@ -38,6 +40,10 @@ class QueryContext:
     attributes: list[dict]
     messages: list[dict[str, str]]
     backend: str
+    requested_backend: str
+    provider_config: Any
+    local_fallback_used: bool
+    forced_response: str | None
     coverage: CoverageAssessment
     acquisition: AcquisitionPlan
 
@@ -55,6 +61,79 @@ def _preference_attributes_for_backend(
     ]
 
 
+def _should_reroute_to_artifact_grounded_self(
+    source_profile: str,
+    assembled_context: AssembledContext,
+) -> bool:
+    return (
+        source_profile == "self_question"
+        and not assembled_context.attributes
+        and not assembled_context.preference_attributes
+        and bool(assembled_context.artifact_chunks)
+    )
+
+
+def _artifact_only_external_response() -> str:
+    return (
+        "I found relevant evidence in your local uploaded artifacts, but I can't send that "
+        "local-only content to the current external model. Enable a local model to answer "
+        "from those uploads directly."
+    )
+
+
+def _build_query_context(
+    user_query: str,
+    session: Session,
+    conn,
+    *,
+    retrieval_mode: str,
+    source_profile: str,
+    intent_tags: list[str],
+    domain_hints: list[str],
+    provider_config,
+    requested_backend: str,
+    local_fallback_used: bool,
+    forced_response: str | None,
+) -> QueryContext:
+    assembled_context = assemble_query_context(
+        user_query,
+        retrieval_mode,
+        source_profile,
+        session.get_history(),
+        conn,
+        intent_tags=intent_tags,
+        domain_hints=domain_hints,
+    )
+    backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
+    coverage = evaluate_coverage(assembled_context, backend=backend)
+    acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
+    messages = build_prompt(
+        assembled_context,
+        target_backend=backend,
+        enforce_routing=False,
+        confidence=coverage.confidence,
+    )
+    return QueryContext(
+        query=user_query,
+        query_type=retrieval_mode,
+        source_profile=source_profile,
+        intent_tags=intent_tags,
+        domain_hints=domain_hints,
+        classification_reason="",
+        assembled_context=assembled_context,
+        attributes=assembled_context.attributes + preference_attributes,
+        messages=messages,
+        backend=backend,
+        requested_backend=requested_backend,
+        provider_config=provider_config,
+        local_fallback_used=local_fallback_used,
+        forced_response=forced_response,
+        coverage=coverage,
+        acquisition=acquisition,
+    )
+
+
 def prepare_query(
     user_query: str,
     session: Session,
@@ -63,42 +142,66 @@ def prepare_query(
 ) -> QueryContext:
     """Prepare a query without generating a response yet."""
     query_plan = build_query_plan(user_query)
-    assembled_context = assemble_query_context(
+    requested_backend = "local" if getattr(provider_config, "is_local", False) else "external"
+
+    context = _build_query_context(
         user_query,
-        query_plan.retrieval_mode,
-        query_plan.source_profile,
-        session.get_history(),
+        session,
         conn,
-        intent_tags=query_plan.intent_tags,
-        domain_hints=query_plan.domain_hints,
-    )
-
-    backend = "local" if getattr(provider_config, "is_local", False) else "external"
-    preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
-    coverage = evaluate_coverage(assembled_context, backend=backend)
-    acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
-
-    messages = build_prompt(
-        assembled_context,
-        target_backend=backend,
-        enforce_routing=False,
-        confidence=coverage.confidence,
-    )
-
-    return QueryContext(
-        query=user_query,
-        query_type=query_plan.retrieval_mode,
+        retrieval_mode=query_plan.retrieval_mode,
         source_profile=query_plan.source_profile,
         intent_tags=query_plan.intent_tags,
         domain_hints=query_plan.domain_hints,
-        classification_reason=query_plan.classification_reason,
-        assembled_context=assembled_context,
-        attributes=assembled_context.attributes + preference_attributes,
-        messages=messages,
-        backend=backend,
-        coverage=coverage,
-        acquisition=acquisition,
+        provider_config=provider_config,
+        requested_backend=requested_backend,
+        local_fallback_used=False,
+        forced_response=None,
     )
+    context.classification_reason = query_plan.classification_reason
+
+    if _should_reroute_to_artifact_grounded_self(query_plan.source_profile, context.assembled_context):
+        context = _build_query_context(
+            user_query,
+            session,
+            conn,
+            retrieval_mode=query_plan.retrieval_mode,
+            source_profile="artifact_grounded_self",
+            intent_tags=query_plan.intent_tags,
+            domain_hints=query_plan.domain_hints,
+            provider_config=provider_config,
+            requested_backend=requested_backend,
+            local_fallback_used=False,
+            forced_response=None,
+        )
+        context.classification_reason = (
+            "rerouted self-style query to artifact-grounded answering because only uploaded evidence was available"
+        )
+
+    if context.source_profile == "artifact_grounded_self" and requested_backend == "external":
+        try:
+            local_provider_config = resolve_local_provider_config(provider_config)
+        except Exception:
+            context.forced_response = _artifact_only_external_response()
+            return context
+
+        context = _build_query_context(
+            user_query,
+            session,
+            conn,
+            retrieval_mode=context.query_type,
+            source_profile=context.source_profile,
+            intent_tags=context.intent_tags,
+            domain_hints=context.domain_hints,
+            provider_config=local_provider_config,
+            requested_backend=requested_backend,
+            local_fallback_used=True,
+            forced_response=None,
+        )
+        context.classification_reason = (
+            "used local artifact fallback because the best evidence was stored in local uploads"
+        )
+
+    return context
 
 
 def _privacy_would_block(context: QueryContext) -> bool:
@@ -107,7 +210,7 @@ def _privacy_would_block(context: QueryContext) -> bool:
     The short-circuit for ``insufficient_data`` must defer in that case so the
     privacy guardrail still produces the correct blocked audit.
     """
-    if context.backend == "local":
+    if context.backend == "local" or context.forced_response is not None:
         return False
     return bool(context.assembled_context.contains_local_only)
 
@@ -131,6 +234,43 @@ def build_insufficient_data_decision(
         decision="skipped_insufficient_data",
         reason="coverage_evaluator_reported_insufficient_data",
         timestamp=datetime.now(UTC).isoformat(),
+    )
+
+
+def build_forced_artifact_response_decision(
+    context: QueryContext,
+    provider_config,
+) -> InferenceDecision:
+    """Build a synthetic audit decision for artifact-aware fallback messages."""
+    return InferenceDecision(
+        provider=provider_config.provider,
+        model=provider_config.model,
+        is_local=bool(provider_config.is_local),
+        task_type="query_generation",
+        blocked_external_attributes_count=0,
+        routing_enforced=True,
+        attribute_count=len(context.attributes),
+        domains_used=context.assembled_context.domains_used,
+        retrieval_mode=context.query_type,
+        contains_local_only_context=context.assembled_context.contains_local_only,
+        decision="skipped_local_fallback_unavailable",
+        reason="local_only_artifact_evidence_requires_local_model",
+        warning="Relevant uploaded artifact evidence was kept local.",
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+
+
+def apply_local_fallback_audit(
+    audit: InferenceDecision,
+    context: QueryContext,
+) -> InferenceDecision:
+    """Annotate a successful local-fallback response for UI and logging."""
+    if not getattr(context, "local_fallback_used", False):
+        return audit
+    return replace(
+        audit,
+        warning="Used a local-only fallback because uploaded artifact evidence was local.",
+        reason="used_local_artifact_fallback",
     )
 
 
@@ -163,15 +303,20 @@ def query(
     """Run one end-to-end query and update only in-memory session state."""
     context = prepare_query(user_query, session, conn, provider_config)
 
+    if context.forced_response is not None:
+        audit = build_forced_artifact_response_decision(context, provider_config)
+        record_query_result(session, context, context.forced_response, audit)
+        return context.forced_response
+
     if context.coverage.confidence == "insufficient_data" and not _privacy_would_block(
         context
     ):
-        audit = build_insufficient_data_decision(context, provider_config)
+        audit = build_insufficient_data_decision(context, context.provider_config)
         record_query_result(session, context, INSUFFICIENT_DATA_MESSAGE, audit)
         return INSUFFICIENT_DATA_MESSAGE
 
     try:
-        result = PrivacyBroker(provider_config).generate_grounded_response(
+        result = PrivacyBroker(context.provider_config).generate_grounded_response(
             context.messages,
             attributes=context.attributes,
             retrieval_mode=context.query_type,
@@ -183,6 +328,6 @@ def query(
         raise
     response = result.content
     assert isinstance(response, str)
-    record_query_result(session, context, response, result.metadata)
+    record_query_result(session, context, response, apply_local_fallback_audit(result.metadata, context))
 
     return response

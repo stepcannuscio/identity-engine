@@ -4,9 +4,12 @@ import client, {
   withSlowRequestTimeout,
 } from '../api/client.js'
 import {
+  analyzeArtifact,
   answerTeachQuestion,
   capturePreview,
+  getArtifactAnalysis,
   getAuthStatus,
+  promoteArtifact,
   uploadArtifact,
 } from '../api/endpoints.js'
 
@@ -138,6 +141,34 @@ describe('api client', () => {
       },
       { timeout: SLOW_REQUEST_TIMEOUT_MS },
     )
+  })
+
+  it('uses the slow timeout for artifact analysis and promotion', async () => {
+    const postSpy = vi.spyOn(client, 'post').mockResolvedValue({ data: { artifact_id: 'artifact-1' } })
+
+    await analyzeArtifact('artifact-1')
+    await promoteArtifact('artifact-1', { selected_attributes: [], selected_preferences: [] })
+
+    expect(postSpy).toHaveBeenNthCalledWith(
+      1,
+      '/artifacts/artifact-1/analyze',
+      null,
+      { timeout: SLOW_REQUEST_TIMEOUT_MS },
+    )
+    expect(postSpy).toHaveBeenNthCalledWith(
+      2,
+      '/artifacts/artifact-1/promote',
+      { selected_attributes: [], selected_preferences: [] },
+      { timeout: SLOW_REQUEST_TIMEOUT_MS },
+    )
+  })
+
+  it('fetches persisted artifact analysis', async () => {
+    const getSpy = vi.spyOn(client, 'get').mockResolvedValue({ data: { analysis_status: 'analyzed' } })
+
+    await getArtifactAnalysis('artifact-1')
+
+    expect(getSpy).toHaveBeenCalledWith('/artifacts/artifact-1/analysis')
   })
 
   it('builds a slow-timeout config helper', () => {

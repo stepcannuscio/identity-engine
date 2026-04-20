@@ -293,7 +293,7 @@ def build_acquisition_plan(
         if not _has_relevant_artifact_support(context):
             suggestions.append(_build_artifact_suggestion(query, "voice"))
 
-    if context.source_profile == "evidence_based":
+    if context.source_profile in {"evidence_based", "artifact_grounded_self"}:
         if not _has_relevant_artifact_support(context):
             domain = matched_domains[0] if matched_domains else None
             gaps.append(

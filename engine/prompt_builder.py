@@ -38,6 +38,7 @@ biographical details, or exaggerated quirks.
 Grounded context:
 {grounded_context}
 {voice_guidance}
+{artifact_guidance}
 {confidence_guidance}
 """
 
@@ -209,6 +210,18 @@ def _format_confidence_guidance(confidence: str | None) -> str:
     return ""
 
 
+def _format_artifact_guidance(context: AssembledContext) -> str:
+    if context.source_profile != "artifact_grounded_self":
+        return ""
+    return (
+        "\nArtifact-grounded answer guidance:\n"
+        "- Use uploaded artifacts as observed evidence.\n"
+        "- Do not turn artifact-only evidence into stable identity or preference claims.\n"
+        "- If a question asks for favorites, priorities, or rankings, only state that directly when the artifact explicitly ranks them or canonical preferences support it.\n"
+        "- Otherwise answer with observed wording such as 'From your uploaded recipes, I found...' and list the grounded items."
+    )
+
+
 def _format_voice_guidance(context: AssembledContext, target_backend: str) -> str:
     profile = context.voice_profile
     if profile is None:
@@ -262,12 +275,14 @@ def build_prompt(
 
     grounded_context = _format_grounded_context(context, target_backend)
     voice_guidance = _format_voice_guidance(context, target_backend)
+    artifact_guidance = _format_artifact_guidance(context)
     confidence_guidance = _format_confidence_guidance(confidence)
     system_message = {
         "role": "system",
         "content": SYSTEM_PROMPT_TEMPLATE.format(
             grounded_context=grounded_context,
             voice_guidance=voice_guidance,
+            artifact_guidance=artifact_guidance,
             confidence_guidance=confidence_guidance,
         ),
     }

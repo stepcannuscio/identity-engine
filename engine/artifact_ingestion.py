@@ -34,6 +34,82 @@ class ArtifactIngestResult:
     chunk_count: int
 
 
+def parse_artifact_metadata(raw_metadata: str | None) -> dict[str, object]:
+    """Return one artifact metadata payload as a dictionary."""
+    if not raw_metadata:
+        return {}
+    try:
+        value = json.loads(raw_metadata)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def serialize_artifact_metadata(metadata: dict[str, object] | None) -> str | None:
+    """Serialize artifact metadata when it has meaningful content."""
+    if not metadata:
+        return None
+    return json.dumps(metadata, sort_keys=True)
+
+
+def get_artifact_record(conn, artifact_id: str):
+    """Return one stored artifact row and parsed metadata."""
+    row = conn.execute(
+        """
+        SELECT
+            a.id,
+            a.title,
+            a.type,
+            a.source,
+            a.content,
+            a.metadata,
+            d.name
+        FROM artifacts a
+        LEFT JOIN domains d ON d.id = a.domain_id
+        WHERE a.id = ?
+        """,
+        (artifact_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": str(row[0]),
+        "title": str(row[1]),
+        "type": str(row[2]),
+        "source": str(row[3]),
+        "content": str(row[4]),
+        "metadata": parse_artifact_metadata(row[5]),
+        "domain": str(row[6]) if row[6] is not None else None,
+    }
+
+
+def get_artifact_tags(conn, artifact_id: str) -> list[str]:
+    """Return normalized artifact tags in stable order."""
+    rows = conn.execute(
+        """
+        SELECT tag
+        FROM artifact_tags
+        WHERE artifact_id = ?
+        ORDER BY tag ASC
+        """,
+        (artifact_id,),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def update_artifact_metadata(conn, artifact_id: str, metadata: dict[str, object]) -> dict[str, object]:
+    """Persist one artifact metadata payload and return the stored value."""
+    normalized = dict(metadata)
+    conn.execute(
+        "UPDATE artifacts SET metadata = ? WHERE id = ?",
+        (serialize_artifact_metadata(normalized), artifact_id),
+    )
+    conn.commit()
+    return normalized
+
+
 def normalize_artifact_text(text: str) -> str:
     """Normalize line endings and trim outer whitespace."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -113,7 +189,7 @@ def ingest_artifact(
     metadata_payload = dict(metadata or {})
     if filename:
         metadata_payload.setdefault("filename", filename)
-    metadata_json = json.dumps(metadata_payload, sort_keys=True) if metadata_payload else None
+    metadata_json = serialize_artifact_metadata(metadata_payload)
 
     conn.execute(
         """

@@ -185,6 +185,29 @@ export const uploadArtifact = async ({
   return data
 }
 
+export const analyzeArtifact = async (artifactId) => {
+  const { data } = await client.post(
+    `/artifacts/${artifactId}/analyze`,
+    null,
+    withSlowRequestTimeout(),
+  )
+  return data
+}
+
+export const getArtifactAnalysis = async (artifactId) => {
+  const { data } = await client.get(`/artifacts/${artifactId}/analysis`)
+  return data
+}
+
+export const promoteArtifact = async (artifactId, payload) => {
+  const { data } = await client.post(
+    `/artifacts/${artifactId}/promote`,
+    payload,
+    withSlowRequestTimeout(),
+  )
+  return data
+}
+
 export const getSessions = async () => {
   const { data } = await client.get('/sessions')
   return data

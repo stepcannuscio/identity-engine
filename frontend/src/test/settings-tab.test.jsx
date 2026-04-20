@@ -3,14 +3,22 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import SettingsTab from '../components/settings/SettingsTab.jsx'
 import TeachTab from '../components/teach/TeachTab.jsx'
-import { updateSecurityCheckOverride } from '../api/endpoints.js'
+import {
+  analyzeArtifact,
+  promoteArtifact,
+  updateSecurityCheckOverride,
+  uploadArtifact,
+} from '../api/endpoints.js'
 import { renderWithProviders } from './renderWithProviders.jsx'
 
 vi.mock('../api/endpoints.js', () => ({
+  analyzeArtifact: vi.fn(),
   answerTeachQuestion: vi.fn(),
   capture: vi.fn(),
   capturePreview: vi.fn(),
   feedbackTeachQuestion: vi.fn(),
+  getArtifactAnalysis: vi.fn(),
+  promoteArtifact: vi.fn(),
   saveProviderCredentials: vi.fn(),
   saveSetupProfile: vi.fn(),
   updateSecurityCheckOverride: vi.fn(),
@@ -52,6 +60,16 @@ function createBootstrapData(overrides = {}) {
       },
     ],
     providers: [
+      {
+        provider: 'ollama',
+        label: 'Local model',
+        deployment: 'local',
+        trust_boundary: 'self_hosted',
+        available: true,
+        is_local: true,
+        auth_strategy: 'none',
+        credential_fields: [],
+      },
       {
         provider: 'anthropic',
         label: 'Anthropic',
@@ -113,6 +131,106 @@ describe('TeachTab', () => {
     expect(screen.queryByText('Privacy preference')).not.toBeInTheDocument()
     expect(screen.queryByText('Recommended configurations')).not.toBeInTheDocument()
     expect(screen.getByText('Guided question')).toBeInTheDocument()
+  })
+
+  it('uploads, analyzes, and promotes artifact candidates locally', async () => {
+    const user = userEvent.setup()
+    const bootstrap = createBootstrapData()
+    uploadArtifact.mockResolvedValue({ artifact_id: 'artifact-1', chunk_count: 1, analysis_status: 'not_analyzed' })
+    analyzeArtifact.mockResolvedValue({
+      artifact_id: 'artifact-1',
+      analysis_status: 'analyzed',
+      summary: 'A local collection of dinner recipes the user has made.',
+      descriptor_tokens: ['recipe', 'dinner', 'meal'],
+      candidate_attributes: [
+        {
+          candidate_id: 'attribute_0_dinner_recipes',
+          domain: 'patterns',
+          label: 'dinner_recipes',
+          value: 'The uploaded artifact tracks dinner recipes I have made.',
+          elaboration: null,
+          mutability: 'evolving',
+          confidence: 0.7,
+          status: 'pending',
+        },
+      ],
+      candidate_preferences: [
+        {
+          candidate_id: 'preference_0_food_pasta',
+          category: 'food',
+          subject: 'pasta',
+          signal: 'like',
+          strength: 3,
+          summary: 'Pasta dishes appear repeatedly in the recipe list.',
+          status: 'pending',
+        },
+      ],
+    })
+    promoteArtifact.mockResolvedValue({
+      artifact_id: 'artifact-1',
+      promoted_attribute_ids: ['attr-1'],
+      promoted_preference_signal_ids: ['pref-1'],
+      analysis: {
+        artifact_id: 'artifact-1',
+        analysis_status: 'analyzed',
+        summary: 'A local collection of dinner recipes the user has made.',
+        descriptor_tokens: ['recipe', 'dinner', 'meal'],
+        candidate_attributes: [
+          {
+            candidate_id: 'attribute_0_dinner_recipes',
+            domain: 'patterns',
+            label: 'dinner_recipes',
+            value: 'The uploaded artifact tracks dinner recipes I have made.',
+            elaboration: null,
+            mutability: 'evolving',
+            confidence: 0.7,
+            status: 'promoted',
+          },
+        ],
+        candidate_preferences: [
+          {
+            candidate_id: 'preference_0_food_pasta',
+            category: 'food',
+            subject: 'pasta',
+            signal: 'like',
+            strength: 3,
+            summary: 'Pasta dishes appear repeatedly in the recipe list.',
+            status: 'promoted',
+          },
+        ],
+      },
+    })
+
+    renderWithProviders(<TeachTab bootstrapQuery={createBootstrapQuery(bootstrap)} />, {
+      appState: {
+        teachState: bootstrap,
+      },
+    })
+
+    await user.type(screen.getByPlaceholderText('Document title'), 'Dinner recipes')
+    await user.type(screen.getByPlaceholderText('Tags, comma separated'), 'recipes,dinner')
+    await user.type(screen.getByPlaceholderText('Paste text here, or choose a file below.'), 'Lasagna\nTikka masala\nPasta bake')
+    await user.click(screen.getByRole('button', { name: 'Save upload' }))
+
+    await waitFor(() => {
+      expect(uploadArtifact).toHaveBeenCalled()
+      expect(analyzeArtifact).toHaveBeenCalledWith('artifact-1')
+    })
+
+    expect(await screen.findByText(/local collection of dinner recipes/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Promote selected' }))
+
+    await waitFor(() => {
+      expect(promoteArtifact).toHaveBeenCalledWith('artifact-1', {
+        selected_attributes: [
+          expect.objectContaining({ candidate_id: 'attribute_0_dinner_recipes' }),
+        ],
+        selected_preferences: [
+          expect.objectContaining({ candidate_id: 'preference_0_food_pasta' }),
+        ],
+      })
+    })
   })
 })
 

@@ -125,6 +125,7 @@ class PrivacyBroker:
         *,
         task_type: str = "capture_extraction",
         allow_external_input: bool = False,
+        timeout_seconds: int | None = None,
     ) -> BrokeredResult[str]:
         """Run structured extraction through the router.
 
@@ -144,7 +145,14 @@ class PrivacyBroker:
             retrieval_mode=None,
             external_input_allowed_by_user=allow_external_input,
         )
-        response = generate_response(messages, self.provider_config)
+        if timeout_seconds is None:
+            response = generate_response(messages, self.provider_config)
+        else:
+            response = generate_response(
+                messages,
+                self.provider_config,
+                timeout_seconds=timeout_seconds,
+            )
         assert isinstance(response, str)
         return BrokeredResult(content=response, metadata=decision)
 

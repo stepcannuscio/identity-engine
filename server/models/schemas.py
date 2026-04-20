@@ -40,6 +40,7 @@ class QueryIntentMetadata(BaseModel):
 
     source_profile: Literal[
         "self_question",
+        "artifact_grounded_self",
         "evidence_based",
         "preference_sensitive",
         "voice_generation",
@@ -55,6 +56,7 @@ class PrivacyState(BaseModel):
     execution_mode: Literal["local", "external", "blocked", "unknown"]
     routing_enforced: bool
     warning_present: bool
+    used_local_fallback: bool = False
     provider_label: str | None = None
     model_label: str | None = None
     summary: str
@@ -99,6 +101,7 @@ class QueryMetadata(BaseModel):
     intent: QueryIntentMetadata
     attributes_used: int
     backend_used: str
+    requested_backend: str | None = None
     domains_referenced: list[str]
     duration_ms: int
     privacy: PrivacyState
@@ -182,6 +185,63 @@ class ArtifactIngestResponse(BaseModel):
     artifact_id: str
     chunk_count: int
     tags: list[str] = []
+    analysis_status: Literal["not_analyzed", "analyzed"] = "not_analyzed"
+
+
+class ArtifactAnalysisAttributeCandidate(BaseModel):
+    """One reviewable artifact-derived attribute candidate."""
+
+    candidate_id: str
+    domain: str
+    label: str
+    value: str
+    elaboration: str | None = None
+    mutability: Literal["stable", "evolving"]
+    confidence: float
+    status: Literal["pending", "promoted"] = "pending"
+
+
+class ArtifactAnalysisPreferenceCandidate(BaseModel):
+    """One reviewable artifact-derived preference candidate."""
+
+    candidate_id: str
+    category: str
+    subject: str
+    signal: Literal["like", "dislike", "accept", "reject", "prefer", "avoid"]
+    strength: int
+    summary: str | None = None
+    status: Literal["pending", "promoted"] = "pending"
+
+
+class ArtifactAnalysisResponse(BaseModel):
+    """Local-only artifact analysis payload."""
+
+    artifact_id: str
+    analysis_status: Literal["not_analyzed", "analyzed"]
+    analysis_method: Literal["model", "heuristic_fallback"] | None = None
+    analysis_warning: str | None = None
+    content_kind: str | None = None
+    summary: str | None = None
+    descriptor_tokens: list[str] = []
+    candidate_attributes: list["ArtifactAnalysisAttributeCandidate"] = []
+    candidate_preferences: list["ArtifactAnalysisPreferenceCandidate"] = []
+    analyzed_at: datetime | None = None
+
+
+class ArtifactPromoteRequest(BaseModel):
+    """Promotion payload for accepted artifact-analysis candidates."""
+
+    selected_attributes: list["ArtifactAnalysisAttributeCandidate"] = []
+    selected_preferences: list["ArtifactAnalysisPreferenceCandidate"] = []
+
+
+class ArtifactPromoteResponse(BaseModel):
+    """Promotion result for one analyzed artifact."""
+
+    artifact_id: str
+    promoted_attribute_ids: list[str] = []
+    promoted_preference_signal_ids: list[str] = []
+    analysis: ArtifactAnalysisResponse
 
 
 class ProviderStatusResponse(BaseModel):

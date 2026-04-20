@@ -58,6 +58,7 @@ def blocked_privacy_state(
         execution_mode="blocked",
         routing_enforced=routing_enforced,
         warning_present=True,
+        used_local_fallback=False,
         provider_label=_provider_label(resolved_provider, is_local=is_local),
         model_label=None if is_local else resolved_model,
         summary="Blocked to protect local-only data from being sent externally.",
@@ -73,6 +74,7 @@ def unavailable_privacy_state(provider_config: ProviderConfig) -> PrivacyState:
         execution_mode=execution_mode,
         routing_enforced=True,
         warning_present=True,
+        used_local_fallback=False,
         provider_label=_provider_label(provider_config.provider, is_local=provider_config.is_local),
         model_label=provider_config.model,
         summary="Privacy status is unavailable because the request did not complete.",
@@ -91,8 +93,13 @@ def privacy_state_from_decision(decision: InferenceDecision) -> PrivacyState:
     execution_mode: Literal["local", "external"] = (
         "local" if decision.is_local else "external"
     )
+    used_local_fallback = decision.reason == "used_local_artifact_fallback"
     summary = (
-        _local_summary(decision.routing_enforced, decision.contains_local_only_context)
+        (
+            "Processed locally using a privacy-preserving fallback because the best evidence lived in local uploads."
+            if used_local_fallback
+            else _local_summary(decision.routing_enforced, decision.contains_local_only_context)
+        )
         if decision.is_local
         else _external_summary(decision.routing_enforced)
     )
@@ -100,6 +107,7 @@ def privacy_state_from_decision(decision: InferenceDecision) -> PrivacyState:
         execution_mode=execution_mode,
         routing_enforced=decision.routing_enforced,
         warning_present=bool(decision.warning),
+        used_local_fallback=used_local_fallback,
         provider_label=_provider_label(decision.provider, is_local=decision.is_local),
         model_label=decision.model,
         summary=summary,
@@ -120,6 +128,7 @@ def privacy_state_from_provider(provider_config: ProviderConfig) -> PrivacyState
         execution_mode=execution_mode,
         routing_enforced=True,
         warning_present=False,
+        used_local_fallback=False,
         provider_label=_provider_label(provider_config.provider, is_local=provider_config.is_local),
         model_label=provider_config.model,
         summary=summary,
@@ -165,6 +174,7 @@ def privacy_state_from_routing_log(entry: Mapping[str, Any]) -> PrivacyState:
         execution_mode=execution_mode,
         routing_enforced=routing_enforced,
         warning_present=bool(entry.get("warning")),
+        used_local_fallback=str(entry.get("reason", "")) == "used_local_artifact_fallback",
         provider_label=_provider_label(
             str(entry.get("provider")) if entry.get("provider") else None,
             is_local=execution_mode == "local",
@@ -181,6 +191,7 @@ def session_privacy_state(entries: list[Mapping[str, Any]]) -> PrivacyState:
             execution_mode="unknown",
             routing_enforced=False,
             warning_present=False,
+            used_local_fallback=False,
             provider_label=None,
             model_label=None,
             summary="No privacy activity was recorded for this session.",
@@ -192,6 +203,7 @@ def session_privacy_state(entries: list[Mapping[str, Any]]) -> PrivacyState:
             execution_mode="blocked",
             routing_enforced=True,
             warning_present=True,
+            used_local_fallback=False,
             provider_label=None,
             model_label=None,
             summary="This session included a blocked external attempt to protect local-only data.",
@@ -202,6 +214,7 @@ def session_privacy_state(entries: list[Mapping[str, Any]]) -> PrivacyState:
             execution_mode="external",
             routing_enforced=any(entry.routing_enforced for entry in privacy_entries),
             warning_present=any(entry.warning_present for entry in privacy_entries),
+            used_local_fallback=False,
             provider_label=None,
             model_label=None,
             summary="This session used an external model with privacy checks in place.",
@@ -211,6 +224,7 @@ def session_privacy_state(entries: list[Mapping[str, Any]]) -> PrivacyState:
         execution_mode="local",
         routing_enforced=any(entry.routing_enforced for entry in privacy_entries),
         warning_present=any(entry.warning_present for entry in privacy_entries),
+        used_local_fallback=any(entry.used_local_fallback for entry in privacy_entries),
         provider_label=None,
         model_label=None,
         summary="This session stayed local.",

@@ -102,7 +102,7 @@ verify-backend: setup
 ## Run the frontend Vitest suite
 test-frontend: $(FRONTEND_NODE_MODULES)
 	@echo "--> Running frontend tests..."
-	cd $(FRONTEND_DIR) && $(NPM) run test -- $(FRONTEND_ARGS)
+	cd $(FRONTEND_DIR) && $(NPM) run test -- --reporter=verbose $(FRONTEND_ARGS)
 
 ## Remove .venv and __pycache__ (never removes the database or keychain entry)
 clean:

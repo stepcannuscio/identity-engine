@@ -13,10 +13,13 @@ import { createPrivacy } from './fixtures.js'
 import { createTestQueryClient, renderWithProviders } from './renderWithProviders.jsx'
 
 vi.mock('../api/endpoints.js', () => ({
+  analyzeArtifact: vi.fn(),
   capture: vi.fn(),
   capturePreview: vi.fn(),
   createPreferenceSignal: vi.fn(),
+  getArtifactAnalysis: vi.fn(),
   previewInterview: vi.fn(),
+  promoteArtifact: vi.fn(),
   saveInterview: vi.fn(),
   uploadArtifact: vi.fn(),
 }))

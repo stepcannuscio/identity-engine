@@ -158,22 +158,38 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - `POST /artifacts` accepts JSON text plus tagged `.txt`, `.md`, `.pdf`, and
   `.docx` uploads
 - artifacts are stored locally with raw content plus ordered chunks
+- artifact metadata can now persist local-only analysis output:
+  - `content_kind`
+  - retrieval descriptor tokens
+  - short local summary
+  - reviewable candidate attributes
+  - reviewable candidate preference signals
+- `POST /artifacts/{artifact_id}/analyze` runs local-only artifact analysis and
+  returns reviewable candidates without promoting them automatically
+- `POST /artifacts/{artifact_id}/promote` accepts selected candidates and
+  promotes them into canonical attributes or preference signals
 - upload handling now rejects oversized requests/files, oversized extracted
   text, malformed DOCX payloads, and DOCX files with oversized
   `word/document.xml`
 - upload tags are normalized into `artifact_tags` and can influence Teach
   planning and retrieval
-- chunk retrieval is deterministic keyword matching, not embeddings
+- chunk retrieval remains deterministic keyword matching, but now also scores:
+  - tags
+  - filenames
+  - persisted artifact-analysis descriptors
+  - list-like artifact structure for inventory-style questions
 - query context can blend artifact evidence with structured identity and
   preference signals instead of only using artifacts as a thin-coverage fallback
 - artifact evidence is prompt-bounded, treated as local-only context, and
-  ranked below canonical identity for self-questions
+  may now answer artifact-grounded self-style questions when canonical identity
+  support is absent
 
 ### 16. Dynamic Source Weighting Layer
 - query planning now keeps public `query_type` as `simple|open_ended` while
   adding an internal `source_profile`
 - source profiles are:
   - `self_question`
+  - `artifact_grounded_self`
   - `evidence_based`
   - `preference_sensitive`
   - `general`
@@ -189,6 +205,14 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - artifact diversity bonuses
   - duplicate-artifact penalties
 - artifacts remain supporting evidence only; they never become canonical truth
+- when a self-style query only has upload evidence, the engine can reroute to
+  `artifact_grounded_self` and answer from observed upload evidence instead of
+  pretending the upload does not exist
+- artifact-grounded answers are instructed to use observed wording rather than
+  converting upload-only evidence into stable identity or preference claims
+- if an external backend is active but the best evidence is local-only upload
+  content, query execution now falls back to a local model when available;
+  otherwise it returns an explicit artifact-aware privacy message
 
 ### 17. Targeted Data Acquisition Layer
 - deterministic acquisition planning now runs after context assembly and
@@ -229,6 +253,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - guided questions
   - quick-note capture
   - tagged file uploads
+  - local upload analysis and review
+  - explicit promotion of reviewed upload insights into canonical stores
   - onboarding-time profile/provider/security setup
 - onboarding is resumable and skippable; completion state is stored in
   `app_settings`
@@ -253,6 +279,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - writes preserve audit/history behavior
 - raw-text extraction for capture, interview, and Teach answers now fails
   closed on external backends unless the user explicitly opts in per request
+- Teach uploads now keep the artifact boundary intact while exposing an
+  `upload -> analyze -> promote` workflow:
+  - upload first stores searchable local evidence
+  - local analysis proposes candidate facts and preferences
+  - only explicitly promoted candidates become canonical truth
 
 ### 19. Profile / Provider / Security Setup Layer
 - setup state is stored explicitly, not as a generic blob:

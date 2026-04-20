@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  analyzeArtifact,
   answerTeachQuestion,
   capture,
   capturePreview,
   feedbackTeachQuestion,
+  getArtifactAnalysis,
+  promoteArtifact,
   uploadArtifact,
 } from '../../api/endpoints.js'
 import SetupWorkspace from '../settings/SetupWorkspace.jsx'
@@ -28,9 +31,13 @@ function parseTags(rawTags) {
     .filter(Boolean)
 }
 
+function candidateIds(items) {
+  return new Set(items.map((item) => item.candidate_id))
+}
+
 export default function TeachTab({ bootstrapQuery }) {
   const queryClient = useQueryClient()
-  const { addToast, backend, onboardingCompleted } = useAppState()
+  const { addToast, backend, onboardingCompleted, providerStatuses } = useAppState()
   const [answer, setAnswer] = useState('')
   const [allowExternalAnswerExtraction, setAllowExternalAnswerExtraction] = useState(false)
   const [quickNote, setQuickNote] = useState('')
@@ -40,10 +47,25 @@ export default function TeachTab({ bootstrapQuery }) {
   const [artifactFile, setArtifactFile] = useState(null)
   const [artifactTags, setArtifactTags] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [artifactId, setArtifactId] = useState(null)
+  const [artifactAnalysis, setArtifactAnalysis] = useState(null)
+  const [selectedAttributeIds, setSelectedAttributeIds] = useState(new Set())
+  const [selectedPreferenceIds, setSelectedPreferenceIds] = useState(new Set())
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [isPromoting, setIsPromoting] = useState(false)
 
   const bootstrap = bootstrapQuery.data
   const activeQuestion = bootstrap?.questions?.[0] ?? null
   const requiresExternalExtractionConsent = backend === 'external'
+  const localAnalysisAvailable = providerStatuses.some(
+    (provider) => provider.is_local && provider.available,
+  )
+
+  const setAnalysisState = (analysis) => {
+    setArtifactAnalysis(analysis)
+    setSelectedAttributeIds(candidateIds(analysis?.candidate_attributes ?? []))
+    setSelectedPreferenceIds(candidateIds(analysis?.candidate_preferences ?? []))
+  }
 
   const refreshBootstrap = async () => {
     await queryClient.invalidateQueries({ queryKey: ['teachBootstrap'] })
@@ -150,7 +172,7 @@ export default function TeachTab({ bootstrapQuery }) {
     }
     setIsSaving(true)
     try {
-      await uploadArtifact({
+      const response = await uploadArtifact({
         text: artifactFile ? null : artifactText,
         file: artifactFile,
         title: artifactTitle || null,
@@ -159,17 +181,88 @@ export default function TeachTab({ bootstrapQuery }) {
         domain: activeQuestion?.domain ?? null,
         tags: parseTags(artifactTags),
       })
+      setArtifactId(response.artifact_id)
       setArtifactTitle('')
       setArtifactText('')
       setArtifactFile(null)
       setArtifactTags('')
+      setAnalysisState(null)
       await refreshBootstrap()
       addToast({ message: 'Artifact saved.', tone: 'success' })
+      if (localAnalysisAvailable) {
+        const analysis = await analyzeArtifact(response.artifact_id)
+        setAnalysisState(analysis)
+        addToast({
+          message:
+            analysis.analysis_method === 'heuristic_fallback'
+              ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
+              : 'Upload analyzed locally.',
+          tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
+        })
+      }
     } catch (error) {
       addToast({ message: error?.response?.data?.detail ?? 'Unable to save that upload.' })
     } finally {
       setIsSaving(false)
     }
+  }
+
+  const handleAnalyzeArtifact = async () => {
+    if (!artifactId) {
+      return
+    }
+    setIsAnalyzing(true)
+    try {
+      const analysis = artifactAnalysis?.analysis_status === 'analyzed'
+        ? await getArtifactAnalysis(artifactId)
+        : await analyzeArtifact(artifactId)
+      setAnalysisState(analysis)
+      addToast({
+        message:
+          analysis.analysis_method === 'heuristic_fallback'
+            ? analysis.analysis_warning ?? 'Upload analyzed with a lightweight local fallback.'
+            : 'Upload analyzed locally.',
+        tone: analysis.analysis_method === 'heuristic_fallback' ? 'warning' : 'success',
+      })
+    } catch (error) {
+      addToast({ message: error?.response?.data?.detail ?? 'Unable to analyze that upload.' })
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  const handlePromoteArtifact = async () => {
+    if (!artifactId || !artifactAnalysis) {
+      return
+    }
+    setIsPromoting(true)
+    try {
+      const response = await promoteArtifact(artifactId, {
+        selected_attributes: artifactAnalysis.candidate_attributes.filter((item) =>
+          selectedAttributeIds.has(item.candidate_id),
+        ),
+        selected_preferences: artifactAnalysis.candidate_preferences.filter((item) =>
+          selectedPreferenceIds.has(item.candidate_id),
+        ),
+      })
+      setAnalysisState(response.analysis)
+      await refreshBootstrap()
+      addToast({ message: 'Selected upload insights were promoted.', tone: 'success' })
+    } catch (error) {
+      addToast({ message: error?.response?.data?.detail ?? 'Unable to promote upload insights.' })
+    } finally {
+      setIsPromoting(false)
+    }
+  }
+
+  const toggleSelection = (setter, current, id) => {
+    const next = new Set(current)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    setter(next)
   }
 
   if (bootstrapQuery.isLoading) {
@@ -323,6 +416,10 @@ export default function TeachTab({ bootstrapQuery }) {
             <h2>Upload file</h2>
             <span className="teach-status">taggable</span>
           </div>
+          <p className="field-help">
+            Uploads stay as local searchable evidence first. After local analysis, you can
+            promote reviewed facts or preferences into the source-of-truth store.
+          </p>
           <input
             type="text"
             value={artifactTitle}
@@ -358,6 +455,8 @@ export default function TeachTab({ bootstrapQuery }) {
               type="button"
               className="button-secondary"
               onClick={() => {
+                setArtifactId(null)
+                setAnalysisState(null)
                 setArtifactTitle('')
                 setArtifactTags('')
                 setArtifactText('')
@@ -368,6 +467,97 @@ export default function TeachTab({ bootstrapQuery }) {
               Skip
             </button>
           </div>
+          {artifactId ? (
+            <div className="teach-action-row">
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={handleAnalyzeArtifact}
+                disabled={!localAnalysisAvailable || isAnalyzing || isSaving}
+              >
+                {isAnalyzing ? 'Analyzing...' : 'Analyze upload'}
+              </button>
+              {!localAnalysisAvailable ? (
+                <span className="field-help">
+                  Enable a local model to analyze uploads and promote grounded facts.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {artifactAnalysis?.analysis_status === 'analyzed' ? (
+            <div className="teach-analysis">
+              <p className="field-help">
+                <strong>Local summary:</strong> {artifactAnalysis.summary}
+              </p>
+              {artifactAnalysis.analysis_warning ? (
+                <p className="field-help">
+                  <strong>Note:</strong> {artifactAnalysis.analysis_warning}
+                </p>
+              ) : null}
+              {artifactAnalysis.descriptor_tokens?.length ? (
+                <p className="field-help">
+                  <strong>Descriptors:</strong> {artifactAnalysis.descriptor_tokens.join(', ')}
+                </p>
+              ) : null}
+              {artifactAnalysis.candidate_attributes?.length ? (
+                <div className="teach-analysis-group">
+                  <h3>Review candidate facts</h3>
+                  {artifactAnalysis.candidate_attributes.map((item) => (
+                    <label key={item.candidate_id} className="field-help">
+                      <input
+                        type="checkbox"
+                        checked={selectedAttributeIds.has(item.candidate_id)}
+                        disabled={item.status === 'promoted'}
+                        onChange={() =>
+                          toggleSelection(
+                            setSelectedAttributeIds,
+                            selectedAttributeIds,
+                            item.candidate_id,
+                          )
+                        }
+                      />{' '}
+                      <strong>{item.label}</strong>: {item.value}
+                      {item.status === 'promoted' ? ' (promoted)' : ''}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+              {artifactAnalysis.candidate_preferences?.length ? (
+                <div className="teach-analysis-group">
+                  <h3>Review candidate preferences</h3>
+                  {artifactAnalysis.candidate_preferences.map((item) => (
+                    <label key={item.candidate_id} className="field-help">
+                      <input
+                        type="checkbox"
+                        checked={selectedPreferenceIds.has(item.candidate_id)}
+                        disabled={item.status === 'promoted'}
+                        onChange={() =>
+                          toggleSelection(
+                            setSelectedPreferenceIds,
+                            selectedPreferenceIds,
+                            item.candidate_id,
+                          )
+                        }
+                      />{' '}
+                      <strong>{item.signal}</strong> {item.subject.replaceAll('_', ' ')}
+                      {item.summary ? ` — ${item.summary}` : ''}
+                      {item.status === 'promoted' ? ' (promoted)' : ''}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+              <div className="teach-action-row">
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={handlePromoteArtifact}
+                  disabled={isPromoting || isSaving || isAnalyzing}
+                >
+                  {isPromoting ? 'Promoting...' : 'Promote selected'}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </article>
       </div>
     </section>
