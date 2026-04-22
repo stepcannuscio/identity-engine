@@ -89,6 +89,7 @@ export default function QueryFeedbackPanel({ message }) {
           domain_hints: [],
         },
         domains_referenced: message.metadata.domains_referenced ?? [],
+        retrieved_attribute_ids: message.metadata.retrieved_attribute_ids ?? [],
       })
       setIsSubmitted(true)
       addToast({

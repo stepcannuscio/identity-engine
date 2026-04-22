@@ -21,9 +21,12 @@ _PATTERN_WEIGHTS = {
     "wrong_focus": 0.14,
     "ungrounded": 0.20,
 }
+_LOW_RATED_PATTERNS = frozenset({"missed_context", "wrong_focus", "ungrounded"})
 
 _DOMAIN_DELTA_CAP = 0.15
 _RECENT_MISSED_CONTEXT_RATE = 0.6
+_ATTRIBUTE_CONFIDENCE_FLOOR = 0.35
+_ATTRIBUTE_HISTORY_REASON_PREFIX = "feedback_calibration:"
 
 
 @dataclass(frozen=True)
@@ -157,6 +160,7 @@ def recompute_retrieval_calibration(
             )
             inserted += 1
 
+    apply_attribute_feedback_adjustments(conn)
     conn.commit()
     return inserted
 
@@ -300,3 +304,155 @@ def build_recent_feedback_gap_note(
         f"Recent feedback on {gap.domain} answers has frequently flagged missed context "
         f"({gap.observation_count} recent ratings), so similar responses may still be under-grounded."
     )
+
+
+def _attribute_feedback_penalty(*, negative: int, helpful: int) -> float:
+    total = negative + helpful
+    if negative < 3 or total <= 0 or negative <= helpful:
+        return 0.0
+    dominance = negative / total
+    penalty = 0.0
+    if dominance >= 0.60:
+        penalty = 0.05
+    if negative >= 5 and dominance >= 0.75:
+        penalty = 0.10
+    if negative >= 7 and dominance >= 0.80:
+        penalty = 0.15
+    return penalty
+
+
+def _feedback_adjustment_reason(*, negative: int, helpful: int, penalty: float) -> str:
+    return (
+        f"{_ATTRIBUTE_HISTORY_REASON_PREFIX}"
+        f"negative={negative};helpful={helpful};penalty={penalty:.2f}"
+    )
+
+
+def _baseline_confidence_for_attribute(
+    conn,
+    *,
+    attribute_id: str,
+    current_confidence: float,
+) -> float:
+    rows = conn.execute(
+        """
+        SELECT previous_confidence, reason
+        FROM attribute_history
+        WHERE attribute_id = ? AND previous_confidence IS NOT NULL
+        ORDER BY changed_at ASC, id ASC
+        """,
+        (attribute_id,),
+    ).fetchall()
+
+    baseline = current_confidence
+    for previous_confidence, reason in rows:
+        if not str(reason or "").startswith(_ATTRIBUTE_HISTORY_REASON_PREFIX):
+            continue
+        baseline = max(baseline, float(previous_confidence or 0.0))
+    return baseline
+
+
+def _aggregated_attribute_feedback_counts(conn) -> dict[str, dict[str, int]]:
+    rows = conn.execute(
+        """
+        SELECT feedback, retrieved_attribute_ids_json
+        FROM query_feedback
+        """
+    ).fetchall()
+
+    counts: dict[str, dict[str, int]] = defaultdict(lambda: {"negative": 0, "helpful": 0})
+    for feedback, raw_attribute_ids in rows:
+        pattern = str(feedback or "").strip()
+        if pattern not in _PATTERN_SIGNS:
+            continue
+
+        attribute_ids = sorted(set(_parse_json_list(raw_attribute_ids)))
+        if not attribute_ids:
+            continue
+
+        key = "negative" if pattern in _LOW_RATED_PATTERNS else "helpful"
+        for attribute_id in attribute_ids:
+            counts[attribute_id][key] += 1
+    return counts
+
+
+def apply_attribute_feedback_adjustments(conn) -> int:
+    """Lower confidence for repeatedly low-rated inferred attributes."""
+    feedback_counts = _aggregated_attribute_feedback_counts(conn)
+    if not feedback_counts:
+        return 0
+
+    rows = conn.execute(
+        """
+        SELECT id, value, confidence, source, status
+        FROM attributes
+        WHERE status IN ('active', 'confirmed')
+        """
+    ).fetchall()
+
+    changed_at = datetime.now(UTC).isoformat()
+    updates = 0
+
+    for attribute_id, value, confidence, source, status in rows:
+        if str(source or "") != "inferred":
+            continue
+        if str(status or "") not in {"active", "confirmed"}:
+            continue
+
+        counts = feedback_counts.get(str(attribute_id))
+        if not counts:
+            continue
+
+        negative = int(counts["negative"])
+        helpful = int(counts["helpful"])
+        penalty = _attribute_feedback_penalty(negative=negative, helpful=helpful)
+        if penalty <= 0.0:
+            continue
+
+        current_confidence = float(confidence or 0.0)
+        baseline_confidence = _baseline_confidence_for_attribute(
+            conn,
+            attribute_id=str(attribute_id),
+            current_confidence=current_confidence,
+        )
+        target_confidence = max(_ATTRIBUTE_CONFIDENCE_FLOOR, baseline_confidence - penalty)
+        if target_confidence >= current_confidence - 1e-6:
+            continue
+
+        conn.execute(
+            """
+            INSERT INTO attribute_history (
+                id,
+                attribute_id,
+                previous_value,
+                previous_confidence,
+                reason,
+                changed_at,
+                changed_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'inferred')
+            """,
+            (
+                str(uuid.uuid4()),
+                str(attribute_id),
+                str(value),
+                current_confidence,
+                _feedback_adjustment_reason(
+                    negative=negative,
+                    helpful=helpful,
+                    penalty=baseline_confidence - target_confidence,
+                ),
+                changed_at,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE attributes
+            SET confidence = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (round(target_confidence, 2), changed_at, str(attribute_id)),
+        )
+        updates += 1
+
+    return updates

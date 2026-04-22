@@ -39,6 +39,7 @@ def _record_feedback(
     source_profile: str = "preference_sensitive",
     domains_referenced: list[str] | None = None,
     domain_hints: list[str] | None = None,
+    retrieved_attribute_ids: list[str] | None = None,
 ) -> None:
     record_query_feedback(
         conn,
@@ -55,6 +56,7 @@ def _record_feedback(
             intent_tags=["planning"],
             domain_hints=domain_hints or ["goals"],
             domains_referenced=domains_referenced or ["goals"],
+            retrieved_attribute_ids=retrieved_attribute_ids or [],
         ),
     )
 
@@ -65,11 +67,12 @@ def _insert_attribute(
     domain: str,
     label: str,
     value: str,
-) -> None:
+) -> str:
     domain_id = conn.execute(
         "SELECT id FROM domains WHERE name = ?",
         (domain,),
     ).fetchone()[0]
+    attribute_id = str(uuid.uuid4())
     now = "2026-04-20T12:00:00+00:00"
     conn.execute(
         """
@@ -80,7 +83,7 @@ def _insert_attribute(
         VALUES (?, ?, ?, ?, ?, 'stable', 'explicit', 0.8, 'external_ok', 'active', ?, ?, ?)
         """,
         (
-            str(uuid.uuid4()),
+            attribute_id,
             domain_id,
             label,
             value,
@@ -91,6 +94,7 @@ def _insert_attribute(
         ),
     )
     conn.commit()
+    return attribute_id
 
 
 def _context_with_low_confidence() -> AssembledContext:
@@ -190,3 +194,49 @@ def test_low_confidence_coverage_note_can_append_recent_feedback_gap(conn):
     assert assessment.confidence == "low_confidence"
     assert assessment.notes is not None
     assert "missed context" in assessment.notes
+
+
+def test_recompute_retrieval_calibration_can_lower_inferred_attribute_confidence(conn):
+    attribute_id = _insert_attribute(
+        conn,
+        domain="goals",
+        label="plan_horizon",
+        value="I plan in quarterly arcs.",
+    )
+    conn.execute(
+        "UPDATE attributes SET source = 'inferred' WHERE id = ?",
+        (attribute_id,),
+    )
+    conn.commit()
+
+    for _ in range(5):
+        _record_feedback(
+            conn,
+            feedback="missed_context",
+            domains_referenced=["goals"],
+            retrieved_attribute_ids=[attribute_id],
+        )
+
+    recompute_retrieval_calibration(conn)
+
+    row = conn.execute(
+        "SELECT confidence FROM attributes WHERE id = ?",
+        (attribute_id,),
+    ).fetchone()
+    assert row is not None
+    assert float(row[0]) == pytest.approx(0.70)
+
+    history_row = conn.execute(
+        """
+        SELECT previous_confidence, changed_by, reason
+        FROM attribute_history
+        WHERE attribute_id = ?
+        ORDER BY changed_at DESC, id DESC
+        LIMIT 1
+        """,
+        (attribute_id,),
+    ).fetchone()
+    assert history_row is not None
+    assert float(history_row[0]) == pytest.approx(0.8)
+    assert history_row[1] == "inferred"
+    assert str(history_row[2]).startswith("feedback_calibration:")

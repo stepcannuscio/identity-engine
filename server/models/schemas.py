@@ -110,6 +110,7 @@ class QueryMetadata(BaseModel):
     query_type: str
     intent: QueryIntentMetadata
     attributes_used: int
+    retrieved_attribute_ids: list[str] = []
     backend_used: str
     requested_backend: str | None = None
     domains_referenced: list[str]
@@ -151,6 +152,7 @@ class QueryFeedbackRequest(BaseModel):
     ]
     intent: QueryIntentMetadata
     domains_referenced: list[str] = []
+    retrieved_attribute_ids: list[str] = []
 
 
 class QueryFeedbackResponse(BaseModel):

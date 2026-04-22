@@ -1290,6 +1290,7 @@ def test_query_response_includes_normalized_privacy_metadata(
     assert body["metadata"]["privacy"]["routing_enforced"] is True
     assert body["metadata"]["privacy"]["summary"] == "Processed locally with privacy rules applied."
     assert body["metadata"]["confidence"] == "medium_confidence"
+    assert body["metadata"]["retrieved_attribute_ids"] == []
     assert body["metadata"]["coverage"] == {
         "attributes": 2,
         "preferences": 0,
@@ -1527,6 +1528,7 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
                 "domain_hints": ["goals", "patterns"],
             },
             "domains_referenced": ["goals", "patterns"],
+            "retrieved_attribute_ids": ["attr-1", "attr-2"],
         },
         headers=_login_headers(client),
     )
@@ -1535,7 +1537,8 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
     feedback_id = response.json()["id"]
     row = _db(client).execute(
         """
-        SELECT query_text, response_text, feedback, notes, backend, source_profile
+        SELECT query_text, response_text, feedback, notes, backend, source_profile,
+               retrieved_attribute_ids_json
         FROM query_feedback
         WHERE id = ?
         """,
@@ -1548,6 +1551,7 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
         "The focus-block guidance matched my working style.",
         "local",
         "preference_sensitive",
+        '["attr-1", "attr-2"]',
     )
 
     evidence_rows = _db(client).execute(
@@ -1590,6 +1594,7 @@ def test_post_query_feedback_triggers_retrieval_calibration_after_batch(client: 
             "domain_hints": ["goals"],
         },
         "domains_referenced": ["goals"],
+        "retrieved_attribute_ids": [],
     }
 
     for _ in range(7):
@@ -1646,6 +1651,7 @@ def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient
                 "domain_hints": ["voice"],
             },
             "domains_referenced": ["voice"],
+            "retrieved_attribute_ids": [],
         },
         headers=_login_headers(client),
     )
@@ -1735,6 +1741,7 @@ def test_get_evidence_returns_privacy_safe_summaries_only(client: TestClient):
                 "domain_hints": ["goals"],
             },
             "domains_referenced": ["goals"],
+            "retrieved_attribute_ids": [],
         },
         headers=_login_headers(client),
     )
@@ -1788,12 +1795,66 @@ def test_post_query_feedback_rejects_voice_feedback_for_non_voice_query(client: 
                 "domain_hints": ["goals"],
             },
             "domains_referenced": ["goals"],
+            "retrieved_attribute_ids": [],
         },
         headers=_login_headers(client),
     )
 
     assert response.status_code == 422
     assert response.json()["detail"] == "voice_feedback is only valid for voice_generation queries."
+
+
+def test_post_query_feedback_can_lower_repeated_low_rated_inferred_attribute_confidence(
+    client: TestClient,
+):
+    headers = _login_headers(client)
+    attribute_id = _insert_attribute(
+        _db(client),
+        "goals",
+        "plan_horizon",
+        "I plan in quarterly arcs.",
+        source="inferred",
+    )
+    payload = {
+        "query": "How should I plan my week?",
+        "response": "Protect your focus blocks and group shallow work.",
+        "feedback": "missed_context",
+        "query_type": "simple",
+        "backend_used": "local",
+        "confidence": "low_confidence",
+        "intent": {
+            "source_profile": "preference_sensitive",
+            "intent_tags": ["planning"],
+            "domain_hints": ["goals"],
+        },
+        "domains_referenced": ["goals"],
+        "retrieved_attribute_ids": [attribute_id],
+    }
+
+    for _ in range(10):
+        response = client.post("/query/feedback", json=payload, headers=headers)
+        assert response.status_code == 200
+
+    row = _db(client).execute(
+        "SELECT confidence FROM attributes WHERE id = ?",
+        (attribute_id,),
+    ).fetchone()
+    assert row is not None
+    assert float(row[0]) == pytest.approx(0.65)
+
+    history = _db(client).execute(
+        """
+        SELECT previous_confidence, changed_by, reason
+        FROM attribute_history
+        WHERE attribute_id = ?
+        ORDER BY changed_at ASC, id ASC
+        """,
+        (attribute_id,),
+    ).fetchall()
+    assert history
+    assert history[-1][0] == pytest.approx(0.8)
+    assert history[-1][1] == "inferred"
+    assert str(history[-1][2]).startswith("feedback_calibration:")
 
 
 def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient, monkeypatch):

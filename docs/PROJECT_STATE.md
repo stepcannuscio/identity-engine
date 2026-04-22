@@ -404,6 +404,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - retrieval now loads calibration deltas for the active source profile and
   applies them as a capped adjustment during attribute scoring; calibration can
   nudge ranking but cannot override the main deterministic relevance signal
+- query feedback rows can now persist the retrieved attribute ids for the
+  grounded answer, still as local-only feedback metadata
+- repeated low-rated feedback linked to the same inferred attribute now writes
+  an append-only `attribute_history` entry and lowers attribute confidence
+  conservatively without mutating user-authored values
 - query feedback writes now trigger a background-safe recalibration pass after
   each 10 new feedback records
 - low-confidence coverage notes can now surface recent repeated
@@ -601,7 +606,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - Phase 2 (`Passive Session Learning`) is implemented on the backend:
   qualifying query exchanges can stage review-only conversation signals, and
   Teach now exposes list/accept/dismiss APIs for those staged items
-- Phases 3 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
+- Phase 3 (`Feedback Recalibration Loop`) is implemented on the backend:
+  feedback now drives both bounded domain-level retrieval calibration and
+  conservative attribute-level confidence downgrades for repeatedly low-rated
+  inferred attributes, with append-only audit history
+- Phases 4 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
 - the remaining Phase 2 gap is frontend depth rather than backend plumbing:
   the Teach bootstrap card and review endpoints exist, but a richer dedicated
   conversation-signal review workflow has not been built yet

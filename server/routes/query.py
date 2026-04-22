@@ -97,6 +97,11 @@ def _is_sensitive_query(query_text: str, attributes: list[dict]) -> bool:
 
 def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
     domains = list(getattr(context.assembled_context, "domains_used", []))
+    retrieved_attribute_ids = [
+        str(attribute.get("id"))
+        for attribute in getattr(context, "attributes", [])
+        if attribute.get("id")
+    ]
     coverage = context.coverage
     acquisition = getattr(context, "acquisition", None)
     if acquisition is None:
@@ -109,6 +114,7 @@ def _metadata_from_context(context, duration_ms: int, privacy) -> QueryMetadata:
             domain_hints=list(getattr(context, "domain_hints", [])),
         ),
         attributes_used=len(context.attributes),
+        retrieved_attribute_ids=retrieved_attribute_ids,
         backend_used=context.backend,
         requested_backend=getattr(context, "requested_backend", context.backend),
         domains_referenced=domains,
@@ -165,6 +171,7 @@ def record_feedback(
                 intent_tags=payload.intent.intent_tags,
                 domain_hints=payload.intent.domain_hints,
                 domains_referenced=payload.domains_referenced,
+                retrieved_attribute_ids=payload.retrieved_attribute_ids,
             ),
         )
         if payload.voice_feedback is not None:

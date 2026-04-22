@@ -218,6 +218,7 @@ CREATE TABLE IF NOT EXISTS query_feedback (
     intent_tags_json    TEXT NOT NULL DEFAULT '[]',
     domain_hints_json   TEXT NOT NULL DEFAULT '[]',
     domains_json        TEXT NOT NULL DEFAULT '[]',
+    retrieved_attribute_ids_json TEXT NOT NULL DEFAULT '[]',
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -564,6 +565,14 @@ def _provider_status_schema_needs_migration(conn) -> bool:
     )
 
 
+def _query_feedback_schema_needs_attribute_id_migration(conn) -> bool:
+    query_feedback_sql = _read_schema_sql(conn, kind="table", name="query_feedback")
+    return bool(
+        query_feedback_sql
+        and "retrieved_attribute_ids_json" not in query_feedback_sql
+    )
+
+
 def _app_settings_needs_private_server_migration(conn) -> bool:
     app_settings_sql = _read_schema_sql(conn, kind="table", name="app_settings")
     return bool(
@@ -702,6 +711,16 @@ def _migrate_provider_status_table(conn) -> None:
     conn.commit()
 
 
+def _migrate_query_feedback_add_attribute_ids(conn) -> None:
+    conn.execute(
+        """
+        ALTER TABLE query_feedback
+        ADD COLUMN retrieved_attribute_ids_json TEXT NOT NULL DEFAULT '[]'
+        """
+    )
+    conn.commit()
+
+
 def _scrub_reflection_session_queries(conn) -> None:
     rows = conn.execute(
         """
@@ -759,6 +778,8 @@ def create_tables(conn) -> None:
         _migrate_app_settings_for_private_server(conn)
     if _provider_status_schema_needs_migration(conn):
         _migrate_provider_status_table(conn)
+    if _query_feedback_schema_needs_attribute_id_migration(conn):
+        _migrate_query_feedback_add_attribute_ids(conn)
     conn.execute(
         """
         INSERT OR IGNORE INTO app_settings (
