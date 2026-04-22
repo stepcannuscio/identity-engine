@@ -376,7 +376,7 @@ class TeachQuestionResponse(BaseModel):
     prompt: str
     domain: str | None
     intent_key: str
-    source: Literal["catalog", "generated"]
+    source: Literal["catalog", "generated", "synthesis", "contradiction"]
     status: str
     priority: float
 
@@ -384,7 +384,14 @@ class TeachQuestionResponse(BaseModel):
 class TeachCard(BaseModel):
     """One Teach/onboarding card returned to the frontend."""
 
-    type: Literal["welcome", "privacy_setup", "security_setup", "question", "conversation_signal"]
+    type: Literal[
+        "welcome",
+        "privacy_setup",
+        "security_setup",
+        "question",
+        "conversation_signal",
+        "synthesis_review",
+    ]
     title: str
     body: str
     payload: dict[str, object] = {}
@@ -436,6 +443,44 @@ class StagedSessionSignalActionResponse(BaseModel):
     status: Literal["accepted", "dismissed"]
     attributes_saved: int = 0
     preference_signals_saved: int = 0
+
+
+class CrossDomainSynthesisResponse(BaseModel):
+    """One staged cross-domain synthesis awaiting review."""
+
+    id: str
+    theme_label: str
+    domains_involved: list[str]
+    strength: float
+    synthesis_text: str | None = None
+    evidence_ids: list[str] = []
+    status: Literal["pending_review", "accepted", "dismissed"]
+    created_at: datetime
+
+
+class ContradictionFlagResponse(BaseModel):
+    """One staged contradiction flag awaiting review."""
+
+    id: str
+    attribute_a_id: str
+    attribute_a_domain: str
+    attribute_a_label: str
+    attribute_a_value: str
+    attribute_b_id: str
+    attribute_b_domain: str
+    attribute_b_label: str
+    attribute_b_value: str
+    polarity_axis: str
+    confidence: float
+    status: Literal["pending", "resolved", "dismissed"]
+    created_at: datetime
+
+
+class TeachSynthesisResponse(BaseModel):
+    """Cross-domain Teach review payload."""
+
+    syntheses: list[CrossDomainSynthesisResponse]
+    contradictions: list[ContradictionFlagResponse]
 
 
 class TeachQuestionAnswerRequest(BaseModel):

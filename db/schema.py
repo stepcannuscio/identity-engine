@@ -301,9 +301,11 @@ CREATE TABLE IF NOT EXISTS teach_questions (
     prompt           TEXT NOT NULL,
     domain           TEXT REFERENCES domains(name) ON DELETE SET NULL,
     intent_key       TEXT NOT NULL,
-    source           TEXT NOT NULL CHECK(source IN ('catalog', 'generated')),
+    source           TEXT NOT NULL CHECK(source IN (
+                         'catalog', 'generated', 'synthesis', 'contradiction'
+                     )),
     status           TEXT NOT NULL DEFAULT 'pending'
-                         CHECK(status IN ('pending', 'answered', 'dismissed')),
+                        CHECK(status IN ('pending', 'answered', 'dismissed')),
     priority         REAL NOT NULL DEFAULT 0.0,
     onboarding_stage TEXT NOT NULL DEFAULT 'teaching'
                          CHECK(onboarding_stage IN ('welcome', 'privacy', 'security', 'teaching')),
@@ -573,6 +575,14 @@ def _query_feedback_schema_needs_attribute_id_migration(conn) -> bool:
     )
 
 
+def _teach_questions_schema_needs_source_migration(conn) -> bool:
+    teach_questions_sql = _read_schema_sql(conn, kind="table", name="teach_questions")
+    return bool(
+        teach_questions_sql
+        and "'synthesis'" not in teach_questions_sql
+    )
+
+
 def _app_settings_needs_private_server_migration(conn) -> bool:
     app_settings_sql = _read_schema_sql(conn, kind="table", name="app_settings")
     return bool(
@@ -721,6 +731,78 @@ def _migrate_query_feedback_add_attribute_ids(conn) -> None:
     conn.commit()
 
 
+def _migrate_teach_questions_source_constraint(conn) -> None:
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("ALTER TABLE teach_questions RENAME TO teach_questions_old")
+        conn.execute("ALTER TABLE teach_question_feedback RENAME TO teach_question_feedback_old")
+        conn.executescript(
+            "\n\n".join(
+                [
+                    TEACH_QUESTIONS_TABLE_SQL,
+                    TEACH_QUESTIONS_LOOKUP_INDEX_SQL,
+                    TEACH_FEEDBACK_TABLE_SQL,
+                    TEACH_FEEDBACK_LOOKUP_INDEX_SQL,
+                ]
+            )
+        )
+        conn.execute(
+            """
+            INSERT INTO teach_questions (
+                id,
+                prompt,
+                domain,
+                intent_key,
+                source,
+                status,
+                priority,
+                onboarding_stage,
+                asked_count,
+                answer_count,
+                last_presented_at,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                prompt,
+                domain,
+                intent_key,
+                source,
+                status,
+                priority,
+                onboarding_stage,
+                asked_count,
+                answer_count,
+                last_presented_at,
+                created_at,
+                updated_at
+            FROM teach_questions_old
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO teach_question_feedback (
+                id,
+                question_id,
+                feedback,
+                created_at
+            )
+            SELECT
+                id,
+                question_id,
+                feedback,
+                created_at
+            FROM teach_question_feedback_old
+            """
+        )
+        conn.execute("DROP TABLE teach_question_feedback_old")
+        conn.execute("DROP TABLE teach_questions_old")
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def _scrub_reflection_session_queries(conn) -> None:
     rows = conn.execute(
         """
@@ -780,6 +862,8 @@ def create_tables(conn) -> None:
         _migrate_provider_status_table(conn)
     if _query_feedback_schema_needs_attribute_id_migration(conn):
         _migrate_query_feedback_add_attribute_ids(conn)
+    if _teach_questions_schema_needs_source_migration(conn):
+        _migrate_teach_questions_source_constraint(conn)
     conn.execute(
         """
         INSERT OR IGNORE INTO app_settings (

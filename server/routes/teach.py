@@ -32,10 +32,16 @@ from engine.staged_signal_reviewer import (
     dismiss_signal,
     list_pending_signals,
 )
+from engine.synthesis_engine import (
+    list_pending_cross_domain_intelligence,
+    refresh_cross_domain_intelligence,
+)
 from server.db import get_db_connection
 from server.models.schemas import (
     AttributeResponse,
     CapturePreviewWriteItem,
+    ContradictionFlagResponse,
+    CrossDomainSynthesisResponse,
     PrivacyPreferenceOption,
     PrivacyProfileOption,
     ProviderCredentialField,
@@ -51,6 +57,7 @@ from server.models.schemas import (
     TeachQuestionFeedbackRequest,
     TeachQuestionResponse,
     TeachQuestionsResponse,
+    TeachSynthesisResponse,
 )
 
 router = APIRouter(tags=["teach"])
@@ -102,6 +109,43 @@ def _serialize_staged_signals(items) -> list[StagedSessionSignalResponse]:
             exchange_index=item.exchange_index,
             signal_type=cast(Any, item.signal_type),
             payload=cast(dict[str, object], item.payload),
+            created_at=item.created_at,
+        )
+        for item in items
+    ]
+
+
+def _serialize_syntheses(items) -> list[CrossDomainSynthesisResponse]:
+    return [
+        CrossDomainSynthesisResponse(
+            id=item.id,
+            theme_label=item.theme_label,
+            domains_involved=list(item.domains_involved),
+            strength=item.strength,
+            synthesis_text=item.synthesis_text,
+            evidence_ids=list(item.evidence_ids),
+            status=cast(Any, item.status),
+            created_at=item.created_at,
+        )
+        for item in items
+    ]
+
+
+def _serialize_contradictions(items) -> list[ContradictionFlagResponse]:
+    return [
+        ContradictionFlagResponse(
+            id=item.id,
+            attribute_a_id=item.attribute_a_id,
+            attribute_a_domain=item.attribute_a_domain,
+            attribute_a_label=item.attribute_a_label,
+            attribute_a_value=item.attribute_a_value,
+            attribute_b_id=item.attribute_b_id,
+            attribute_b_domain=item.attribute_b_domain,
+            attribute_b_label=item.attribute_b_label,
+            attribute_b_value=item.attribute_b_value,
+            polarity_axis=item.polarity_axis,
+            confidence=item.confidence,
+            status=cast(Any, item.status),
             created_at=item.created_at,
         )
         for item in items
@@ -180,6 +224,9 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
         )
         staged_signal_count = count_pending_signals(conn)
         staged_signals = _serialize_staged_signals(list_pending_signals(conn, limit=3))
+        cross_domain = list_pending_cross_domain_intelligence(conn)
+        syntheses = _serialize_syntheses(cross_domain.syntheses[:3])
+        contradictions = _serialize_contradictions(cross_domain.contradictions[:3])
 
         posture = resolve_security_posture(conn)
 
@@ -234,6 +281,18 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
                 },
             )
         )
+    if syntheses or contradictions:
+        cards.append(
+            TeachCard(
+                type="synthesis_review",
+                title="Themes and tensions",
+                body="Review patterns the engine noticed across multiple domains of your identity.",
+                payload={
+                    "syntheses": [item.model_dump(mode="json") for item in syntheses],
+                    "contradictions": [item.model_dump(mode="json") for item in contradictions],
+                },
+            )
+        )
 
     return TeachBootstrapResponse(
         onboarding_completed=bool(settings["onboarding_completed"]),
@@ -274,6 +333,19 @@ def conversation_signals(request: Request) -> StagedSessionSignalsResponse:
     with get_db_connection() as conn:
         items = list_pending_signals(conn)
     return StagedSessionSignalsResponse(signals=_serialize_staged_signals(items))
+
+
+@router.get("/teach/synthesis", response_model=TeachSynthesisResponse)
+def teach_synthesis(request: Request) -> TeachSynthesisResponse:
+    """Return pending cross-domain syntheses and contradiction flags."""
+    _ = request
+    with get_db_connection() as conn:
+        refresh_cross_domain_intelligence(conn)
+        items = list_pending_cross_domain_intelligence(conn)
+    return TeachSynthesisResponse(
+        syntheses=_serialize_syntheses(items.syntheses),
+        contradictions=_serialize_contradictions(items.contradictions),
+    )
 
 
 @router.post("/teach/questions/{question_id}/answer", response_model=None)

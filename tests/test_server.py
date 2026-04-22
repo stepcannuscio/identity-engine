@@ -2387,6 +2387,77 @@ def test_dismiss_conversation_signal_marks_item_processed(client):
     assert processed == (1,)
 
 
+def test_teach_synthesis_returns_pending_cross_domain_items(client):
+    _insert_attribute(
+        _db(client),
+        "personality",
+        "social_orientation",
+        "I am introverted and need quiet to recharge after groups.",
+    )
+    _insert_attribute(
+        _db(client),
+        "patterns",
+        "meeting_energy",
+        "Big meetings drain my social battery quickly.",
+    )
+    _insert_attribute(
+        _db(client),
+        "relationships",
+        "connection_needs",
+        "I connect best in one-on-one conversations.",
+    )
+    _insert_attribute(
+        _db(client),
+        "goals",
+        "exploration_style",
+        "I stay creative when I keep things spontaneous and flexible.",
+    )
+    _insert_attribute(
+        _db(client),
+        "patterns",
+        "workflow_structure",
+        "I do my best work with highly structured routines and organized plans.",
+    )
+
+    response = client.get("/teach/synthesis", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["syntheses"]
+    assert body["syntheses"][0]["theme_label"] == "social energy"
+    assert body["contradictions"]
+    assert body["contradictions"][0]["polarity_axis"] == "structure_spontaneity"
+
+
+def test_teach_bootstrap_includes_synthesis_review_card(client):
+    _insert_attribute(
+        _db(client),
+        "personality",
+        "social_orientation",
+        "I am introverted and need quiet to recharge after groups.",
+    )
+    _insert_attribute(
+        _db(client),
+        "patterns",
+        "meeting_energy",
+        "Large meetings drain my social battery quickly.",
+    )
+    _insert_attribute(
+        _db(client),
+        "relationships",
+        "connection_needs",
+        "I prefer one-on-one conversations over crowded gatherings.",
+    )
+
+    response = client.get("/teach/bootstrap", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    synthesis_cards = [card for card in cards if card["type"] == "synthesis_review"]
+    assert synthesis_cards
+    assert synthesis_cards[0]["payload"]["syntheses"]
+
+
 def test_security_posture_override_persists_unknown_check_completion(client, monkeypatch):
     posture = {
         "platform": "macos",

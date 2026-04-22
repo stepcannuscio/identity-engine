@@ -31,6 +31,7 @@ This document captures the current system state after completing:
 - Generalized Evidence Layer
 - Passive Session Learning Staging
 - Conversation Signal Review
+- Cross-Domain Synthesis Staging
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -540,6 +541,28 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - dismissing or accepting a staged signal marks it processed without deleting
   history from `extracted_session_signals`
 
+### 27. Cross-Domain Synthesis Staging
+- the first backend slice of Phase 4 from `docs/MAXIMIZE_INTELLIGENCE.md` is
+  now implemented with deterministic local-only staging
+- active high-confidence attributes can now be scanned for:
+  - repeated semantic themes spanning 3+ domains
+  - polarity tensions across high-confidence attributes
+- cross-domain theme staging is implemented in `engine/synthesis_engine.py`
+  and currently produces deterministic synthesis summaries rather than an
+  LLM-written narrative
+- contradiction detection is implemented in
+  `engine/contradiction_detector.py` using a static polarity lexicon
+- staged outputs persist in:
+  - `cross_domain_synthesis`
+  - `contradiction_flags`
+- Teach now surfaces these reviewable items through:
+  - `GET /teach/synthesis`
+  - `Teach` bootstrap `synthesis_review` cards
+- Teach question planning now prioritizes staged synthesis/contradiction review
+  prompts ahead of generic catalog questions when pending items exist
+- review remains user-mediated; no synthesis or contradiction result writes
+  directly into canonical attributes
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -610,7 +633,13 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   feedback now drives both bounded domain-level retrieval calibration and
   conservative attribute-level confidence downgrades for repeatedly low-rated
   inferred attributes, with append-only audit history
-- Phases 4 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
+- Phase 4 (`Cross-Domain Synthesis`) is partially implemented on the backend:
+  deterministic theme detection, contradiction staging, Teach queue
+  integration, and a synthesis review API are live
+- the remaining Phase 4 gap is richer review UX and synthesis resolution:
+  synthesis/contradiction accept-dismiss workflows and optional local
+  narrative generation have not been built yet
+- Phases 5 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
 - the remaining Phase 2 gap is frontend depth rather than backend plumbing:
   the Teach bootstrap card and review endpoints exist, but a richer dedicated
   conversation-signal review workflow has not been built yet
@@ -694,6 +723,8 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   query sessions without auto-promoting them into canonical truth
 - review, accept, or dismiss staged conversation signals through Teach APIs
   while preserving audit-friendly local history
+- detect cross-domain identity themes and contradiction candidates locally,
+  then surface them in Teach before generic onboarding prompts
 
 ---
 

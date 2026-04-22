@@ -81,6 +81,50 @@ _CLUSTERS: tuple[ConceptCluster, ...] = (
         ),
     ),
     ConceptCluster(
+        key="social_energy",
+        domains=frozenset({"personality", "patterns", "relationships", "fears"}),
+        phrases=_phrase_values(
+            [
+                "how i recharge",
+                "being around people",
+                "social battery",
+                "drained by meetings",
+            ]
+        ),
+        synonyms=_normalize_values(
+            [
+                "introvert",
+                "introverted",
+                "introversion",
+                "extrovert",
+                "extroverted",
+                "extroversion",
+                "solitude",
+                "alone",
+                "quiet",
+                "reserved",
+                "crowds",
+                "groups",
+                "meeting",
+                "meetings",
+                "social",
+                "recharge",
+            ]
+        ),
+        label_aliases=_normalize_values(
+            [
+                "social_orientation",
+                "social_energy",
+                "solitude_need",
+                "meeting_energy",
+                "crowd_tolerance",
+                "people_energy",
+                "connection_needs",
+                "one_on_one_preference",
+            ]
+        ),
+    ),
+    ConceptCluster(
         key="personality_core",
         domains=frozenset({"personality"}),
         phrases=_phrase_values(["who am i", "what am i like", "my personality"]),
@@ -107,6 +151,40 @@ _CLUSTERS: tuple[ConceptCluster, ...] = (
         ),
     ),
     ConceptCluster(
+        key="autonomy_boundaries",
+        domains=frozenset({"values", "goals", "relationships", "voice"}),
+        phrases=_phrase_values(
+            [
+                "where do i need space",
+                "how independent am i",
+                "my boundaries",
+            ]
+        ),
+        synonyms=_normalize_values(
+            [
+                "autonomy",
+                "independence",
+                "independent",
+                "boundary",
+                "boundaries",
+                "space",
+                "privacy",
+                "control",
+                "ownership",
+                "self_directed",
+            ]
+        ),
+        label_aliases=_normalize_values(
+            [
+                "autonomy_need",
+                "boundary_style",
+                "privacy_preference",
+                "independence_style",
+                "self_direction",
+            ]
+        ),
+    ),
+    ConceptCluster(
         key="values_priorities",
         domains=frozenset({"values"}),
         phrases=_phrase_values(["what matters to me", "what matters most", "my values"]),
@@ -129,6 +207,41 @@ _CLUSTERS: tuple[ConceptCluster, ...] = (
                 "decision_principles",
                 "non_negotiables",
                 "guiding_principles",
+            ]
+        ),
+    ),
+    ConceptCluster(
+        key="structure_rhythm",
+        domains=frozenset({"goals", "patterns", "voice"}),
+        phrases=_phrase_values(
+            [
+                "how i stay organized",
+                "how i plan",
+                "my routine",
+            ]
+        ),
+        synonyms=_normalize_values(
+            [
+                "structure",
+                "structured",
+                "organize",
+                "organized",
+                "planning",
+                "planful",
+                "routine",
+                "predictable",
+                "clarity",
+                "cadence",
+                "rhythm",
+            ]
+        ),
+        label_aliases=_normalize_values(
+            [
+                "planning_style",
+                "structure_preference",
+                "routine_need",
+                "workflow_rhythm",
+                "cadence_preference",
             ]
         ),
     ),
@@ -300,3 +413,35 @@ def concept_alias_tokens_for_text(text: str) -> set[str]:
     """Return deterministic concept alias tokens for one text blob."""
     tokens = tokenize(text)
     return expand_query_tokens(tokens, query_text=text)
+
+
+def matching_concept_keys_for_text(
+    text: str,
+    *,
+    domain: str | None = None,
+) -> set[str]:
+    """Return concept-cluster keys that match one text blob."""
+    normalized_text = " ".join(text.lower().split())
+    tokens = tokenize(text)
+    if not tokens and not normalized_text:
+        return set()
+
+    domain_hints = {domain} if domain else set()
+    matched: set[str] = set()
+    for cluster in _CLUSTERS:
+        if domain_hints and cluster.domains and not cluster.domains.intersection(domain_hints):
+            continue
+        alias_tokens: set[str] = set()
+        for alias in cluster.label_aliases:
+            alias_tokens.update(tokenize(alias.replace("_", " ")))
+        if tokens.intersection(cluster.synonyms) or tokens.intersection(alias_tokens):
+            matched.add(cluster.key)
+            continue
+        if cluster.phrases and find_matching_phrases(normalized_text, tuple(cluster.phrases)):
+            matched.add(cluster.key)
+    return matched
+
+
+def describe_concept_key(key: str) -> str:
+    """Return a compact human-readable label for a concept cluster."""
+    return key.replace("_", " ")
