@@ -1576,6 +1576,58 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
     ]
 
 
+def test_post_query_feedback_triggers_retrieval_calibration_after_batch(client: TestClient):
+    headers = _login_headers(client)
+    payload = {
+        "query": "How should I plan my week?",
+        "response": "Protect your focus blocks and group shallow work.",
+        "query_type": "simple",
+        "backend_used": "local",
+        "confidence": "low_confidence",
+        "intent": {
+            "source_profile": "preference_sensitive",
+            "intent_tags": ["planning"],
+            "domain_hints": ["goals"],
+        },
+        "domains_referenced": ["goals"],
+    }
+
+    for _ in range(7):
+        response = client.post(
+            "/query/feedback",
+            json={**payload, "feedback": "missed_context"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    for _ in range(3):
+        response = client.post(
+            "/query/feedback",
+            json={**payload, "feedback": "helpful"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    rows = _db(client).execute(
+        """
+        SELECT feedback_pattern, score_delta, observation_count
+        FROM retrieval_calibration
+        WHERE domain = 'goals' AND source_profile = 'preference_sensitive'
+        ORDER BY feedback_pattern
+        """
+    ).fetchall()
+
+    assert len(rows) == 4
+    assert {row[0] for row in rows} == {
+        "helpful",
+        "missed_context",
+        "ungrounded",
+        "wrong_focus",
+    }
+    assert all(row[2] == 10 for row in rows)
+    assert all(row[1] is not None for row in rows)
+
+
 def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient):
     response = client.post(
         "/query/feedback",

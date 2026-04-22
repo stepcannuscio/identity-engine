@@ -548,6 +548,7 @@ def assemble_query_context(
         resolved_conn,
         domain_hints=resolved_domain_hints,
         intent_tags=resolved_intent_tags,
+        source_profile=resolved_source_profile,
         provider_config=provider_config,
     )
     preference_context = get_relevant_preference_context(

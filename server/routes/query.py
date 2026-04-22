@@ -14,6 +14,7 @@ from db.preference_signals import PreferenceSignalInput, record_preference_signa
 from db.query_feedback import QueryFeedbackInput, record_query_feedback
 from db.voice_feedback import VoiceFeedbackInput, record_voice_feedback
 from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
+from engine.feedback_calibrator import maybe_run_feedback_calibration
 from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
 from engine.query_engine import (
@@ -199,6 +200,7 @@ def record_feedback(
                     source="explicit_feedback",
                 ),
             )
+        maybe_run_feedback_calibration(conn)
     return QueryFeedbackResponse(id=feedback_id)
 
 

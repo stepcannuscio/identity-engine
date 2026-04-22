@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from engine.concept_expander import expand_query_tokens
 from engine.embedding_index import compute_similarity_bonus
+from engine.feedback_calibrator import load_retrieval_calibration
 from engine.text_utils import contains_any_phrase, find_matching_phrases, tokenize
 
 SIMPLE_BUDGET = {
@@ -163,6 +164,7 @@ def score_attribute(
     domain_hints: list[str] | None = None,
     intent_tags: list[str] | None = None,
     similarity_bonus: float = 0.0,
+    calibration_delta: float = 0.0,
 ) -> float:
     """Score an attribute against the query using deterministic relevance heuristics."""
     query_tokens = _tokenize(query)
@@ -244,6 +246,7 @@ def score_attribute(
             + (domain_score * 0.30)
             + (confidence * 0.16)
             + min(max(similarity_bonus, 0.0), 0.10)
+            + max(min(calibration_delta, 0.15), -0.15)
             + trust_score
             + _recency_score(attribute)
             + _phrase_boost(query, attribute)
@@ -361,6 +364,7 @@ def retrieve_attribute_candidates(
     *,
     domain_hints: list[str] | None = None,
     intent_tags: list[str] | None = None,
+    source_profile: str | None = None,
     provider_config=None,
 ) -> list[dict]:
     """Return scored identity-attribute candidates before final prompt blending."""
@@ -415,6 +419,10 @@ def retrieve_attribute_candidates(
         scored,
         provider_config=provider_config,
     )
+    calibration = load_retrieval_calibration(
+        conn,
+        source_profile=source_profile,
+    )
     for attr in scored:
         attr["score"] = score_attribute(
             query,
@@ -422,6 +430,7 @@ def retrieve_attribute_candidates(
             domain_hints=domain_hints,
             intent_tags=intent_tags,
             similarity_bonus=similarity_bonus.get(str(attr["id"]), 0.0),
+            calibration_delta=calibration.get(str(attr["domain"]), 0.0),
         )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
@@ -439,12 +448,20 @@ def retrieve_attribute_candidates(
     return filtered
 
 
-def retrieve_attributes(query: str, query_type: str, conn, *, provider_config=None) -> list[dict]:
+def retrieve_attributes(
+    query: str,
+    query_type: str,
+    conn,
+    *,
+    source_profile: str | None = None,
+    provider_config=None,
+) -> list[dict]:
     """Retrieve and score active attributes for a query, then apply query budget rules."""
     filtered = retrieve_attribute_candidates(
         query,
         query_type,
         conn,
+        source_profile=source_profile,
         provider_config=provider_config,
     )
     budget = budget_for_query_type(query_type)

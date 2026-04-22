@@ -20,6 +20,7 @@ from engine.coverage_evaluator import (
     CoverageAssessment,
     evaluate_coverage,
 )
+from engine.feedback_calibrator import build_recent_feedback_gap_note
 from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import build_query_plan
@@ -140,7 +141,16 @@ def _build_query_context(
         or any(chunk.get("routing") == "local_only" for chunk in assembled_context.artifact_chunks)
     ):
         assembled_context = dc_replace(assembled_context, had_local_only_stripped=True)
-    coverage = evaluate_coverage(assembled_context, backend=backend)
+    feedback_gap_note = build_recent_feedback_gap_note(
+        conn,
+        domains=assembled_context.domains_used or domain_hints,
+        source_profile=source_profile,
+    )
+    coverage = evaluate_coverage(
+        assembled_context,
+        backend=backend,
+        feedback_gap_note=feedback_gap_note,
+    )
     acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
     messages = build_prompt(
         assembled_context,

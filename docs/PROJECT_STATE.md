@@ -24,6 +24,7 @@ This document captures the current system state after completing:
 - Query Usefulness Tuning + Eval Harness
 - Semantic Retrieval Bridge
 - Query Feedback Loop
+- Feedback Recalibration Loop
 - Voice Fidelity Tuning
 - Extraction Consent + Audit Redaction + Artifact Upload Guardrails
 - Frontend Route Code-Splitting
@@ -395,6 +396,19 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - `wrong_focus`
 - query feedback is stored separately from canonical attributes and does not
   auto-promote into identity truth
+- deterministic retrieval calibration is now derived from accumulated
+  `query_feedback` rows and persisted in:
+  - `retrieval_calibration`
+- calibration is computed conservatively per `(domain, source_profile,
+  feedback_pattern)` and only applies bounded domain-level score deltas
+- retrieval now loads calibration deltas for the active source profile and
+  applies them as a capped adjustment during attribute scoring; calibration can
+  nudge ranking but cannot override the main deterministic relevance signal
+- query feedback writes now trigger a background-safe recalibration pass after
+  each 10 new feedback records
+- low-confidence coverage notes can now surface recent repeated
+  `missed_context` patterns for the same domain/profile so the UI makes known
+  grounding gaps visible instead of treating them as generic thin context
 - the repository now includes a versioned deterministic query eval corpus at:
   - `evals/query_usefulness/v1.json`
 - the evaluation runner lives at:
