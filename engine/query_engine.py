@@ -8,6 +8,7 @@ the pipeline can either hedge or skip LLM inference when ground-truth is thin.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace as dc_replace
 from datetime import UTC, datetime
 from typing import Any
@@ -23,7 +24,10 @@ from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import build_query_plan
 from engine.session import Session
+from engine.session_learner import maybe_extract_from_exchange
 from engine.setup_state import resolve_local_provider_config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -125,6 +129,7 @@ def _build_query_context(
         conn,
         intent_tags=intent_tags,
         domain_hints=domain_hints,
+        provider_config=provider_config,
     )
     backend = _backend_label(provider_config)
     identity_attributes = _identity_attributes_for_backend(assembled_context, backend)
@@ -305,6 +310,7 @@ def apply_local_fallback_audit(
 
 
 def record_query_result(
+    conn,
     session: Session,
     context: QueryContext,
     response: str,
@@ -315,6 +321,19 @@ def record_query_result(
     session.query_count += 1
     session.attributes_retrieved += len(context.attributes)
     session.log_query(audit, query_type=context.query_type)
+    try:
+        maybe_extract_from_exchange(
+            conn,
+            session,
+            user_query=context.query,
+            coverage_confidence=context.coverage.confidence,
+            retrieved_attributes=context.attributes,
+            provider_config=context.provider_config,
+            source_profile=context.source_profile,
+            domain_hints=context.domain_hints,
+        )
+    except Exception:
+        logger.exception("Passive session learning failed after query completion.")
 
 
 def record_blocked_query(session: Session, context: QueryContext, error: Exception) -> None:
@@ -335,14 +354,14 @@ def query(
 
     if context.forced_response is not None:
         audit = build_forced_artifact_response_decision(context, provider_config)
-        record_query_result(session, context, context.forced_response, audit)
+        record_query_result(conn, session, context, context.forced_response, audit)
         return context.forced_response
 
     if context.coverage.confidence == "insufficient_data" and not _privacy_would_block(
         context
     ):
         audit = build_insufficient_data_decision(context, context.provider_config)
-        record_query_result(session, context, INSUFFICIENT_DATA_MESSAGE, audit)
+        record_query_result(conn, session, context, INSUFFICIENT_DATA_MESSAGE, audit)
         return INSUFFICIENT_DATA_MESSAGE
 
     try:
@@ -359,6 +378,12 @@ def query(
         raise
     response = result.content
     assert isinstance(response, str)
-    record_query_result(session, context, response, apply_local_fallback_audit(result.metadata, context))
+    record_query_result(
+        conn,
+        session,
+        context,
+        response,
+        apply_local_fallback_audit(result.metadata, context),
+    )
 
     return response

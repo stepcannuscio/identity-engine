@@ -26,6 +26,12 @@ from engine.teach_planner import (
     mark_question_answered,
     record_question_feedback,
 )
+from engine.staged_signal_reviewer import (
+    accept_signal,
+    count_pending_signals,
+    dismiss_signal,
+    list_pending_signals,
+)
 from server.db import get_db_connection
 from server.models.schemas import (
     AttributeResponse,
@@ -36,6 +42,9 @@ from server.models.schemas import (
     ProviderStatusResponse,
     SecurityCheckResponse,
     SecurityPostureResponse,
+    StagedSessionSignalActionResponse,
+    StagedSessionSignalResponse,
+    StagedSessionSignalsResponse,
     TeachBootstrapResponse,
     TeachCard,
     TeachQuestionAnswerRequest,
@@ -80,6 +89,20 @@ def _serialize_questions(items) -> list[TeachQuestionResponse]:
             source=item.source,  # type: ignore[arg-type]
             status=item.status,
             priority=item.priority,
+        )
+        for item in items
+    ]
+
+
+def _serialize_staged_signals(items) -> list[StagedSessionSignalResponse]:
+    return [
+        StagedSessionSignalResponse(
+            id=item.id,
+            session_id=item.session_id,
+            exchange_index=item.exchange_index,
+            signal_type=cast(Any, item.signal_type),
+            payload=cast(dict[str, object], item.payload),
+            created_at=item.created_at,
         )
         for item in items
     ]
@@ -155,6 +178,8 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
                 resolve_active_provider_config(conn, request.app.state.llm_config),
             )
         )
+        staged_signal_count = count_pending_signals(conn)
+        staged_signals = _serialize_staged_signals(list_pending_signals(conn, limit=3))
 
         posture = resolve_security_posture(conn)
 
@@ -197,6 +222,18 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
                 payload={"question_id": questions[0].id, "domain": questions[0].domain},
             )
         )
+    if staged_signal_count:
+        cards.append(
+            TeachCard(
+                type="conversation_signal",
+                title="From your conversations",
+                body="Review passive learning signals captured from recent query sessions.",
+                payload={
+                    "count": staged_signal_count,
+                    "signals": [item.model_dump(mode="json") for item in staged_signals],
+                },
+            )
+        )
 
     return TeachBootstrapResponse(
         onboarding_completed=bool(settings["onboarding_completed"]),
@@ -228,6 +265,15 @@ def questions(request: Request) -> TeachQuestionsResponse:
             resolve_active_provider_config(conn, request.app.state.llm_config),
         )
     return TeachQuestionsResponse(questions=_serialize_questions(items))
+
+
+@router.get("/teach/conversation-signals", response_model=StagedSessionSignalsResponse)
+def conversation_signals(request: Request) -> StagedSessionSignalsResponse:
+    """Return staged passive-learning signals awaiting Teach review."""
+    _ = request
+    with get_db_connection() as conn:
+        items = list_pending_signals(conn)
+    return StagedSessionSignalsResponse(signals=_serialize_staged_signals(items))
 
 
 @router.post("/teach/questions/{question_id}/answer", response_model=None)
@@ -316,3 +362,43 @@ def feedback(
             raise HTTPException(status_code=404, detail="teach question not found")
         record_question_feedback(conn, question_id, payload.feedback)
     return _serialize_bootstrap(request)
+
+
+@router.post(
+    "/teach/conversation-signals/{signal_id}/accept",
+    response_model=StagedSessionSignalActionResponse,
+)
+def accept_conversation_signal(signal_id: str, request: Request) -> StagedSessionSignalActionResponse:
+    """Accept and promote one staged conversation-derived signal."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = accept_signal(conn, signal_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StagedSessionSignalActionResponse(
+        signal_id=result.signal_id,
+        status=cast(Any, result.status),
+        attributes_saved=result.attributes_saved,
+        preference_signals_saved=result.preference_signals_saved,
+    )
+
+
+@router.post(
+    "/teach/conversation-signals/{signal_id}/dismiss",
+    response_model=StagedSessionSignalActionResponse,
+)
+def dismiss_conversation_signal(signal_id: str, request: Request) -> StagedSessionSignalActionResponse:
+    """Dismiss one staged conversation-derived signal."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = dismiss_signal(conn, signal_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StagedSessionSignalActionResponse(
+        signal_id=result.signal_id,
+        status=cast(Any, result.status),
+        attributes_saved=result.attributes_saved,
+        preference_signals_saved=result.preference_signals_saved,
+    )

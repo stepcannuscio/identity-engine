@@ -382,7 +382,7 @@ class TeachQuestionResponse(BaseModel):
 class TeachCard(BaseModel):
     """One Teach/onboarding card returned to the frontend."""
 
-    type: Literal["welcome", "privacy_setup", "security_setup", "question"]
+    type: Literal["welcome", "privacy_setup", "security_setup", "question", "conversation_signal"]
     title: str
     body: str
     payload: dict[str, object] = {}
@@ -408,6 +408,32 @@ class TeachQuestionsResponse(BaseModel):
     """List of planned Teach questions."""
 
     questions: list[TeachQuestionResponse]
+
+
+class StagedSessionSignalResponse(BaseModel):
+    """One reviewable signal staged from a recent conversation."""
+
+    id: str
+    session_id: str
+    exchange_index: int
+    signal_type: Literal["preference", "attribute_candidate", "correction"]
+    payload: dict[str, object]
+    created_at: datetime
+
+
+class StagedSessionSignalsResponse(BaseModel):
+    """List of staged passive-learning signals awaiting review."""
+
+    signals: list[StagedSessionSignalResponse]
+
+
+class StagedSessionSignalActionResponse(BaseModel):
+    """Result of accepting or dismissing one staged signal."""
+
+    signal_id: str
+    status: Literal["accepted", "dismissed"]
+    attributes_saved: int = 0
+    preference_signals_saved: int = 0
 
 
 class TeachQuestionAnswerRequest(BaseModel):

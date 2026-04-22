@@ -491,6 +491,53 @@ def _stream_ollama(
                 yield str(content)
 
 
+def generate_embedding(
+    text: str,
+    config: ProviderConfig,
+    *,
+    model: str = "nomic-embed-text",
+    timeout_seconds: int = 10,
+) -> list[float] | None:
+    """Return a local/private embedding vector, or ``None`` when unavailable.
+
+    Embeddings are intentionally limited to local Ollama or a trusted private
+    server. External API providers are never used for retrieval embeddings.
+    """
+    if not text.strip():
+        return None
+    if not (getattr(config, "is_local", False) or getattr(config, "provider", None) == "private_server"):
+        return None
+
+    base_url = getattr(config, "base_url", None) or OLLAMA_BASE_URL
+    try:
+        tags_response = requests.get(f"{base_url}/api/tags", timeout=5)
+        tags_response.raise_for_status()
+        models = [item.get("name", "") for item in tags_response.json().get("models", [])]
+        tag = model.split(":")[0]
+        if not any(name.startswith(model) or name.startswith(tag + ":") for name in models):
+            return None
+        response = requests.post(
+            f"{base_url}/api/embed",
+            json={"model": model, "input": text},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return None
+
+    embeddings = payload.get("embeddings")
+    if isinstance(embeddings, list) and embeddings:
+        first = embeddings[0]
+        if isinstance(first, list):
+            return [float(value) for value in first]
+
+    single = payload.get("embedding")
+    if isinstance(single, list):
+        return [float(value) for value in single]
+    return None
+
+
 def _call_anthropic(
     messages: list[dict], model: str, api_key: str, timeout: int = OLLAMA_TIMEOUT
 ) -> str:

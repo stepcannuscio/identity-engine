@@ -14,7 +14,7 @@ from db.preference_signals import PreferenceSignalInput, record_preference_signa
 from db.query_feedback import QueryFeedbackInput, record_query_feedback
 from db.voice_feedback import VoiceFeedbackInput, record_voice_feedback
 from engine.coverage_evaluator import INSUFFICIENT_DATA_MESSAGE
-from engine.privacy_broker import PrivacyBroker
+from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError
 from engine.query_engine import (
     QueryContext,
@@ -241,6 +241,22 @@ def _provider_for_context(context, default_provider: ProviderConfig):
     return getattr(context, "provider_config", default_provider)
 
 
+def _record_query_completion(
+    request: Request,
+    context,
+    response: str,
+    audit: InferenceDecision,
+) -> None:
+    with get_db_connection() as conn:
+        record_query_result(
+            conn,
+            request.app.state.current_session,
+            context,
+            response,
+            audit,
+        )
+
+
 def _is_upstream_error(exc: Exception) -> bool:
     module_name = type(exc).__module__
     return module_name.startswith(("requests", "anthropic", "groq", "httpx"))
@@ -334,12 +350,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
         forced_response = getattr(context, "forced_response", None)
         if forced_response is not None:
             audit = build_forced_artifact_response_decision(context, provider_config)
-            record_query_result(
-                request.app.state.current_session,
-                context,
-                forced_response,
-                audit,
-            )
+            _record_query_completion(request, context, forced_response, audit)
             duration_ms = int((time.monotonic() - started) * 1000)
             return QueryResponse(
                 response=forced_response,
@@ -351,12 +362,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
             )
         if _should_short_circuit_insufficient(context):
             audit = build_insufficient_data_decision(context, _provider_for_context(context, provider_config))
-            record_query_result(
-                request.app.state.current_session,
-                context,
-                INSUFFICIENT_DATA_MESSAGE,
-                audit,
-            )
+            _record_query_completion(request, context, INSUFFICIENT_DATA_MESSAGE, audit)
             duration_ms = int((time.monotonic() - started) * 1000)
             return QueryResponse(
                 response=INSUFFICIENT_DATA_MESSAGE,
@@ -378,12 +384,7 @@ def query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRespon
         assert isinstance(result, str)
         brokered_metadata = apply_local_fallback_audit(brokered.metadata, context)
         duration_ms = int((time.monotonic() - started) * 1000)
-        record_query_result(
-            request.app.state.current_session,
-            context,
-            result,
-            brokered_metadata,
-        )
+        _record_query_completion(request, context, result, brokered_metadata)
         return QueryResponse(
             response=result,
             metadata=_metadata_from_context(
@@ -464,12 +465,7 @@ def query_stream(
             forced_response = getattr(context, "forced_response", None)
             if forced_response is not None:
                 audit = build_forced_artifact_response_decision(context, provider_config)
-                record_query_result(
-                    request.app.state.current_session,
-                    context,
-                    forced_response,
-                    audit,
-                )
+                _record_query_completion(request, context, forced_response, audit)
                 yield _event({"type": "token", "content": forced_response})
                 duration_ms = int((time.monotonic() - started) * 1000)
                 yield _event(
@@ -486,12 +482,7 @@ def query_stream(
 
             if _should_short_circuit_insufficient(context):
                 audit = build_insufficient_data_decision(context, _provider_for_context(context, provider_config))
-                record_query_result(
-                    request.app.state.current_session,
-                    context,
-                    INSUFFICIENT_DATA_MESSAGE,
-                    audit,
-                )
+                _record_query_completion(request, context, INSUFFICIENT_DATA_MESSAGE, audit)
                 yield _event({"type": "token", "content": INSUFFICIENT_DATA_MESSAGE})
                 duration_ms = int((time.monotonic() - started) * 1000)
                 yield _event(
@@ -524,12 +515,7 @@ def query_stream(
             full_response = "".join(collected)
             duration_ms = int((time.monotonic() - started) * 1000)
             brokered_metadata = apply_local_fallback_audit(brokered.metadata, context)
-            record_query_result(
-                request.app.state.current_session,
-                context,
-                full_response,
-                brokered_metadata,
-            )
+            _record_query_completion(request, context, full_response, brokered_metadata)
             yield _event(
                 {
                     "type": "metadata",

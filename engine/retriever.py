@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, datetime
 
+from engine.concept_expander import expand_query_tokens
+from engine.embedding_index import compute_similarity_bonus
 from engine.text_utils import contains_any_phrase, find_matching_phrases, tokenize
 
 SIMPLE_BUDGET = {
@@ -160,6 +162,7 @@ def score_attribute(
     *,
     domain_hints: list[str] | None = None,
     intent_tags: list[str] | None = None,
+    similarity_bonus: float = 0.0,
 ) -> float:
     """Score an attribute against the query using deterministic relevance heuristics."""
     query_tokens = _tokenize(query)
@@ -169,14 +172,47 @@ def score_attribute(
 
     if not query_tokens:
         lexical_score = 0.0
+        expanded_score = 0.0
     else:
-        label_overlap = len(query_tokens.intersection(label_tokens)) / max(len(query_tokens), 1)
-        value_overlap = len(query_tokens.intersection(value_tokens)) / max(len(query_tokens), 1)
-        elaboration_overlap = len(query_tokens.intersection(elaboration_tokens)) / max(
-            len(query_tokens),
-            1,
+        denom = max(len(query_tokens), 1)
+        lexical_label_overlap = min(1.0, len(query_tokens.intersection(label_tokens)) / denom)
+        lexical_value_overlap = min(1.0, len(query_tokens.intersection(value_tokens)) / denom)
+        lexical_elaboration_overlap = min(
+            1.0,
+            len(query_tokens.intersection(elaboration_tokens)) / denom,
         )
-        lexical_score = (label_overlap * 0.50) + (value_overlap * 0.35) + (elaboration_overlap * 0.15)
+        lexical_score = (
+            (lexical_label_overlap * 0.50)
+            + (lexical_value_overlap * 0.35)
+            + (lexical_elaboration_overlap * 0.15)
+        )
+
+        expanded_tokens = expand_query_tokens(
+            query_tokens,
+            domain_hints=domain_hints,
+            query_text=query,
+        )
+        expanded_only_tokens = expanded_tokens.difference(query_tokens)
+        if expanded_only_tokens:
+            expanded_label_overlap = min(
+                1.0,
+                len(expanded_only_tokens.intersection(label_tokens)) / denom,
+            )
+            expanded_value_overlap = min(
+                1.0,
+                len(expanded_only_tokens.intersection(value_tokens)) / denom,
+            )
+            expanded_elaboration_overlap = min(
+                1.0,
+                len(expanded_only_tokens.intersection(elaboration_tokens)) / denom,
+            )
+            expanded_score = (
+                (expanded_label_overlap * 0.50)
+                + (expanded_value_overlap * 0.35)
+                + (expanded_elaboration_overlap * 0.15)
+            )
+        else:
+            expanded_score = 0.0
 
     matched_domains = set(domain_hints or []) or _query_domains(query)
     domain_score = 0.0
@@ -203,9 +239,11 @@ def score_attribute(
     return round(
         max(
             0.0,
-            (lexical_score * 0.42)
+            (lexical_score * 0.32)
+            + (expanded_score * 0.20)
             + (domain_score * 0.30)
             + (confidence * 0.16)
+            + min(max(similarity_bonus, 0.0), 0.10)
             + trust_score
             + _recency_score(attribute)
             + _phrase_boost(query, attribute)
@@ -323,6 +361,7 @@ def retrieve_attribute_candidates(
     *,
     domain_hints: list[str] | None = None,
     intent_tags: list[str] | None = None,
+    provider_config=None,
 ) -> list[dict]:
     """Return scored identity-attribute candidates before final prompt blending."""
     rows = conn.execute(
@@ -368,13 +407,22 @@ def retrieve_attribute_candidates(
             "last_confirmed": row[10],
             "prior_versions": int(row[11] or 0),
         }
+        scored.append(attr)
+
+    similarity_bonus = compute_similarity_bonus(
+        conn,
+        query,
+        scored,
+        provider_config=provider_config,
+    )
+    for attr in scored:
         attr["score"] = score_attribute(
             query,
             attr,
             domain_hints=domain_hints,
             intent_tags=intent_tags,
+            similarity_bonus=similarity_bonus.get(str(attr["id"]), 0.0),
         )
-        scored.append(attr)
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
@@ -391,9 +439,14 @@ def retrieve_attribute_candidates(
     return filtered
 
 
-def retrieve_attributes(query: str, query_type: str, conn) -> list[dict]:
+def retrieve_attributes(query: str, query_type: str, conn, *, provider_config=None) -> list[dict]:
     """Retrieve and score active attributes for a query, then apply query budget rules."""
-    filtered = retrieve_attribute_candidates(query, query_type, conn)
+    filtered = retrieve_attribute_candidates(
+        query,
+        query_type,
+        conn,
+        provider_config=provider_config,
+    )
     budget = budget_for_query_type(query_type)
 
     constrained = _apply_domain_cap(

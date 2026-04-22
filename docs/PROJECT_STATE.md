@@ -22,11 +22,14 @@ This document captures the current system state after completing:
 - Profile-Based Model Setup
 - Machine Security Recommendations
 - Query Usefulness Tuning + Eval Harness
+- Semantic Retrieval Bridge
 - Query Feedback Loop
 - Voice Fidelity Tuning
 - Extraction Consent + Audit Redaction + Artifact Upload Guardrails
 - Frontend Route Code-Splitting
 - Generalized Evidence Layer
+- Passive Session Learning Staging
+- Conversation Signal Review
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -357,10 +360,20 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - explicit false-positive prevention for generic terms
 - identity retrieval scoring now incorporates:
   - normalized label/value/elaboration overlap
+  - a separate deterministic concept-expansion component for abstract queries
   - phrase boosts
   - stronger domain-intent bonuses
   - freshness from `last_confirmed` / `updated_at`
   - correction-aware penalties for unstable labels with prior non-current versions
+- deterministic concept expansion is now domain-aware and can bridge abstract
+  prompts such as “what motivates me?” to labels like `intrinsic_drive`
+- retrieval now also supports an optional bounded similarity tier:
+  - temporary SQLite FTS5 matching over active attribute text
+  - local/private embedding similarity via Ollama `nomic-embed-text` when that
+    embedding model is already available
+  - similarity bonus is capped and cannot override the main deterministic score
+- attribute embedding vectors are cached locally in:
+  - `attribute_embedding_cache`
 - preference and artifact selection now also use stronger domain-aware scoring
   so planning and self-model questions are grounded more usefully without
   adding a probabilistic reranker
@@ -466,6 +479,48 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - `GET /attributes/{id}/provenance` remains stable, but now reads through the
   generalized evidence layer when generalized provenance entries are available
 
+### 25. Passive Session Learning Staging
+- completed query turns can now trigger a best-effort passive learning pass
+  after the exchange is recorded in session state
+- this flow is implemented in `engine/session_learner.py`
+- gating is conservative:
+  - only runs when the user message has at least 20 words
+  - skips `high_confidence` turns to reduce noise
+  - prefers a local Ollama model and silently skips when no local model is ready
+- all inference still flows through `PrivacyBroker`; no direct model calls were
+  added
+- the learner stages review-only conversation signals in
+  `extracted_session_signals`; it does not promote anything directly into
+  canonical identity truth
+- staged signal types currently include:
+  - `attribute_candidate`
+  - `preference`
+  - `correction`
+- staged payloads include lightweight source metadata such as:
+  - `source_profile`
+  - `domain_hints`
+  - a bounded `query_excerpt`
+  - linked attribute ids for correction candidates when available
+- extraction failures are intentionally non-blocking and do not affect the
+  user-facing query response path
+
+### 26. Conversation Signal Review
+- Teach can now surface reviewable passive-learning items from recent query
+  sessions through:
+  - `GET /teach/conversation-signals`
+  - `POST /teach/conversation-signals/{signal_id}/accept`
+  - `POST /teach/conversation-signals/{signal_id}/dismiss`
+- Teach bootstrap now includes a `conversation_signal` card when staged items
+  are waiting for review
+- accepted staged items are promoted conservatively:
+  - `attribute_candidate` items write canonical local-only attributes
+  - `preference` items write local preference signals with `system_inference`
+    provenance
+  - `correction` items write local correction-linked preference signals rather
+    than silently mutating canonical identity truth
+- dismissing or accepting a staged signal marks it processed without deleting
+  history from `extracted_session_signals`
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -521,6 +576,21 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 ---
 
 # What the System Can Do Now
+
+## Intelligence Roadmap Status
+
+- Phase 1 (`Semantic Retrieval Bridge`) is implemented on the backend:
+  deterministic domain-aware concept expansion is live, retrieval includes a
+  separate expanded-query score, and an optional bounded local-only similarity
+  tier is available through temporary FTS5 matching plus Ollama embeddings when
+  a local embedding model is already available
+- Phase 2 (`Passive Session Learning`) is implemented on the backend:
+  qualifying query exchanges can stage review-only conversation signals, and
+  Teach now exposes list/accept/dismiss APIs for those staged items
+- Phases 3 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
+- the remaining Phase 2 gap is frontend depth rather than backend plumbing:
+  the Teach bootstrap card and review endpoints exist, but a richer dedicated
+  conversation-signal review workflow has not been built yet
 
 - store identity securely and locally
 - enforce strict privacy boundaries
@@ -592,6 +662,15 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   lower-level voice preference signals without mutating canonical attributes
 - lazy-load authenticated app tabs so slower machines do not pay the initial
   cost of every screen up front
+- bridge abstract self-queries to stored identity labels using deterministic,
+  domain-aware concept expansion instead of exact lexical overlap alone
+- optionally add bounded local-only similarity support with temporary FTS5 and
+  cached Ollama embeddings without letting that bonus override deterministic
+  grounding
+- passively stage review-only identity and preference hints from qualifying
+  query sessions without auto-promoting them into canonical truth
+- review, accept, or dismiss staged conversation signals through Teach APIs
+  while preserving audit-friendly local history
 
 ---
 

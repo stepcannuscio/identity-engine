@@ -19,6 +19,7 @@ from config.llm_router import (
     ProviderConfig,
     detect_hardware,
     extract_attributes,
+    generate_embedding,
     print_routing_report,
     resolve_router,
 )
@@ -311,6 +312,40 @@ class TestExtractAttributes:
         with patch("config.llm_router._call_ollama", return_value=raw):
             result = extract_attributes(QUESTION, ANSWER, config)
         assert result == SAMPLE_ATTRS
+
+
+class TestGenerateEmbedding:
+    def test_local_embedding_returns_vector(self):
+        config = _make_config(is_local=True)
+        tags_response = MagicMock()
+        tags_response.raise_for_status = lambda: None
+        tags_response.json = lambda: {"models": [{"name": "nomic-embed-text:latest"}]}
+        embed_response = MagicMock()
+        embed_response.raise_for_status = lambda: None
+        embed_response.json = lambda: {"embeddings": [[0.1, 0.2, 0.3]]}
+
+        with patch("config.llm_router.requests.get", return_value=tags_response), patch(
+            "config.llm_router.requests.post",
+            return_value=embed_response,
+        ):
+            result = generate_embedding("what motivates me", config)
+
+        assert result == [0.1, 0.2, 0.3]
+
+    def test_embedding_returns_none_for_external_provider(self):
+        config = _make_config(provider="anthropic", api_key="sk-ant-test", is_local=False)
+        assert generate_embedding("what motivates me", config) is None
+
+    def test_embedding_returns_none_when_embedding_model_is_unavailable(self):
+        config = _make_config(is_local=True)
+        tags_response = MagicMock()
+        tags_response.raise_for_status = lambda: None
+        tags_response.json = lambda: {"models": [{"name": "llama3.1:8b"}]}
+
+        with patch("config.llm_router.requests.get", return_value=tags_response):
+            result = generate_embedding("what motivates me", config)
+
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

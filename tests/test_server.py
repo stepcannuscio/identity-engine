@@ -2110,6 +2110,170 @@ def test_teach_bootstrap_returns_cards_and_questions(client, monkeypatch):
     assert body["questions"]
 
 
+def test_teach_bootstrap_includes_conversation_signal_card_when_staged_items_exist(client):
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            str(uuid.uuid4()),
+            "session-1",
+            0,
+            "attribute_candidate",
+            json.dumps(
+                {
+                    "domain": "goals",
+                    "label": "career_direction",
+                    "value": "I want to move toward technical leadership.",
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.get("/teach/bootstrap", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    conversation_cards = [card for card in cards if card["type"] == "conversation_signal"]
+    assert conversation_cards
+    assert conversation_cards[0]["payload"]["count"] == 1
+
+
+def test_get_conversation_signals_returns_pending_staged_items(client):
+    signal_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            signal_id,
+            "session-2",
+            1,
+            "preference",
+            json.dumps(
+                {
+                    "category": "work_style",
+                    "subject": "solo_work",
+                    "signal": "prefer",
+                    "strength": 4,
+                    "summary": "Recent conversations suggest a preference for solo work.",
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.get("/teach/conversation-signals", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["signals"]
+    assert body["signals"][0]["id"] == signal_id
+    assert body["signals"][0]["signal_type"] == "preference"
+
+
+def test_accept_conversation_signal_promotes_attribute_candidate(client):
+    signal_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            signal_id,
+            "session-3",
+            0,
+            "attribute_candidate",
+            json.dumps(
+                {
+                    "domain": "goals",
+                    "label": "career_direction",
+                    "value": "I want to move toward technical leadership.",
+                    "elaboration": "This keeps coming up in planning questions.",
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/conversation-signals/{signal_id}/accept",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["attributes_saved"] == 1
+
+    processed = _db(client).execute(
+        "SELECT processed FROM extracted_session_signals WHERE id = ?",
+        (signal_id,),
+    ).fetchone()
+    assert processed == (1,)
+
+    stored = _db(client).execute(
+        """
+        SELECT label, value
+        FROM attributes
+        WHERE label = 'career_direction' AND status IN ('active', 'confirmed')
+        """
+    ).fetchone()
+    assert stored == ("career_direction", "I want to move toward technical leadership.")
+
+
+def test_dismiss_conversation_signal_marks_item_processed(client):
+    signal_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            signal_id,
+            "session-4",
+            0,
+            "correction",
+            json.dumps(
+                {
+                    "summary": "The user corrected an overgeneralized pattern.",
+                    "correction_text": "The pattern depends on context.",
+                    "attribute_ids": [],
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/conversation-signals/{signal_id}/dismiss",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "dismissed"
+    processed = _db(client).execute(
+        "SELECT processed FROM extracted_session_signals WHERE id = ?",
+        (signal_id,),
+    ).fetchone()
+    assert processed == (1,)
+
+
 def test_security_posture_override_persists_unknown_check_completion(client, monkeypatch):
     posture = {
         "platform": "macos",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 import re
 
 _TOKEN_RE = re.compile(r"[a-z0-9']+")
@@ -42,3 +44,24 @@ def contains_any_phrase(text: str, phrases: tuple[str, ...] | list[str]) -> bool
     """Return True when any phrase occurs in the text."""
     return bool(find_matching_phrases(text, phrases))
 
+
+def normalize_whitespace(text: str) -> str:
+    """Collapse repeated whitespace into single spaces."""
+    return " ".join(text.split())
+
+
+def stable_text_hash(text: str) -> str:
+    """Return a stable SHA-256 hash for one normalized text blob."""
+    return hashlib.sha256(normalize_whitespace(text).encode("utf-8")).hexdigest()
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    """Return cosine similarity for two equal-length dense vectors."""
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right, strict=False))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return dot / (left_norm * right_norm)

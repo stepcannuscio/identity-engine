@@ -339,6 +339,124 @@ CREATE INDEX IF NOT EXISTS ix_teach_feedback_question_created
     ON teach_question_feedback(question_id, created_at DESC);
 """
 
+EXTRACTED_SESSION_SIGNALS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS extracted_session_signals (
+    id           TEXT PRIMARY KEY,
+    session_id   TEXT NOT NULL,
+    exchange_index INTEGER NOT NULL DEFAULT 0,
+    signal_type  TEXT NOT NULL CHECK(signal_type IN (
+                     'preference', 'attribute_candidate', 'correction'
+                 )),
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    processed    INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0, 1)),
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+EXTRACTED_SESSION_SIGNALS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_extracted_session_signals_unprocessed
+    ON extracted_session_signals(processed, created_at DESC);
+"""
+
+RETRIEVAL_CALIBRATION_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS retrieval_calibration (
+    id                TEXT PRIMARY KEY,
+    domain            TEXT NOT NULL,
+    source_profile    TEXT NOT NULL,
+    feedback_pattern  TEXT NOT NULL,
+    score_delta       REAL NOT NULL DEFAULT 0.0,
+    observation_count INTEGER NOT NULL DEFAULT 0,
+    last_computed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+RETRIEVAL_CALIBRATION_UNIQUE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retrieval_calibration
+    ON retrieval_calibration(domain, source_profile, feedback_pattern);
+"""
+
+CONTRADICTION_FLAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS contradiction_flags (
+    id              TEXT PRIMARY KEY,
+    attribute_a_id  TEXT NOT NULL REFERENCES attributes(id) ON DELETE CASCADE,
+    attribute_b_id  TEXT NOT NULL REFERENCES attributes(id) ON DELETE CASCADE,
+    polarity_axis   TEXT NOT NULL,
+    confidence      REAL NOT NULL DEFAULT 0.5,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending', 'resolved', 'dismissed')),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CONTRADICTION_FLAGS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_contradiction_flags_status
+    ON contradiction_flags(status, created_at DESC);
+"""
+
+CROSS_DOMAIN_SYNTHESIS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS cross_domain_synthesis (
+    id                  TEXT PRIMARY KEY,
+    theme_label         TEXT NOT NULL,
+    domains_involved_json TEXT NOT NULL DEFAULT '[]',
+    strength            REAL NOT NULL DEFAULT 0.5,
+    synthesis_text      TEXT,
+    evidence_ids_json   TEXT NOT NULL DEFAULT '[]',
+    status              TEXT NOT NULL DEFAULT 'pending_review'
+                            CHECK(status IN ('pending_review', 'accepted', 'dismissed')),
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CROSS_DOMAIN_SYNTHESIS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_cross_domain_synthesis_status
+    ON cross_domain_synthesis(status, created_at DESC);
+"""
+
+TEMPORAL_EVENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS temporal_events (
+    id               TEXT PRIMARY KEY,
+    event_type       TEXT NOT NULL CHECK(event_type IN (
+                         'drift', 'shift_cluster', 'confidence_decay'
+                     )),
+    domain           TEXT NOT NULL,
+    attribute_ids_json TEXT NOT NULL DEFAULT '[]',
+    detected_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description      TEXT,
+    status           TEXT NOT NULL DEFAULT 'active'
+                         CHECK(status IN ('active', 'resolved'))
+);
+"""
+
+TEMPORAL_EVENTS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_temporal_events_domain
+    ON temporal_events(domain, event_type, detected_at DESC);
+"""
+
+VOICE_FEATURE_OBSERVATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS voice_feature_observations (
+    id                   TEXT PRIMARY KEY,
+    session_id           TEXT NOT NULL,
+    avg_sentence_length  REAL,
+    question_frequency   REAL,
+    first_person_density REAL,
+    contraction_rate     REAL,
+    em_dash_rate         REAL,
+    ellipsis_rate        REAL,
+    word_count           INTEGER NOT NULL DEFAULT 0,
+    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+ATTRIBUTE_EMBEDDING_CACHE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS attribute_embedding_cache (
+    attribute_id      TEXT PRIMARY KEY REFERENCES attributes(id) ON DELETE CASCADE,
+    embedding_model   TEXT NOT NULL,
+    text_hash         TEXT NOT NULL,
+    embedding_json    TEXT NOT NULL,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 SCHEMA_SQL = "\n\n".join(
     [
         DOMAINS_TABLE_SQL,
@@ -370,6 +488,18 @@ SCHEMA_SQL = "\n\n".join(
         TEACH_QUESTIONS_LOOKUP_INDEX_SQL,
         TEACH_FEEDBACK_TABLE_SQL,
         TEACH_FEEDBACK_LOOKUP_INDEX_SQL,
+        EXTRACTED_SESSION_SIGNALS_TABLE_SQL,
+        EXTRACTED_SESSION_SIGNALS_INDEX_SQL,
+        RETRIEVAL_CALIBRATION_TABLE_SQL,
+        RETRIEVAL_CALIBRATION_UNIQUE_INDEX_SQL,
+        CONTRADICTION_FLAGS_TABLE_SQL,
+        CONTRADICTION_FLAGS_INDEX_SQL,
+        CROSS_DOMAIN_SYNTHESIS_TABLE_SQL,
+        CROSS_DOMAIN_SYNTHESIS_INDEX_SQL,
+        TEMPORAL_EVENTS_TABLE_SQL,
+        TEMPORAL_EVENTS_INDEX_SQL,
+        VOICE_FEATURE_OBSERVATIONS_TABLE_SQL,
+        ATTRIBUTE_EMBEDDING_CACHE_TABLE_SQL,
     ]
 )
 

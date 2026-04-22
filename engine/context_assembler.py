@@ -528,6 +528,7 @@ def assemble_query_context(
     *,
     intent_tags: list[str] | None = None,
     domain_hints: list[str] | None = None,
+    provider_config: Any = None,
 ) -> AssembledContext:
     """Assemble structured context for grounded query inference."""
     if conn is None:
@@ -547,6 +548,7 @@ def assemble_query_context(
         resolved_conn,
         domain_hints=resolved_domain_hints,
         intent_tags=resolved_intent_tags,
+        provider_config=provider_config,
     )
     preference_context = get_relevant_preference_context(
         query,
