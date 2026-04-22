@@ -275,6 +275,46 @@ def refresh_contradiction_flags(conn) -> list[ContradictionFlag]:
     return list_pending_contradiction_flags(conn)
 
 
+@dataclass(frozen=True)
+class ContradictionActionResult:
+    """Result of a resolve or dismiss action on a contradiction flag."""
+
+    contradiction_id: str
+    status: str
+
+
+def resolve_contradiction(conn, contradiction_id: str) -> ContradictionActionResult:
+    """Mark a contradiction flag as resolved (user has acknowledged and addressed the tension)."""
+    row = conn.execute(
+        "SELECT id FROM contradiction_flags WHERE id = ?",
+        (contradiction_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Contradiction flag not found: {contradiction_id}")
+    conn.execute(
+        "UPDATE contradiction_flags SET status = 'resolved' WHERE id = ?",
+        (contradiction_id,),
+    )
+    conn.commit()
+    return ContradictionActionResult(contradiction_id=contradiction_id, status="resolved")
+
+
+def dismiss_contradiction(conn, contradiction_id: str) -> ContradictionActionResult:
+    """Mark a contradiction flag as dismissed (user says it is not a real tension)."""
+    row = conn.execute(
+        "SELECT id FROM contradiction_flags WHERE id = ?",
+        (contradiction_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Contradiction flag not found: {contradiction_id}")
+    conn.execute(
+        "UPDATE contradiction_flags SET status = 'dismissed' WHERE id = ?",
+        (contradiction_id,),
+    )
+    conn.commit()
+    return ContradictionActionResult(contradiction_id=contradiction_id, status="dismissed")
+
+
 def list_pending_contradiction_flags(conn) -> list[ContradictionFlag]:
     """Return pending contradiction flags with attribute context for Teach."""
     rows = conn.execute(

@@ -483,6 +483,21 @@ class TeachSynthesisResponse(BaseModel):
     contradictions: list[ContradictionFlagResponse]
 
 
+class SynthesisActionResponse(BaseModel):
+    """Result of an accept or dismiss action on a staged synthesis."""
+
+    synthesis_id: str
+    status: Literal["accepted", "dismissed"]
+    narrative_generated: bool = False
+
+
+class ContradictionActionResponse(BaseModel):
+    """Result of a resolve or dismiss action on a contradiction flag."""
+
+    contradiction_id: str
+    status: Literal["resolved", "dismissed"]
+
+
 class TeachQuestionAnswerRequest(BaseModel):
     """Answer payload for a Teach question."""
 

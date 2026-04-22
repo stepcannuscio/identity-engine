@@ -32,6 +32,7 @@ This document captures the current system state after completing:
 - Passive Session Learning Staging
 - Conversation Signal Review
 - Cross-Domain Synthesis Staging
+- Cross-Domain Synthesis Accept-Dismiss + Narrative Generation
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -562,6 +563,15 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   prompts ahead of generic catalog questions when pending items exist
 - review remains user-mediated; no synthesis or contradiction result writes
   directly into canonical attributes
+- synthesis and contradiction items can now be actioned through:
+  - `POST /teach/synthesis/{id}/accept` — marks accepted; attempts optional
+    local LLM narrative generation via PrivacyBroker and persists the result
+    in `synthesis_text` when a local model is available; silent on failure
+  - `POST /teach/synthesis/{id}/dismiss` — marks dismissed
+  - `POST /teach/contradictions/{id}/resolve` — marks resolved (user has
+    addressed the tension)
+  - `POST /teach/contradictions/{id}/dismiss` — marks dismissed (user says
+    it is not a real tension)
 
 ---
 
@@ -633,12 +643,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   feedback now drives both bounded domain-level retrieval calibration and
   conservative attribute-level confidence downgrades for repeatedly low-rated
   inferred attributes, with append-only audit history
-- Phase 4 (`Cross-Domain Synthesis`) is partially implemented on the backend:
+- Phase 4 (`Cross-Domain Synthesis`) is fully implemented on the backend:
   deterministic theme detection, contradiction staging, Teach queue
-  integration, and a synthesis review API are live
-- the remaining Phase 4 gap is richer review UX and synthesis resolution:
-  synthesis/contradiction accept-dismiss workflows and optional local
-  narrative generation have not been built yet
+  integration, synthesis review API, accept-dismiss workflows for both
+  syntheses and contradiction flags, and optional local LLM narrative
+  generation on synthesis acceptance are all live
 - Phases 5 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
 - the remaining Phase 2 gap is frontend depth rather than backend plumbing:
   the Teach bootstrap card and review endpoints exist, but a richer dedicated
@@ -725,6 +734,10 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   while preserving audit-friendly local history
 - detect cross-domain identity themes and contradiction candidates locally,
   then surface them in Teach before generic onboarding prompts
+- accept or dismiss staged cross-domain synthesis items, with optional local
+  LLM narrative generation for accepted themes when a local model is available
+- resolve or dismiss staged contradiction flags after the user has addressed
+  or ruled out the identified tension
 
 ---
 

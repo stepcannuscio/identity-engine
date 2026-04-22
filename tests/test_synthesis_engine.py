@@ -12,8 +12,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
 from db.schema import create_tables, seed_domains
-from engine.contradiction_detector import refresh_contradiction_flags
-from engine.synthesis_engine import refresh_cross_domain_synthesis
+from engine.contradiction_detector import (
+    dismiss_contradiction,
+    refresh_contradiction_flags,
+    resolve_contradiction,
+)
+from engine.synthesis_engine import (
+    accept_synthesis,
+    dismiss_synthesis,
+    get_synthesis_by_id,
+    list_pending_cross_domain_syntheses,
+    refresh_cross_domain_synthesis,
+)
 
 
 @pytest.fixture
@@ -177,3 +187,153 @@ def test_refresh_contradiction_flags_skips_low_confidence_pairs(conn):
     assert flags == []
     stored = conn.execute("SELECT COUNT(*) FROM contradiction_flags").fetchone()[0]
     assert stored == 0
+
+
+# ---------------------------------------------------------------------------
+# Synthesis accept / dismiss
+# ---------------------------------------------------------------------------
+
+def _seed_three_domain_theme(conn) -> str:
+    """Seed attributes that produce one synthesis and return its id."""
+    for domain, label, value in [
+        ("personality", "social_orientation", "I am introverted and need quiet to recharge after groups."),
+        ("patterns", "meeting_energy", "Large meetings drain my social battery quickly."),
+        ("relationships", "connection_needs", "I prefer close one-on-one conversations over crowds."),
+    ]:
+        _insert_attribute(conn, domain=domain, label=label, value=value)
+    syntheses = refresh_cross_domain_synthesis(conn)
+    assert len(syntheses) == 1
+    return syntheses[0].id
+
+
+def test_accept_synthesis_marks_status_accepted(conn):
+    synthesis_id = _seed_three_domain_theme(conn)
+
+    result = accept_synthesis(conn, synthesis_id)
+
+    assert result.synthesis_id == synthesis_id
+    assert result.status == "accepted"
+    assert result.narrative_generated is False
+    row = conn.execute(
+        "SELECT status FROM cross_domain_synthesis WHERE id = ?", (synthesis_id,)
+    ).fetchone()
+    assert row[0] == "accepted"
+
+
+def test_accept_synthesis_with_narrative_persists_text(conn):
+    synthesis_id = _seed_three_domain_theme(conn)
+    narrative = "This is a rich reflective narrative about the theme."
+
+    result = accept_synthesis(conn, synthesis_id, narrative=narrative)
+
+    assert result.narrative_generated is True
+    row = conn.execute(
+        "SELECT synthesis_text FROM cross_domain_synthesis WHERE id = ?", (synthesis_id,)
+    ).fetchone()
+    assert row[0] == narrative
+
+
+def test_accept_synthesis_not_found_raises(conn):
+    with pytest.raises(ValueError, match="not found"):
+        accept_synthesis(conn, "nonexistent-id")
+
+
+def test_dismiss_synthesis_marks_status_dismissed(conn):
+    synthesis_id = _seed_three_domain_theme(conn)
+
+    result = dismiss_synthesis(conn, synthesis_id)
+
+    assert result.synthesis_id == synthesis_id
+    assert result.status == "dismissed"
+    row = conn.execute(
+        "SELECT status FROM cross_domain_synthesis WHERE id = ?", (synthesis_id,)
+    ).fetchone()
+    assert row[0] == "dismissed"
+
+
+def test_dismiss_synthesis_removes_from_pending_list(conn):
+    synthesis_id = _seed_three_domain_theme(conn)
+
+    dismiss_synthesis(conn, synthesis_id)
+
+    pending = list_pending_cross_domain_syntheses(conn)
+    assert all(s.id != synthesis_id for s in pending)
+
+
+def test_dismiss_synthesis_not_found_raises(conn):
+    with pytest.raises(ValueError, match="not found"):
+        dismiss_synthesis(conn, "nonexistent-id")
+
+
+def test_get_synthesis_by_id_returns_none_for_missing(conn):
+    result = get_synthesis_by_id(conn, "does-not-exist")
+    assert result is None
+
+
+def test_get_synthesis_by_id_returns_synthesis(conn):
+    synthesis_id = _seed_three_domain_theme(conn)
+
+    result = get_synthesis_by_id(conn, synthesis_id)
+
+    assert result is not None
+    assert result.id == synthesis_id
+    assert result.status == "pending_review"
+
+
+# ---------------------------------------------------------------------------
+# Contradiction resolve / dismiss
+# ---------------------------------------------------------------------------
+
+def _seed_contradiction(conn) -> str:
+    """Seed attributes that produce one contradiction flag and return its id."""
+    _insert_attribute(
+        conn,
+        domain="patterns",
+        label="workflow_structure",
+        value="I do my best work with highly structured routines and organized plans.",
+    )
+    _insert_attribute(
+        conn,
+        domain="goals",
+        label="exploration_style",
+        value="I stay creative when I keep things spontaneous and flexible.",
+    )
+    flags = refresh_contradiction_flags(conn)
+    assert len(flags) == 1
+    return flags[0].id
+
+
+def test_resolve_contradiction_marks_status_resolved(conn):
+    contradiction_id = _seed_contradiction(conn)
+
+    result = resolve_contradiction(conn, contradiction_id)
+
+    assert result.contradiction_id == contradiction_id
+    assert result.status == "resolved"
+    row = conn.execute(
+        "SELECT status FROM contradiction_flags WHERE id = ?", (contradiction_id,)
+    ).fetchone()
+    assert row[0] == "resolved"
+
+
+def test_resolve_contradiction_not_found_raises(conn):
+    with pytest.raises(ValueError, match="not found"):
+        resolve_contradiction(conn, "nonexistent-id")
+
+
+def test_dismiss_contradiction_marks_status_dismissed(conn):
+    contradiction_id = _seed_contradiction(conn)
+
+    result = dismiss_contradiction(conn, contradiction_id)
+
+    assert result.contradiction_id == contradiction_id
+    assert result.status == "dismissed"
+    row = conn.execute(
+        "SELECT status FROM contradiction_flags WHERE id = ?", (contradiction_id,)
+    ).fetchone()
+    assert row[0] == "dismissed"
+
+
+def test_dismiss_contradiction_not_found_raises(conn):
+    with pytest.raises(ValueError, match="not found"):
+        dismiss_contradiction(conn, "nonexistent-id")

@@ -32,7 +32,15 @@ from engine.staged_signal_reviewer import (
     dismiss_signal,
     list_pending_signals,
 )
+from engine.contradiction_detector import (
+    dismiss_contradiction,
+    resolve_contradiction,
+)
 from engine.synthesis_engine import (
+    accept_synthesis,
+    dismiss_synthesis,
+    generate_synthesis_narrative,
+    get_synthesis_by_id,
     list_pending_cross_domain_intelligence,
     refresh_cross_domain_intelligence,
 )
@@ -40,6 +48,7 @@ from server.db import get_db_connection
 from server.models.schemas import (
     AttributeResponse,
     CapturePreviewWriteItem,
+    ContradictionActionResponse,
     ContradictionFlagResponse,
     CrossDomainSynthesisResponse,
     PrivacyPreferenceOption,
@@ -51,6 +60,7 @@ from server.models.schemas import (
     StagedSessionSignalActionResponse,
     StagedSessionSignalResponse,
     StagedSessionSignalsResponse,
+    SynthesisActionResponse,
     TeachBootstrapResponse,
     TeachCard,
     TeachQuestionAnswerRequest,
@@ -473,4 +483,84 @@ def dismiss_conversation_signal(signal_id: str, request: Request) -> StagedSessi
         status=cast(Any, result.status),
         attributes_saved=result.attributes_saved,
         preference_signals_saved=result.preference_signals_saved,
+    )
+
+
+@router.post(
+    "/teach/synthesis/{synthesis_id}/accept",
+    response_model=SynthesisActionResponse,
+)
+def accept_synthesis_item(synthesis_id: str, request: Request) -> SynthesisActionResponse:
+    """Accept a staged cross-domain synthesis; attempts local narrative generation."""
+    with get_db_connection() as conn:
+        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+        try:
+            synthesis_row = get_synthesis_by_id(conn, synthesis_id)
+            if synthesis_row is None:
+                raise HTTPException(status_code=404, detail="synthesis not found")
+            narrative = generate_synthesis_narrative(synthesis_row, provider_config)
+            result = accept_synthesis(conn, synthesis_id, narrative=narrative)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SynthesisActionResponse(
+        synthesis_id=result.synthesis_id,
+        status=cast(Any, result.status),
+        narrative_generated=result.narrative_generated,
+    )
+
+
+@router.post(
+    "/teach/synthesis/{synthesis_id}/dismiss",
+    response_model=SynthesisActionResponse,
+)
+def dismiss_synthesis_item(synthesis_id: str, request: Request) -> SynthesisActionResponse:
+    """Dismiss a staged cross-domain synthesis."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = dismiss_synthesis(conn, synthesis_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SynthesisActionResponse(
+        synthesis_id=result.synthesis_id,
+        status=cast(Any, result.status),
+        narrative_generated=result.narrative_generated,
+    )
+
+
+@router.post(
+    "/teach/contradictions/{contradiction_id}/resolve",
+    response_model=ContradictionActionResponse,
+)
+def resolve_contradiction_item(contradiction_id: str, request: Request) -> ContradictionActionResponse:
+    """Mark a contradiction flag as resolved (user has addressed the tension)."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = resolve_contradiction(conn, contradiction_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ContradictionActionResponse(
+        contradiction_id=result.contradiction_id,
+        status=cast(Any, result.status),
+    )
+
+
+@router.post(
+    "/teach/contradictions/{contradiction_id}/dismiss",
+    response_model=ContradictionActionResponse,
+)
+def dismiss_contradiction_item(contradiction_id: str, request: Request) -> ContradictionActionResponse:
+    """Dismiss a contradiction flag (user says it is not a real tension)."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = dismiss_contradiction(conn, contradiction_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ContradictionActionResponse(
+        contradiction_id=result.contradiction_id,
+        status=cast(Any, result.status),
     )

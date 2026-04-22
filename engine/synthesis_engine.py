@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
+import logging
 import uuid
 
+from config.llm_router import ConfigurationError, ProviderConfig
 from engine.concept_expander import describe_concept_key, matching_concept_keys_for_text
 from engine.contradiction_detector import (
     ContradictionFlag,
     list_pending_contradiction_flags,
     refresh_contradiction_flags,
 )
+
+logger = logging.getLogger(__name__)
 
 _MIN_SYNTHESIS_CONFIDENCE = 0.55
 _MIN_SYNTHESIS_DOMAINS = 3
@@ -271,3 +275,135 @@ def list_pending_cross_domain_intelligence(conn) -> CrossDomainRefreshResult:
         syntheses=list_pending_cross_domain_syntheses(conn),
         contradictions=list_pending_contradiction_flags(conn),
     )
+
+
+@dataclass(frozen=True)
+class SynthesisActionResult:
+    """Result of an accept or dismiss action on a staged synthesis."""
+
+    synthesis_id: str
+    status: str
+    narrative_generated: bool = field(default=False)
+
+
+def get_synthesis_by_id(conn, synthesis_id: str) -> CrossDomainSynthesis | None:
+    row = conn.execute(
+        """
+        SELECT id, theme_label, domains_involved_json, strength,
+               synthesis_text, evidence_ids_json, status, created_at
+        FROM cross_domain_synthesis
+        WHERE id = ?
+        """,
+        (synthesis_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return CrossDomainSynthesis(
+        id=str(row[0]),
+        theme_label=str(row[1]),
+        domains_involved=_json_list(row[2]),
+        strength=float(row[3]),
+        synthesis_text=str(row[4]) if row[4] not in {None, ""} else None,
+        evidence_ids=_json_list(row[5]),
+        status=str(row[6]),
+        created_at=_parse_timestamp(row[7]),
+    )
+
+
+def accept_synthesis(conn, synthesis_id: str, narrative: str | None = None) -> SynthesisActionResult:
+    """Mark a staged synthesis as accepted, optionally persisting a richer narrative."""
+    synthesis = get_synthesis_by_id(conn, synthesis_id)
+    if synthesis is None:
+        raise ValueError(f"Synthesis not found: {synthesis_id}")
+    if narrative is not None:
+        conn.execute(
+            "UPDATE cross_domain_synthesis SET status = 'accepted', synthesis_text = ? WHERE id = ?",
+            (narrative, synthesis_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE cross_domain_synthesis SET status = 'accepted' WHERE id = ?",
+            (synthesis_id,),
+        )
+    conn.commit()
+    return SynthesisActionResult(
+        synthesis_id=synthesis_id,
+        status="accepted",
+        narrative_generated=narrative is not None,
+    )
+
+
+def dismiss_synthesis(conn, synthesis_id: str) -> SynthesisActionResult:
+    """Mark a staged synthesis as dismissed."""
+    row = conn.execute(
+        "SELECT id FROM cross_domain_synthesis WHERE id = ?",
+        (synthesis_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Synthesis not found: {synthesis_id}")
+    conn.execute(
+        "UPDATE cross_domain_synthesis SET status = 'dismissed' WHERE id = ?",
+        (synthesis_id,),
+    )
+    conn.commit()
+    return SynthesisActionResult(synthesis_id=synthesis_id, status="dismissed")
+
+
+def _build_narrative_messages(synthesis: CrossDomainSynthesis) -> list[dict[str, str]]:
+    domains_str = ", ".join(synthesis.domains_involved) if synthesis.domains_involved else "multiple domains"
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You generate brief, reflective narratives for a privacy-first identity engine. "
+                "The user has confirmed that a cross-domain identity theme resonates with them. "
+                "Write 2-3 sentences in plain, grounded first-person language. "
+                "Do not speculate beyond what the theme and summary describe. "
+                "Return only the narrative text with no additional commentary."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Theme: {synthesis.theme_label}\n"
+                f"Domains: {domains_str}\n"
+                f"Summary: {synthesis.synthesis_text or 'No summary available.'}\n\n"
+                "Write a brief reflective narrative that captures this theme."
+            ),
+        },
+    ]
+
+
+def generate_synthesis_narrative(
+    synthesis: CrossDomainSynthesis,
+    provider_config: ProviderConfig,
+) -> str | None:
+    """Generate a richer local LLM narrative for an accepted synthesis.
+
+    Only attempts generation when a local model is available.
+    Returns None on any failure — callers must not depend on a non-None result.
+    """
+    from engine.privacy_broker import PrivacyBroker
+    from engine.setup_state import resolve_local_provider_config
+
+    try:
+        local_config = resolve_local_provider_config(provider_config)
+    except (ConfigurationError, Exception):
+        return None
+
+    try:
+        messages = _build_narrative_messages(synthesis)
+        result = PrivacyBroker(local_config).generate_grounded_response(
+            messages,
+            attributes=[],
+            task_type="synthesis_narrative",
+            contains_local_only_context=True,
+        )
+        content = result.content
+        if not isinstance(content, str):
+            return None
+        narrative = content.strip()
+        return narrative if narrative else None
+    except Exception:
+        logger.debug("Synthesis narrative generation failed silently.", exc_info=True)
+        return None
