@@ -498,6 +498,42 @@ class ContradictionActionResponse(BaseModel):
     status: Literal["resolved", "dismissed"]
 
 
+class ReflectionStartResponse(BaseModel):
+    """Response from starting a new deep reflection session."""
+
+    session_id: str
+    first_question: str
+    seed_domain: str | None = None
+
+
+class ReflectionTurnRequest(BaseModel):
+    """Request body for one turn in an active reflection session."""
+
+    session_id: str
+    user_message: str
+
+
+class SuggestedAttributeUpdateItem(BaseModel):
+    """One attribute update suggested during a reflection turn."""
+
+    domain: str
+    label: str
+    value: str
+    confidence: float
+    elaboration: str | None = None
+
+
+class ReflectionTurnResponse(BaseModel):
+    """Response from processing one reflection turn."""
+
+    session_id: str
+    next_question: str
+    suggested_updates: list[SuggestedAttributeUpdateItem] = []
+    themes_noticed: list[str] = []
+    staged_signal_ids: list[str] = []
+    turn_count: int
+
+
 class TeachQuestionAnswerRequest(BaseModel):
     """Answer payload for a Teach question."""
 

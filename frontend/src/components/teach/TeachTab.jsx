@@ -8,6 +8,8 @@ import {
   feedbackTeachQuestion,
   getArtifactAnalysis,
   promoteArtifact,
+  startReflection,
+  submitReflectionTurn,
   uploadArtifact,
 } from '../../api/endpoints.js'
 import SetupWorkspace from '../settings/SetupWorkspace.jsx'
@@ -47,6 +49,15 @@ export default function TeachTab({ bootstrapQuery }) {
   const [artifactFile, setArtifactFile] = useState(null)
   const [artifactTags, setArtifactTags] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [reflectMode, setReflectMode] = useState(false)
+  const [reflectSessionId, setReflectSessionId] = useState(null)
+  const [reflectTurnCount, setReflectTurnCount] = useState(0)
+  const [reflectQuestion, setReflectQuestion] = useState(null)
+  const [reflectAnswer, setReflectAnswer] = useState('')
+  const [reflectHistory, setReflectHistory] = useState([])
+  const [reflectSuggestions, setReflectSuggestions] = useState([])
+  const [reflectThemes, setReflectThemes] = useState([])
+  const [isReflecting, setIsReflecting] = useState(false)
   const [artifactId, setArtifactId] = useState(null)
   const [artifactAnalysis, setArtifactAnalysis] = useState(null)
   const [selectedAttributeIds, setSelectedAttributeIds] = useState(new Set())
@@ -318,6 +329,65 @@ export default function TeachTab({ bootstrapQuery }) {
     setter(next)
   }
 
+  const handleStartReflect = async () => {
+    setIsReflecting(true)
+    try {
+      const response = await startReflection()
+      setReflectSessionId(response.session_id)
+      setReflectQuestion(response.first_question)
+      setReflectHistory([{ role: 'assistant', content: response.first_question }])
+      setReflectSuggestions([])
+      setReflectThemes([])
+      setReflectTurnCount(1)
+      setReflectMode(true)
+    } catch (error) {
+      addToast({ message: error?.response?.data?.detail ?? 'Unable to start reflection.' })
+    } finally {
+      setIsReflecting(false)
+    }
+  }
+
+  const handleReflectTurn = async () => {
+    if (!reflectSessionId || !reflectAnswer.trim()) return
+    setIsReflecting(true)
+    const userText = reflectAnswer.trim()
+    setReflectAnswer('')
+    try {
+      const response = await submitReflectionTurn(reflectSessionId, userText)
+      setReflectHistory((prev) => [
+        ...prev,
+        { role: 'user', content: userText },
+        { role: 'assistant', content: response.next_question },
+      ])
+      setReflectQuestion(response.next_question)
+      setReflectTurnCount(response.turn_count)
+      if (response.suggested_updates?.length) {
+        setReflectSuggestions((prev) => [...prev, ...response.suggested_updates])
+      }
+      if (response.themes_noticed?.length) {
+        setReflectThemes((prev) => {
+          const existing = new Set(prev)
+          return [...prev, ...response.themes_noticed.filter((t) => !existing.has(t))]
+        })
+      }
+    } catch (error) {
+      addToast({ message: error?.response?.data?.detail ?? 'Unable to process that turn.' })
+    } finally {
+      setIsReflecting(false)
+    }
+  }
+
+  const handleExitReflect = () => {
+    setReflectMode(false)
+    setReflectSessionId(null)
+    setReflectQuestion(null)
+    setReflectAnswer('')
+    setReflectHistory([])
+    setReflectSuggestions([])
+    setReflectThemes([])
+    setReflectTurnCount(0)
+  }
+
   if (bootstrapQuery.isLoading) {
     return (
       <section className="teach-tab">
@@ -342,6 +412,87 @@ export default function TeachTab({ bootstrapQuery }) {
 
       {!onboardingCompleted ? (
         <SetupWorkspace bootstrapQuery={bootstrapQuery} showOnboardingActions />
+      ) : null}
+
+      {!reflectMode && onboardingCompleted ? (
+        <div className="teach-action-row">
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={handleStartReflect}
+            disabled={isReflecting}
+          >
+            {isReflecting ? 'Starting...' : 'Deep Reflect'}
+          </button>
+        </div>
+      ) : null}
+
+      {reflectMode ? (
+        <div className="teach-reflect">
+          <div className="teach-panel-header">
+            <h2>Deep Reflect</h2>
+            <button type="button" className="button-ghost" onClick={handleExitReflect}>
+              Exit
+            </button>
+          </div>
+          <div className="teach-reflect-history">
+            {reflectHistory.map((turn, i) => (
+              <div
+                key={i}
+                className={`teach-reflect-turn teach-reflect-turn--${turn.role}`}
+              >
+                <span className="teach-reflect-role">
+                  {turn.role === 'assistant' ? 'Reflect' : 'You'}
+                </span>
+                <p>{turn.content}</p>
+              </div>
+            ))}
+          </div>
+          {reflectQuestion ? (
+            <div className="teach-reflect-input">
+              <textarea
+                value={reflectAnswer}
+                onChange={(e) => setReflectAnswer(e.target.value)}
+                placeholder="Respond in your own words…"
+                disabled={isReflecting}
+              />
+              <div className="teach-action-row">
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={handleReflectTurn}
+                  disabled={isReflecting || !reflectAnswer.trim()}
+                >
+                  {isReflecting ? 'Thinking...' : 'Continue'}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {reflectSuggestions.length ? (
+            <div className="teach-analysis">
+              <h3>Insights from this reflection</h3>
+              <p className="field-help">
+                These were noticed during your reflection. Review staged signals in Teach to
+                accept or dismiss them.
+              </p>
+              {reflectSuggestions.map((s, i) => (
+                <div key={i} className="field-help">
+                  <strong>{s.label}</strong> ({s.domain}): {s.value}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {reflectThemes.length ? (
+            <div className="teach-analysis">
+              <h3>Themes noticed</h3>
+              <ul>
+                {reflectThemes.map((t, i) => (
+                  <li key={i} className="field-help">{t}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <div className="teach-grid">

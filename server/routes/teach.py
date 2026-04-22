@@ -12,6 +12,10 @@ from engine.privacy_broker import (
     AuditedExternalExtractionConsentRequiredError,
     PrivacyBroker,
 )
+from engine.reflection_session_engine import (
+    process_reflection_turn,
+    start_reflection_session,
+)
 from engine.security_posture import resolve_security_posture
 from engine.setup_state import (
     build_privacy_preferences,
@@ -55,11 +59,15 @@ from server.models.schemas import (
     PrivacyProfileOption,
     ProviderCredentialField,
     ProviderStatusResponse,
+    ReflectionStartResponse,
+    ReflectionTurnRequest,
+    ReflectionTurnResponse,
     SecurityCheckResponse,
     SecurityPostureResponse,
     StagedSessionSignalActionResponse,
     StagedSessionSignalResponse,
     StagedSessionSignalsResponse,
+    SuggestedAttributeUpdateItem,
     SynthesisActionResponse,
     TeachBootstrapResponse,
     TeachCard,
@@ -563,4 +571,54 @@ def dismiss_contradiction_item(contradiction_id: str, request: Request) -> Contr
     return ContradictionActionResponse(
         contradiction_id=result.contradiction_id,
         status=cast(Any, result.status),
+    )
+
+
+@router.post("/teach/reflection/start", response_model=ReflectionStartResponse)
+def start_reflection(request: Request) -> ReflectionStartResponse:
+    """Start a new deep reflection session seeded from synthesis and temporal data."""
+    with get_db_connection() as conn:
+        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+        session_id, state, first_question = start_reflection_session(conn, provider_config)
+    if not hasattr(request.app.state, "reflection_sessions"):
+        request.app.state.reflection_sessions = {}
+    request.app.state.reflection_sessions[session_id] = state
+    return ReflectionStartResponse(
+        session_id=session_id,
+        first_question=first_question,
+        seed_domain=state.seed_domain,
+    )
+
+
+@router.post("/teach/reflection/turn", response_model=ReflectionTurnResponse)
+def reflection_turn(
+    payload: ReflectionTurnRequest,
+    request: Request,
+) -> ReflectionTurnResponse:
+    """Process one turn in an active reflection session."""
+    sessions: dict[str, Any] = getattr(request.app.state, "reflection_sessions", {})
+    state = sessions.get(payload.session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="reflection session not found")
+    if not payload.user_message.strip():
+        raise HTTPException(status_code=422, detail="user_message is required")
+    with get_db_connection() as conn:
+        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+        result = process_reflection_turn(conn, state, payload.user_message, provider_config)
+    return ReflectionTurnResponse(
+        session_id=payload.session_id,
+        next_question=result.next_question,
+        suggested_updates=[
+            SuggestedAttributeUpdateItem(
+                domain=u.domain,
+                label=u.label,
+                value=u.value,
+                confidence=u.confidence,
+                elaboration=u.elaboration,
+            )
+            for u in result.suggested_updates
+        ],
+        themes_noticed=result.themes_noticed,
+        staged_signal_ids=result.staged_signal_ids,
+        turn_count=state.turn_count,
     )

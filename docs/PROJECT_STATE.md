@@ -35,6 +35,7 @@ This document captures the current system state after completing:
 - Cross-Domain Synthesis Accept-Dismiss + Narrative Generation
 - Temporal Intelligence Analysis
 - Natural Voice Learning
+- Deep Reflection Mode
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -594,6 +595,39 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - baseline guidance is local-only and is never sent to external providers
 - extraction failures are non-blocking and silent
 
+### 30. Deep Reflection Mode
+- `engine/reflection_session_engine.py` manages multi-turn Socratic reflection sessions
+- `build_reflection_session_seed()` finds the best starting point using Phase 4+5 data:
+  - prefers domains with active contradiction flags
+  - falls back to pending synthesis domains, then drift domains, then most-populated domain
+- session state is stored in `app.state.reflection_sessions[session_id]` (in-memory) for
+  the duration of the server process; no active session state is persisted to the DB
+- all inference flows through `PrivacyBroker` with `task_type="reflection"`:
+  - only local-only context is assembled (seed domain attributes, contradictions, syntheses)
+  - contains_local_only_context is set appropriately per call
+- `start_reflection_session()` creates session state and generates the first question via
+  LLM; falls back to deterministic seed question when no local model is available
+- `process_reflection_turn()` processes each user response:
+  - appends user message to history
+  - calls LLM for next question + suggested attribute updates + themes noticed
+  - falls back to a deterministic turn sequence when LLM is unavailable
+  - caps suggested update confidence at 0.75
+  - limits suggestions to 2 items per turn
+  - deduplicates themes across turns
+  - stages any suggested updates as `attribute_candidate` signals in
+    `extracted_session_signals` for review through the existing Teach signal-review flow
+  - never auto-promotes suggestions into canonical attributes
+- two new backend endpoints exposed on `server/routes/teach.py`:
+  - `POST /teach/reflection/start` — creates session, returns session_id + first_question
+  - `POST /teach/reflection/turn` — processes one user turn, returns next_question,
+    suggested_updates, themes_noticed, staged_signal_ids, turn_count
+- frontend TeachTab adds "Deep Reflect" mode:
+  - button shown after onboarding is complete
+  - switches to a conversational view with Q&A history
+  - displays suggested attribute updates and themes as they accumulate
+  - exit returns the user to the normal Teach view
+  - staged suggestions can be reviewed through the existing conversation-signal review flow
+
 ### 27. Cross-Domain Synthesis Staging
 - the first backend slice of Phase 4 from `docs/MAXIMIZE_INTELLIGENCE.md` is
   now implemented with deterministic local-only staging
@@ -715,7 +749,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   observations exist and appends learned structural guidance (sentence
   length, question frequency, contraction register, em-dash/ellipsis usage)
   as local-only preference guidance lines
-- Phase 7 from `docs/MAXIMIZE_INTELLIGENCE.md` is still pending
+- Phase 7 (`Deep Reflection Mode`) is fully implemented: multi-turn Socratic reflection
+  sessions are live; seed selection uses contradiction flags, pending syntheses, and drift
+  domains from Phases 4 and 5; all inference flows through PrivacyBroker; suggested updates
+  stage via `extracted_session_signals` for user review; frontend TeachTab includes a
+  conversational "Deep Reflect" mode
 - the remaining Phase 2 gap is frontend depth rather than backend plumbing:
   the Teach bootstrap card and review endpoints exist, but a richer dedicated
   conversation-signal review workflow has not been built yet

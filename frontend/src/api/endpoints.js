@@ -243,6 +243,20 @@ export const feedbackTeachQuestion = async (questionId, feedback) => {
   return data
 }
 
+export const startReflection = async () => {
+  const { data } = await client.post('/teach/reflection/start', {}, withSlowRequestTimeout())
+  return data
+}
+
+export const submitReflectionTurn = async (sessionId, userMessage) => {
+  const { data } = await client.post(
+    '/teach/reflection/turn',
+    { session_id: sessionId, user_message: userMessage },
+    withSlowRequestTimeout(),
+  )
+  return data
+}
+
 export const getSetupModelOptions = async () => {
   const { data } = await client.get('/setup/model-options')
   return data
