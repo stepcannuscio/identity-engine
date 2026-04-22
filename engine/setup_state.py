@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from config.llm_router import (
     ConfigurationError,
@@ -12,6 +15,7 @@ from config.llm_router import (
     TIER_MODELS,
     _ollama_has_model,
     _ollama_is_running,
+    _resolve_private_server_router,
     detect_hardware,
     resolve_external_router,
     resolve_local_router,
@@ -23,12 +27,13 @@ from config.provider_catalog import (
     list_external_provider_ids,
     list_provider_definitions,
 )
-from config.settings import has_api_key
+from config.settings import get_private_server_url, has_api_key
 
 PROFILE_CODES = (
     "private_local_first",
     "balanced_hybrid",
     "external_assist",
+    "private_server_first",
 )
 PRIVACY_PREFERENCE_CODES = (
     "privacy_first",
@@ -258,6 +263,41 @@ def get_provider_statuses(conn, *, persist: bool = False) -> list[ProviderStatus
             )
             continue
 
+        if definition.provider == "private_server":
+            url = get_private_server_url()
+            configured = bool(url)
+            reachable = False
+            if configured:
+                try:
+                    import requests as _requests
+                    _requests.get(url, timeout=2)  # type: ignore[arg-type]
+                    reachable = True
+                except Exception:
+                    pass
+            statuses.append(
+                ProviderStatus(
+                    provider=definition.provider,
+                    label=definition.label,
+                    deployment=definition.deployment,
+                    trust_boundary=definition.trust_boundary,
+                    auth_strategy=definition.auth_strategy,
+                    configured=configured,
+                    available=reachable,
+                    validated=reachable,
+                    is_local=False,
+                    description=definition.description,
+                    setup_hint=definition.setup_hint,
+                    credential_fields=definition.credential_fields,
+                    model=definition.default_model,
+                    reason=(
+                        None if reachable
+                        else f"Server at {url!r} is not reachable." if configured
+                        else "Server URL not configured yet."
+                    ),
+                )
+            )
+            continue
+
         configured = has_api_key(definition.provider)
         statuses.append(
             ProviderStatus(
@@ -299,8 +339,11 @@ def _preferred_profile_code(
     *,
     local_ready: bool,
     external_ready: bool,
+    private_server_ready: bool = False,
 ) -> str:
     if privacy_preference == "privacy_first":
+        if private_server_ready:
+            return "private_server_first"
         if local_ready:
             return "private_local_first"
         if external_ready:
@@ -309,9 +352,13 @@ def _preferred_profile_code(
     if privacy_preference == "capability_first":
         if external_ready:
             return "external_assist"
+        if private_server_ready:
+            return "private_server_first"
         if local_ready:
             return "private_local_first"
         return "external_assist"
+    if private_server_ready and not local_ready:
+        return "private_server_first"
     if local_ready and external_ready:
         return "balanced_hybrid"
     if local_ready:
@@ -335,6 +382,12 @@ def build_recommended_profiles(
         for status in statuses
     )
     external_ready = bool(available_external)
+    private_server_status = next(
+        (s for s in statuses if s.provider == "private_server"), None
+    )
+    private_server_ready = bool(private_server_status and private_server_status.available)
+
+    hw = detect_hardware()
 
     profiles = [
         {
@@ -382,13 +435,39 @@ def build_recommended_profiles(
             "available": external_ready,
             "recommended": False,
         },
+        {
+            "code": "private_server_first",
+            "label": "Private server",
+            "description": "Offload inference to a remote Ollama instance you control — ideal for Intel Mac or low-RAM devices.",
+            "default_backend": "private_server",
+            "provider_scope": "private_server",
+            "provider_options": ["private_server"],
+            "recommended_provider": "private_server" if private_server_ready else None,
+            "recommendation_reason": (
+                "Best fit when you have a home server or VPS behind Tailscale and want full model capability "
+                "without cloud APIs."
+            ),
+            "requires_external_provider": False,
+            "available": private_server_ready,
+            "recommended": False,
+        },
     ]
 
     recommended_code = _preferred_profile_code(
         privacy_preference,
         local_ready=local_ready,
         external_ready=external_ready,
+        private_server_ready=private_server_ready,
     )
+    # On Intel Mac with no local ready and no private server yet, nudge toward private_server_first
+    if (
+        hw["arch"] == "intel_mac"
+        and not private_server_ready
+        and not local_ready
+        and not any(p["code"] == recommended_code and p["available"] for p in profiles)
+    ):
+        recommended_code = "private_server_first"
+
     if not any(profile["code"] == recommended_code and profile["available"] for profile in profiles):
         fallback = next((profile["code"] for profile in profiles if profile["available"]), recommended_code)
         recommended_code = str(fallback)
@@ -407,7 +486,11 @@ def resolve_profile_backend(profile_code: str, statuses: list[ProviderStatus]) -
         and status.available
         for status in statuses
     )
+    private_server_status = next((s for s in statuses if s.provider == "private_server"), None)
+    private_server_ready = bool(private_server_status and private_server_status.available)
 
+    if profile_code == "private_server_first" and private_server_ready:
+        return "private_server"
     if profile_code == "external_assist" and external_ready:
         return "external"
     if profile_code in {"private_local_first", "balanced_hybrid"} and local_ready:
@@ -432,6 +515,13 @@ def resolve_active_provider_config(
         if default_config.is_local:
             return default_config
         return resolve_provider_router("ollama")
+
+    if preferred_backend == "private_server":
+        try:
+            return resolve_provider_router("private_server")
+        except ConfigurationError:
+            logger.warning("Private server not reachable; falling back to default.")
+            return default_config
 
     if preferred_backend != "external":
         return default_config

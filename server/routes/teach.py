@@ -47,13 +47,14 @@ from server.models.schemas import (
 router = APIRouter(tags=["teach"])
 
 
-def _external_extraction_consent_response() -> JSONResponse:
+def _external_extraction_consent_response(provider_label: str | None = None) -> JSONResponse:
     message = "Raw user input requires explicit consent before external extraction."
     return JSONResponse(
         {
             "error": "external_extraction_consent_required",
             "detail": message,
             "message": message,
+            "provider_label": provider_label,
         },
         status_code=409,
     )
@@ -271,8 +272,11 @@ def answer_question(
 
             saved = save_preview_attributes(conn, _accepted_to_dicts(accepted))
             mark_question_answered(conn, question_id)
-    except AuditedExternalExtractionConsentRequiredError:
-        return _external_extraction_consent_response()
+    except AuditedExternalExtractionConsentRequiredError as exc:
+        provider_label = getattr(exc.audit, "provider", None)
+        if provider_label == "private_server":
+            provider_label = "your private server"
+        return _external_extraction_consent_response(provider_label=provider_label)
 
     return {
         "attributes_saved": len(saved),

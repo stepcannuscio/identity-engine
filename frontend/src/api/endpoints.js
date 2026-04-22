@@ -269,3 +269,19 @@ export const getSecurityPosture = async () => {
   const { data } = await client.get('/setup/security-posture')
   return data
 }
+
+export const configurePrivateServer = async (serverUrl, model = null) => {
+  const { data } = await client.post('/setup/providers/private_server/configure', {
+    server_url: serverUrl,
+    model: model || undefined,
+  })
+  return data
+}
+
+export const testPrivateServerConnection = async (serverUrl, model = null) => {
+  const { data } = await client.post('/setup/providers/private_server/test', {
+    server_url: serverUrl,
+    model: model || undefined,
+  })
+  return data
+}

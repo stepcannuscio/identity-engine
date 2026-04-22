@@ -56,7 +56,10 @@ export default function TeachTab({ bootstrapQuery }) {
 
   const bootstrap = bootstrapQuery.data
   const activeQuestion = bootstrap?.questions?.[0] ?? null
-  const requiresExternalExtractionConsent = backend === 'external'
+  const requiresExternalExtractionConsent = backend === 'external' || backend === 'private_server'
+  const isPrivateServer = backend === 'private_server'
+  const privateServerStatus = providerStatuses.find((p) => p.provider === 'private_server')
+  const privateServerUrl = privateServerStatus?.setup_hint?.match(/http\S+/)?.[0] ?? 'your private server'
   const localAnalysisAvailable = providerStatuses.some(
     (provider) => provider.is_local && provider.available,
   )
@@ -364,8 +367,9 @@ export default function TeachTab({ bootstrapQuery }) {
                       setAllowExternalAnswerExtraction(event.target.checked)
                     }
                   />{' '}
-                  I understand this raw answer may be sent to my configured external provider
-                  for extraction.
+                  {isPrivateServer
+                    ? `I understand this raw answer will be sent to my private server for extraction.`
+                    : 'I understand this raw answer may be sent to my configured external provider for extraction.'}
                 </label>
               ) : null}
               <div className="teach-action-row">
@@ -430,8 +434,9 @@ export default function TeachTab({ bootstrapQuery }) {
                   setAllowExternalQuickNoteExtraction(event.target.checked)
                 }
               />{' '}
-              I understand this raw note may be sent to my configured external provider for
-              extraction.
+              {isPrivateServer
+                ? `I understand this raw note will be sent to my private server for extraction.`
+                : 'I understand this raw note may be sent to my configured external provider for extraction.'}
             </label>
           ) : null}
           <div className="teach-action-row">

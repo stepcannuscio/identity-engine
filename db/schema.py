@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
     active_profile        TEXT,
     preferred_provider    TEXT,
     preferred_backend     TEXT NOT NULL DEFAULT 'local'
-                             CHECK(preferred_backend IN ('local', 'external')),
+                             CHECK(preferred_backend IN ('local', 'external', 'private_server')),
     created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -283,9 +283,9 @@ CREATE TABLE IF NOT EXISTS security_check_overrides (
 PROVIDER_STATUS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS provider_status (
     provider          TEXT PRIMARY KEY,
-    deployment        TEXT NOT NULL CHECK(deployment IN ('local', 'external')),
+    deployment        TEXT NOT NULL CHECK(deployment IN ('local', 'external', 'private')),
     trust_boundary    TEXT NOT NULL CHECK(trust_boundary IN ('self_hosted', 'external')),
-    auth_strategy     TEXT NOT NULL CHECK(auth_strategy IN ('none', 'api_key')),
+    auth_strategy     TEXT NOT NULL CHECK(auth_strategy IN ('none', 'api_key', 'url')),
     configured        INTEGER NOT NULL DEFAULT 0 CHECK(configured IN (0, 1)),
     validated         INTEGER NOT NULL DEFAULT 0 CHECK(validated IN (0, 1)),
     last_validated_at TIMESTAMP,
@@ -428,7 +428,19 @@ def _provider_status_schema_needs_migration(conn) -> bool:
             or "trust_boundary" not in provider_status_sql
             or "auth_strategy" not in provider_status_sql
             or "check(provider in" in provider_status_sql
+            or "'private'" not in provider_status_sql
+            or "'url'" not in provider_status_sql
         )
+    )
+
+
+def _app_settings_needs_private_server_migration(conn) -> bool:
+    app_settings_sql = _read_schema_sql(conn, kind="table", name="app_settings")
+    return bool(
+        app_settings_sql
+        and "privacy_preference" in app_settings_sql
+        and "preferred_provider" in app_settings_sql
+        and "'private_server'" not in app_settings_sql
     )
 
 
@@ -522,6 +534,38 @@ def _migrate_app_settings_table(conn) -> None:
     conn.commit()
 
 
+def _migrate_app_settings_for_private_server(conn) -> None:
+    """Widen preferred_backend CHECK constraint to include 'private_server'."""
+    conn.execute("ALTER TABLE app_settings RENAME TO app_settings_old")
+    conn.execute(APP_SETTINGS_TABLE_SQL)
+    conn.execute(
+        """
+        INSERT INTO app_settings (
+            id,
+            onboarding_completed,
+            privacy_preference,
+            active_profile,
+            preferred_provider,
+            preferred_backend,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            onboarding_completed,
+            privacy_preference,
+            active_profile,
+            preferred_provider,
+            preferred_backend,
+            created_at,
+            updated_at
+        FROM app_settings_old
+        """
+    )
+    conn.execute("DROP TABLE app_settings_old")
+    conn.commit()
+
+
 def _migrate_provider_status_table(conn) -> None:
     conn.execute("DROP TABLE IF EXISTS provider_status")
     conn.execute(PROVIDER_STATUS_TABLE_SQL)
@@ -581,6 +625,8 @@ def create_tables(conn) -> None:
         _migrate_attribute_tables(conn)
     if _app_settings_schema_needs_migration(conn):
         _migrate_app_settings_table(conn)
+    if _app_settings_needs_private_server_migration(conn):
+        _migrate_app_settings_for_private_server(conn)
     if _provider_status_schema_needs_migration(conn):
         _migrate_provider_status_table(conn)
     conn.execute(

@@ -59,7 +59,7 @@ def _visible_preference_attributes(
     preference_attributes: list[dict],
     target_backend: str,
 ) -> list[dict]:
-    if target_backend == "local":
+    if target_backend in ("local", "private_server"):
         return preference_attributes
     return [
         attribute
@@ -72,7 +72,7 @@ def _visible_artifact_chunks(
     artifact_chunks: list[dict],
     target_backend: str,
 ) -> list[dict]:
-    if target_backend == "local":
+    if target_backend in ("local", "private_server"):
         return artifact_chunks
     return [chunk for chunk in artifact_chunks if chunk.get("routing") != "local_only"]
 
@@ -83,7 +83,7 @@ def _assert_routing(
     artifact_chunks: list[dict],
     target_backend: str,
 ) -> None:
-    if target_backend == "local":
+    if target_backend in ("local", "private_server"):
         return
 
     violations = [
@@ -171,7 +171,7 @@ def _legacy_evidence_items(context: AssembledContext) -> list[EvidenceItem]:
 
 def _visible_evidence_items(context: AssembledContext, target_backend: str) -> list[EvidenceItem]:
     items = list(context.evidence_items) if context.evidence_items else _legacy_evidence_items(context)
-    if target_backend == "local":
+    if target_backend in ("local", "private_server"):
         return items
     return [item for item in items if item.routing != "local_only" and item.source_type != "artifact"]
 
@@ -228,14 +228,14 @@ def _format_voice_guidance(context: AssembledContext, target_backend: str) -> st
         return ""
 
     def _visible_lines(items) -> list[str]:
-        if target_backend == "local":
+        if target_backend in ("local", "private_server"):
             return [item.text for item in items]
         return [item.text for item in items if item.routing != "local_only"]
 
     identity_lines = _visible_lines(profile.identity_lines)
     preference_lines = _visible_lines(profile.preference_lines)
     avoid_lines = _visible_lines(profile.avoid_lines)
-    exemplar_lines = _visible_lines(profile.exemplar_lines) if target_backend == "local" else []
+    exemplar_lines = _visible_lines(profile.exemplar_lines) if target_backend in ("local", "private_server") else []
 
     if not any([identity_lines, preference_lines, avoid_lines, exemplar_lines]):
         return ""

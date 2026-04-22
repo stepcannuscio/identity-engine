@@ -7,8 +7,10 @@ export default function SetupWorkspace({ bootstrapQuery, showOnboardingActions =
     credentialValues,
     handleProfileSave,
     handleProviderSave,
+    handleProviderTest,
     handleSecurityCheckComplete,
     isSaving,
+    isTesting,
     pendingSecurityCode,
     posture,
     privacyPreferenceDraft,
@@ -21,6 +23,7 @@ export default function SetupWorkspace({ bootstrapQuery, showOnboardingActions =
     setCredentialValues,
     setPrivacyPreferenceDraft,
     setProviderSelections,
+    testResults,
   } = useSetupWorkspace({ bootstrapQuery })
 
   if (!bootstrap) {
@@ -228,7 +231,10 @@ export default function SetupWorkspace({ bootstrapQuery, showOnboardingActions =
               }))
             }
             onSave={handleProviderSave}
+            onTest={handleProviderTest}
             isSaving={isSaving}
+            isTesting={isTesting}
+            testResult={testResults[provider.provider] ?? null}
             isSelected={savedProvider === provider.provider}
           />
         ))}

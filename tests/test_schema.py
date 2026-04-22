@@ -14,7 +14,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.connection import get_plain_connection
-from db.schema import create_tables, seed_domains, INITIAL_DOMAINS
+from db.schema import (
+    create_tables,
+    seed_domains,
+    INITIAL_DOMAINS,
+    _app_settings_needs_private_server_migration,
+    _migrate_app_settings_for_private_server,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -338,3 +344,89 @@ def test_seed_domains_is_idempotent(conn):
     assert second == []  # nothing new on second run
     count = conn.execute("SELECT count(*) FROM domains").fetchone()[0]
     assert count == len(INITIAL_DOMAINS)
+
+
+# ---------------------------------------------------------------------------
+# private_server migration
+# ---------------------------------------------------------------------------
+
+def test_private_server_migration_not_needed_on_fresh_db(conn):
+    assert _app_settings_needs_private_server_migration(conn) is False
+
+
+def test_private_server_migration_detected_on_old_schema():
+    with get_plain_connection(":memory:") as c:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id                    INTEGER PRIMARY KEY CHECK(id = 1),
+                onboarding_completed  INTEGER NOT NULL DEFAULT 0,
+                privacy_preference    TEXT,
+                active_profile        TEXT,
+                preferred_provider    TEXT,
+                preferred_backend     TEXT NOT NULL DEFAULT 'local'
+                                         CHECK(preferred_backend IN ('local', 'external')),
+                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO app_settings (id, onboarding_completed, preferred_backend)
+            VALUES (1, 1, 'external');
+            """
+        )
+        assert _app_settings_needs_private_server_migration(c) is True
+
+
+def test_private_server_migration_preserves_existing_data():
+    with get_plain_connection(":memory:") as c:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id                    INTEGER PRIMARY KEY CHECK(id = 1),
+                onboarding_completed  INTEGER NOT NULL DEFAULT 0,
+                privacy_preference    TEXT,
+                active_profile        TEXT,
+                preferred_provider    TEXT,
+                preferred_backend     TEXT NOT NULL DEFAULT 'local'
+                                         CHECK(preferred_backend IN ('local', 'external')),
+                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO app_settings (id, onboarding_completed, preferred_backend, privacy_preference)
+            VALUES (1, 1, 'local', 'privacy_first');
+            """
+        )
+        _migrate_app_settings_for_private_server(c)
+        row = c.execute(
+            "SELECT onboarding_completed, preferred_backend, privacy_preference FROM app_settings WHERE id = 1"
+        ).fetchone()
+        assert row[0] == 1
+        assert row[1] == "local"
+        assert row[2] == "privacy_first"
+
+
+def test_private_server_migration_allows_private_server_value():
+    with get_plain_connection(":memory:") as c:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id                    INTEGER PRIMARY KEY CHECK(id = 1),
+                onboarding_completed  INTEGER NOT NULL DEFAULT 0,
+                privacy_preference    TEXT,
+                active_profile        TEXT,
+                preferred_provider    TEXT,
+                preferred_backend     TEXT NOT NULL DEFAULT 'local'
+                                         CHECK(preferred_backend IN ('local', 'external')),
+                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO app_settings (id, onboarding_completed, preferred_backend)
+            VALUES (1, 0, 'local');
+            """
+        )
+        _migrate_app_settings_for_private_server(c)
+        c.execute(
+            "UPDATE app_settings SET preferred_backend = 'private_server' WHERE id = 1"
+        )
+        c.commit()
+        row = c.execute("SELECT preferred_backend FROM app_settings WHERE id = 1").fetchone()
+        assert row[0] == "private_server"

@@ -7,7 +7,7 @@ from typing import Any, cast
 from fastapi import APIRouter, HTTPException, Request
 
 from config.provider_catalog import get_provider_definition, list_external_provider_ids
-from config.settings import set_api_key
+from config.settings import set_api_key, set_private_server_url
 from engine.security_posture import (
     inspect_security_posture,
     resolve_security_posture,
@@ -25,6 +25,8 @@ from server.db import get_db_connection
 from server.models.schemas import (
     PrivacyPreferenceOption,
     PrivacyProfileOption,
+    PrivateServerConfigRequest,
+    PrivateServerTestResponse,
     ProviderCredentialField,
     ProviderCredentialRequest,
     ProviderStatusResponse,
@@ -222,6 +224,68 @@ def save_profile(payload: SetupProfileRequest, request: Request) -> SetupOptions
         active_profile=cast(str | None, settings["active_profile"]),
         preferred_provider=cast(str | None, settings["preferred_provider"]),
         preferred_backend=cast(Any, settings["preferred_backend"]),
+    )
+
+
+@router.post("/setup/providers/private_server/configure", response_model=ProviderStatusResponse)
+def configure_private_server(
+    payload: PrivateServerConfigRequest,
+    request: Request,
+) -> ProviderStatusResponse:
+    """Store the private Ollama server URL in the system keychain."""
+    _ = request
+    url = payload.server_url.strip().rstrip("/")
+    if not url.startswith("http"):
+        raise HTTPException(status_code=422, detail="server_url must be an http or https URL")
+    set_private_server_url(url)
+    with get_db_connection() as conn:
+        statuses = {status.provider: status for status in get_provider_statuses(conn)}
+        status = statuses["private_server"]
+    return _provider_status_response(status)
+
+
+@router.post("/setup/providers/private_server/test", response_model=PrivateServerTestResponse)
+def test_private_server(
+    payload: PrivateServerConfigRequest,
+    request: Request,
+) -> PrivateServerTestResponse:
+    """Probe a private Ollama server URL and report reachability and model availability."""
+    import time
+    import requests as _requests
+    _ = request
+
+    url = payload.server_url.strip().rstrip("/")
+    model = (payload.model or "").strip() or "llama3.1:8b"
+
+    start = time.monotonic()
+    try:
+        _requests.get(url, timeout=5)
+        latency_ms = int((time.monotonic() - start) * 1000)
+    except Exception as exc:
+        return PrivateServerTestResponse(
+            reachable=False,
+            model_available=False,
+            latency_ms=None,
+            error=str(exc),
+        )
+
+    model_available = False
+    try:
+        tags_resp = _requests.get(f"{url}/api/tags", timeout=5)
+        tags_resp.raise_for_status()
+        remote_models = [m.get("name", "") for m in tags_resp.json().get("models", [])]
+        tag = model.split(":")[0]
+        model_available = any(
+            m.startswith(model) or m.startswith(tag + ":") for m in remote_models
+        )
+    except Exception:
+        pass
+
+    return PrivateServerTestResponse(
+        reachable=True,
+        model_available=model_available,
+        latency_ms=latency_ms,
+        error=None if model_available else f"Model {model!r} not found on server. Run: ollama pull {model}",
     )
 
 

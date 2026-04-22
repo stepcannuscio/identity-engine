@@ -48,11 +48,20 @@ class QueryContext:
     acquisition: AcquisitionPlan
 
 
+def _backend_label(provider_config: Any) -> str:
+    """Return a backend label string for attribute filtering and audit logging."""
+    if getattr(provider_config, "is_local", False):
+        return "local"
+    if getattr(provider_config, "provider", None) == "private_server":
+        return "private_server"
+    return "external"
+
+
 def _preference_attributes_for_backend(
     assembled_context: AssembledContext,
     backend: str,
 ) -> list[dict]:
-    if backend == "local":
+    if backend in ("local", "private_server"):
         return assembled_context.preference_attributes
     return [
         attribute
@@ -65,7 +74,7 @@ def _identity_attributes_for_backend(
     assembled_context: AssembledContext,
     backend: str,
 ) -> list[dict]:
-    if backend == "local":
+    if backend in ("local", "private_server"):
         return assembled_context.attributes
     return [
         attribute
@@ -117,7 +126,7 @@ def _build_query_context(
         intent_tags=intent_tags,
         domain_hints=domain_hints,
     )
-    backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    backend = _backend_label(provider_config)
     identity_attributes = _identity_attributes_for_backend(assembled_context, backend)
     preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
     if backend == "external" and (
@@ -162,7 +171,7 @@ def prepare_query(
 ) -> QueryContext:
     """Prepare a query without generating a response yet."""
     query_plan = build_query_plan(user_query)
-    requested_backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    requested_backend = _backend_label(provider_config)
 
     context = _build_query_context(
         user_query,
@@ -197,7 +206,7 @@ def prepare_query(
             "rerouted self-style query to artifact-grounded answering because only uploaded evidence was available"
         )
 
-    if context.source_profile == "artifact_grounded_self" and requested_backend == "external":
+    if context.source_profile == "artifact_grounded_self" and requested_backend not in ("local", "private_server"):
         try:
             local_provider_config = resolve_local_provider_config(provider_config)
         except Exception:

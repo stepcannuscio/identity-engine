@@ -263,9 +263,9 @@ class ProviderStatusResponse(BaseModel):
 
     provider: str
     label: str
-    deployment: Literal["local", "external"]
+    deployment: Literal["local", "external", "private"]
     trust_boundary: Literal["self_hosted", "external"]
-    auth_strategy: Literal["none", "api_key"]
+    auth_strategy: Literal["none", "api_key", "url"]
     configured: bool
     available: bool
     validated: bool
@@ -298,11 +298,11 @@ class PrivacyPreferenceOption(BaseModel):
 class PrivacyProfileOption(BaseModel):
     """One selectable onboarding model/provider configuration."""
 
-    code: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    code: Literal["private_local_first", "balanced_hybrid", "external_assist", "private_server_first"]
     label: str
     description: str
-    default_backend: Literal["local", "external"]
-    provider_scope: Literal["self_hosted_only", "hybrid", "external_default"]
+    default_backend: Literal["local", "external", "private_server"]
+    provider_scope: Literal["self_hosted_only", "hybrid", "external_default", "private_server"]
     provider_options: list[str] = []
     recommended_provider: str | None = None
     recommendation_reason: str
@@ -347,16 +347,16 @@ class SetupOptionsResponse(BaseModel):
     profiles: list[PrivacyProfileOption]
     active_profile: str | None
     preferred_provider: str | None = None
-    preferred_backend: Literal["local", "external"]
+    preferred_backend: Literal["local", "external", "private_server"]
 
 
 class SetupProfileRequest(BaseModel):
     """Persisted onboarding profile selection."""
 
-    profile: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    profile: Literal["private_local_first", "balanced_hybrid", "external_assist", "private_server_first"]
     privacy_preference: Literal["privacy_first", "balanced", "capability_first"] | None = None
     preferred_provider: str | None = None
-    preferred_backend: Literal["local", "external"] | None = None
+    preferred_backend: Literal["local", "external", "private_server"] | None = None
     onboarding_completed: bool | None = None
 
 
@@ -396,7 +396,7 @@ class TeachBootstrapResponse(BaseModel):
     privacy_preferences: list[PrivacyPreferenceOption]
     active_profile: str | None
     preferred_provider: str | None = None
-    preferred_backend: Literal["local", "external"]
+    preferred_backend: Literal["local", "external", "private_server"]
     providers: list[ProviderStatusResponse]
     profiles: list[PrivacyProfileOption]
     security_posture: SecurityPostureResponse
@@ -672,3 +672,19 @@ class DomainSummary(BaseModel):
 
     domain: str
     attribute_count: int
+
+
+class PrivateServerConfigRequest(BaseModel):
+    """URL and optional model override for a private Ollama server."""
+
+    server_url: str
+    model: str | None = None
+
+
+class PrivateServerTestResponse(BaseModel):
+    """Connection-test result for a private Ollama server."""
+
+    reachable: bool
+    model_available: bool
+    latency_ms: int | None = None
+    error: str | None = None

@@ -289,7 +289,7 @@ class TestExtractAttributes:
         config = _make_config(is_local=True)
         call_count = {"n": 0}
 
-        def side_effect(messages, model):
+        def side_effect(messages, model, **kwargs):
             call_count["n"] += 1
             return bad_raw if call_count["n"] == 1 else good_raw
 
@@ -355,3 +355,94 @@ class TestPrintRoutingReport:
     def test_unknown_arch_does_not_raise(self, capsys):
         config = _make_config(arch="other")
         print_routing_report(config)  # should not raise
+
+    def test_private_server_config_shows_url(self, capsys):
+        config = ProviderConfig(
+            provider="private_server",
+            api_key=None,
+            model="llama3.1:8b",
+            is_local=False,
+            base_url="http://100.10.0.1:11434",
+        )
+        print_routing_report(config)
+        out = capsys.readouterr().out
+        assert "private server" in out
+        assert "100.10.0.1" in out
+
+
+# ---------------------------------------------------------------------------
+# Private server resolution
+# ---------------------------------------------------------------------------
+
+_INTEL_HW = {
+    "arch": "intel_mac", "ram_gb": 16.0, "cpu_cores": 4,
+    "has_metal": False, "has_cuda": False, "recommended_tier": "local_small",
+}
+
+
+class TestPrivateServerRouter:
+    def test_returns_correct_config(self):
+        with (
+            patch("config.llm_router.get_private_server_url", return_value="http://10.0.0.1:11434"),
+            patch("config.llm_router.requests.get"),
+        ):
+            from config.llm_router import _resolve_private_server_router
+            config = _resolve_private_server_router(_INTEL_HW)
+        assert config.provider == "private_server"
+        assert config.is_local is False
+        assert config.base_url == "http://10.0.0.1:11434"
+
+    def test_is_trusted_private_property(self):
+        config = ProviderConfig(
+            provider="private_server", api_key=None, model="llama3.1:8b",
+            is_local=False, base_url="http://10.0.0.1:11434",
+        )
+        assert config.is_trusted_private is True
+
+    def test_is_trusted_private_false_for_external(self):
+        config = _make_config(provider="anthropic", is_local=False)
+        assert config.is_trusted_private is False
+
+    def test_raises_when_url_not_configured(self):
+        with patch("config.llm_router.get_private_server_url", return_value=None):
+            from config.llm_router import _resolve_private_server_router, ConfigurationError
+            with pytest.raises(ConfigurationError, match="Private server URL is not configured"):
+                _resolve_private_server_router(_INTEL_HW)
+
+    def test_raises_when_server_unreachable(self):
+        import requests as _requests
+        with (
+            patch("config.llm_router.get_private_server_url", return_value="http://10.0.0.1:11434"),
+            patch("config.llm_router.requests.get", side_effect=_requests.ConnectionError("refused")),
+        ):
+            from config.llm_router import _resolve_private_server_router, ConfigurationError
+            with pytest.raises(ConfigurationError, match="not reachable"):
+                _resolve_private_server_router(_INTEL_HW)
+
+    def test_extract_attributes_routes_to_private_server_url(self):
+        import json as _json
+        raw = _json.dumps(SAMPLE_ATTRS)
+        config = ProviderConfig(
+            provider="private_server", api_key=None, model="llama3.1:8b",
+            is_local=False, base_url="http://10.0.0.1:11434",
+        )
+        with patch("config.llm_router.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: {"message": {"content": raw}},
+            )
+            mock_post.return_value.raise_for_status = lambda: None
+            result = extract_attributes(QUESTION, ANSWER, config)
+        call_url = mock_post.call_args[0][0]
+        assert "10.0.0.1" in call_url
+        assert result == SAMPLE_ATTRS
+
+    def test_resolve_router_prefers_private_server_when_configured(self):
+        with (
+            patch("config.llm_router.detect_hardware", return_value=_INTEL_HW),
+            patch("config.llm_router.get_private_server_url", return_value="http://10.0.0.1:11434"),
+            patch("config.llm_router.requests.get"),
+            patch("config.llm_router.requests.get"),
+        ):
+            config = resolve_router()
+        assert config.provider == "private_server"

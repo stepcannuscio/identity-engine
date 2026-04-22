@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  configurePrivateServer,
   saveProviderCredentials,
   saveSetupProfile,
+  testPrivateServerConnection,
   updateSecurityCheckOverride,
 } from '../api/endpoints.js'
 import { useAppState } from '../store/appState.js'
@@ -17,30 +19,26 @@ function computeRecommendedProfileCode(providers, privacyPreference) {
   const externalReady = providers.some(
     (provider) => provider.deployment === 'external' && provider.available,
   )
+  const privateServerReady = providers.some(
+    (provider) => provider.provider === 'private_server' && provider.available,
+  )
 
   if (privacyPreference === 'privacy_first') {
-    if (localReady) {
-      return 'private_local_first'
-    }
+    if (privateServerReady) return 'private_server_first'
+    if (localReady) return 'private_local_first'
     return externalReady ? 'external_assist' : 'private_local_first'
   }
 
   if (privacyPreference === 'capability_first') {
-    if (externalReady) {
-      return 'external_assist'
-    }
+    if (externalReady) return 'external_assist'
+    if (privateServerReady) return 'private_server_first'
     return localReady ? 'private_local_first' : 'external_assist'
   }
 
-  if (localReady && externalReady) {
-    return 'balanced_hybrid'
-  }
-  if (localReady) {
-    return 'private_local_first'
-  }
-  if (externalReady) {
-    return 'external_assist'
-  }
+  if (privateServerReady && !localReady) return 'private_server_first'
+  if (localReady && externalReady) return 'balanced_hybrid'
+  if (localReady) return 'private_local_first'
+  if (externalReady) return 'external_assist'
   return 'private_local_first'
 }
 
@@ -76,6 +74,8 @@ export function useSetupWorkspace({ bootstrapQuery }) {
     securityPosture,
   } = useAppState()
   const [isSaving, setIsSaving] = useState(false)
+  const [isTesting, setIsTesting] = useState(false)
+  const [testResults, setTestResults] = useState({})
   const [pendingSecurityCode, setPendingSecurityCode] = useState(null)
   const [privacyPreferenceDraft, setPrivacyPreferenceDraft] = useState('balanced')
   const [providerSelections, setProviderSelections] = useState({})
@@ -146,21 +146,49 @@ export function useSetupWorkspace({ bootstrapQuery }) {
   const handleProviderSave = async (provider) => {
     setIsSaving(true)
     try {
-      await saveProviderCredentials(provider, credentialValues[provider] ?? {})
-      setCredentialValues((current) => ({
-        ...current,
-        [provider]: Object.fromEntries(
-          Object.keys(current[provider] ?? {}).map((fieldName) => [fieldName, '']),
-        ),
-      }))
-      await refreshBootstrap()
-      addToast({ message: `${provider} credentials saved.`, tone: 'success' })
+      if (provider === 'private_server') {
+        const values = credentialValues[provider] ?? {}
+        await configurePrivateServer(values.server_url ?? '', values.model ?? null)
+        setCredentialValues((current) => ({
+          ...current,
+          [provider]: { ...current[provider], server_url: '' },
+        }))
+        await refreshBootstrap()
+        addToast({ message: 'Private server URL saved.', tone: 'success' })
+      } else {
+        await saveProviderCredentials(provider, credentialValues[provider] ?? {})
+        setCredentialValues((current) => ({
+          ...current,
+          [provider]: Object.fromEntries(
+            Object.keys(current[provider] ?? {}).map((fieldName) => [fieldName, '']),
+          ),
+        }))
+        await refreshBootstrap()
+        addToast({ message: `${provider} credentials saved.`, tone: 'success' })
+      }
     } catch (error) {
       addToast({
         message: error?.response?.data?.detail ?? `Unable to save ${provider} credentials.`,
       })
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  const handleProviderTest = async (provider) => {
+    if (provider !== 'private_server') return
+    setIsTesting(true)
+    try {
+      const values = credentialValues[provider] ?? {}
+      const result = await testPrivateServerConnection(values.server_url ?? '', values.model ?? null)
+      setTestResults((current) => ({ ...current, [provider]: result }))
+    } catch (error) {
+      setTestResults((current) => ({
+        ...current,
+        [provider]: { reachable: false, model_available: false, error: error?.message ?? 'Request failed' },
+      }))
+    } finally {
+      setIsTesting(false)
     }
   }
 
@@ -189,8 +217,10 @@ export function useSetupWorkspace({ bootstrapQuery }) {
     credentialValues,
     handleProfileSave,
     handleProviderSave,
+    handleProviderTest,
     handleSecurityCheckComplete,
     isSaving,
+    isTesting,
     pendingSecurityCode,
     posture,
     privacyPreferenceDraft,
@@ -203,5 +233,6 @@ export function useSetupWorkspace({ bootstrapQuery }) {
     setCredentialValues,
     setPrivacyPreferenceDraft,
     setProviderSelections,
+    testResults,
   }
 }
