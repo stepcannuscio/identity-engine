@@ -620,6 +620,7 @@ def assemble_query_context(
         preference_attributes=preference_attributes,
         preference_summary=preference_context.summary,
         artifact_chunks=artifact_chunks,
+        conn=resolved_conn,
     )
     was_trimmed = (
         history_was_trimmed

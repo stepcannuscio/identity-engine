@@ -34,6 +34,7 @@ This document captures the current system state after completing:
 - Cross-Domain Synthesis Staging
 - Cross-Domain Synthesis Accept-Dismiss + Narrative Generation
 - Temporal Intelligence Analysis
+- Natural Voice Learning
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -565,6 +566,34 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - `GET /identity/evolution` returns the full temporal event timeline (active and
   resolved) ordered by detection time for a future "How I've changed" UI view
 
+### 29. Natural Voice Learning Layer
+- `engine/voice_feature_extractor.py` extracts seven pure-statistical voice
+  features from user text using only local regex — no model call:
+  - `avg_sentence_length`
+  - `question_frequency`
+  - `first_person_density`
+  - `contraction_rate`
+  - `em_dash_rate`
+  - `ellipsis_rate`
+  - `word_count`
+- extraction returns `None` for texts shorter than 50 words
+- the session learner now calls the extractor after each qualifying exchange
+  and persists the result in `voice_feature_observations` when the query
+  meets the 50-word threshold; this fires independently of whether the LLM
+  signal-extraction path is active
+- a rolling aggregate baseline is maintained in `voice_baseline_profile`
+  (upserted on every observation write) as a single `singleton` row
+- `build_voice_profile()` now accepts an optional `conn` and, when ≥ 5
+  observations exist, loads the baseline and appends learned structural
+  guidance as local-only `VoiceGuidanceItem` preference lines:
+  - average sentence length
+  - question register (frequent / rare)
+  - contraction register (informal / formal)
+  - em-dash usage
+  - ellipsis usage
+- baseline guidance is local-only and is never sent to external providers
+- extraction failures are non-blocking and silent
+
 ### 27. Cross-Domain Synthesis Staging
 - the first backend slice of Phase 4 from `docs/MAXIMIZE_INTELLIGENCE.md` is
   now implemented with deterministic local-only staging
@@ -677,7 +706,16 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   attribute; Teach now surfaces confidence-decay re-confirmation questions;
   coverage notes warn when a queried domain has an active shift cluster;
   `GET /identity/evolution` exposes the full temporal event timeline
-- Phases 6 and 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
+- Phase 6 (`Natural Voice Learning`) is fully implemented on the backend:
+  pure-statistical voice feature extraction is live; observations are
+  accumulated per-session in `voice_feature_observations`; a rolling
+  aggregate baseline is maintained in `voice_baseline_profile`; the session
+  learner now extracts voice features from queries ≥ 50 words without any
+  model call; `build_voice_profile()` now loads the baseline when ≥ 5
+  observations exist and appends learned structural guidance (sentence
+  length, question frequency, contraction register, em-dash/ellipsis usage)
+  as local-only preference guidance lines
+- Phase 7 from `docs/MAXIMIZE_INTELLIGENCE.md` is still pending
 - the remaining Phase 2 gap is frontend depth rather than backend plumbing:
   the Teach bootstrap card and review endpoints exist, but a richer dedicated
   conversation-signal review workflow has not been built yet
@@ -781,6 +819,11 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   be outdated
 - expose the full temporal evolution timeline through `GET /identity/evolution`
   for a potential "How I've changed" UI view
+- passively accumulate structural voice features from queries ≥ 50 words
+  using only local regex, with no model call required
+- maintain a rolling voice baseline profile from accumulated observations and
+  apply it as learned structural guidance during voice-generation drafting
+  when enough observations exist
 
 ---
 

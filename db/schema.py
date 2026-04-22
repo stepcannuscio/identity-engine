@@ -450,6 +450,20 @@ CREATE TABLE IF NOT EXISTS voice_feature_observations (
 );
 """
 
+VOICE_BASELINE_PROFILE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS voice_baseline_profile (
+    id                   TEXT PRIMARY KEY,
+    observation_count    INTEGER NOT NULL DEFAULT 0,
+    avg_sentence_length  REAL,
+    question_frequency   REAL,
+    first_person_density REAL,
+    contraction_rate     REAL,
+    em_dash_rate         REAL,
+    ellipsis_rate        REAL,
+    updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 ATTRIBUTE_EMBEDDING_CACHE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS attribute_embedding_cache (
     attribute_id      TEXT PRIMARY KEY REFERENCES attributes(id) ON DELETE CASCADE,
@@ -502,6 +516,7 @@ SCHEMA_SQL = "\n\n".join(
         TEMPORAL_EVENTS_TABLE_SQL,
         TEMPORAL_EVENTS_INDEX_SQL,
         VOICE_FEATURE_OBSERVATIONS_TABLE_SQL,
+        VOICE_BASELINE_PROFILE_TABLE_SQL,
         ATTRIBUTE_EMBEDDING_CACHE_TABLE_SQL,
     ]
 )

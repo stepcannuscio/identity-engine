@@ -12,6 +12,11 @@ from config.llm_router import ConfigurationError
 from engine.privacy_broker import PrivacyBroker
 from engine.session import Session
 from engine.setup_state import resolve_local_provider_config
+from engine.voice_feature_extractor import (
+    VoiceFeatureProfile,
+    extract as extract_voice_features,
+    insert_observation as insert_voice_observation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +35,9 @@ _MUTABILITY_VALUES = {"stable", "evolving"}
 _WORD_RE = re.compile(r"[a-z0-9']+", re.IGNORECASE)
 _FIRST_PERSON_RE = re.compile(r"\b(i|i'm|im|me|my|mine|myself)\b", re.IGNORECASE)
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
-_MAX_QUERY_WORDS = 20
+_MIN_LEARNING_WORDS = 20
+_VOICE_FEATURE_MIN_WORDS = 50
+_MAX_QUERY_WORDS = _MIN_LEARNING_WORDS  # kept for backward compat if referenced elsewhere
 _MAX_QUERY_EXCERPT_CHARS = 280
 _MAX_SIGNAL_ITEMS = 3
 _EXTRACTION_TIMEOUT_SECONDS = 20
@@ -403,22 +410,36 @@ def maybe_extract_from_exchange(
     """
     if coverage_confidence == "high_confidence":
         return 0
-    if _word_count(user_query) < _MAX_QUERY_WORDS:
-        return 0
-
-    correction_markers = _matched_correction_markers(user_query)
-    if not _contains_first_person(user_query) and not correction_markers:
-        return 0
-
-    learning_provider = _resolve_learning_provider(provider_config)
-    if learning_provider is None:
+    words = _word_count(user_query)
+    if words < _MIN_LEARNING_WORDS:
         return 0
 
     resolved_domain_hints = sorted({hint for hint in (domain_hints or []) if hint})
     exchange_index = max(session.query_count - 1, 0)
-    prior_history = session.get_history()[:-2] if len(session.get_history()) >= 2 else []
     query_excerpt = _query_excerpt(user_query)
     staged_count = 0
+
+    # Voice feature extraction is pure stats — no model call required.
+    if words >= _VOICE_FEATURE_MIN_WORDS:
+        voice_profile: VoiceFeatureProfile | None = extract_voice_features(user_query)
+        if voice_profile is not None:
+            try:
+                insert_voice_observation(conn, session_id=session.id, profile=voice_profile)
+                conn.commit()
+            except Exception:
+                logger.debug(
+                    "Voice feature observation insert failed for session %s.", session.id
+                )
+
+    correction_markers = _matched_correction_markers(user_query)
+    if not _contains_first_person(user_query) and not correction_markers:
+        return staged_count
+
+    learning_provider = _resolve_learning_provider(provider_config)
+    if learning_provider is None:
+        return staged_count
+
+    prior_history = session.get_history()[:-2] if len(session.get_history()) >= 2 else []
 
     try:
         attribute_candidates, preference_signals = _extract_signal_candidates(
