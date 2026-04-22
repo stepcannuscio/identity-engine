@@ -21,6 +21,7 @@ from engine.coverage_evaluator import (
     evaluate_coverage,
 )
 from engine.feedback_calibrator import build_recent_feedback_gap_note
+from engine.temporal_analyzer import list_active_temporal_events
 from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import build_query_plan
@@ -100,6 +101,21 @@ def _should_reroute_to_artifact_grounded_self(
     )
 
 
+def _build_shift_cluster_note(conn, *, domains: list[str]) -> str | None:
+    """Return a staleness warning if any queried domains have a recent shift cluster."""
+    if not domains:
+        return None
+    events = list_active_temporal_events(conn, event_type="shift_cluster")
+    affected = sorted({e.domain for e in events if e.domain in domains})
+    if not affected:
+        return None
+    domain_text = ", ".join(affected)
+    return (
+        f"Your {domain_text} profile has changed significantly recently — "
+        "some retrieved context may be outdated."
+    )
+
+
 def _artifact_only_external_response() -> str:
     return (
         "I found relevant evidence in your local uploaded artifacts, but I can't send that "
@@ -146,10 +162,15 @@ def _build_query_context(
         domains=assembled_context.domains_used or domain_hints,
         source_profile=source_profile,
     )
+    shift_cluster_note = _build_shift_cluster_note(
+        conn,
+        domains=assembled_context.domains_used or domain_hints,
+    )
     coverage = evaluate_coverage(
         assembled_context,
         backend=backend,
         feedback_gap_note=feedback_gap_note,
+        shift_cluster_note=shift_cluster_note,
     )
     acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
     messages = build_prompt(

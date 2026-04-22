@@ -449,6 +449,7 @@ def _notes_for(
     counts: CoverageCounts,
     cap_applied: str | None,
     feedback_gap_note: str | None = None,
+    shift_cluster_note: str | None = None,
 ) -> str | None:
     note: str | None = None
     if confidence == "insufficient_data":
@@ -480,8 +481,14 @@ def _notes_for(
 
     if confidence == "low_confidence" and feedback_gap_note:
         if note:
-            return f"{note} {feedback_gap_note}"
-        return feedback_gap_note
+            note = f"{note} {feedback_gap_note}"
+        else:
+            note = feedback_gap_note
+
+    if shift_cluster_note:
+        if note:
+            return f"{note} {shift_cluster_note}"
+        return shift_cluster_note
     return note
 
 
@@ -494,6 +501,7 @@ def evaluate_coverage(
     *,
     backend: str = "local",
     feedback_gap_note: str | None = None,
+    shift_cluster_note: str | None = None,
 ) -> CoverageAssessment:
     """Score an assembled context and classify answering confidence.
 
@@ -595,6 +603,7 @@ def evaluate_coverage(
             counts,
             cap_applied,
             feedback_gap_note=feedback_gap_note,
+            shift_cluster_note=shift_cluster_note,
         ),
         breakdown=breakdown,
     )

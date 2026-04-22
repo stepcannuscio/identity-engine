@@ -18,6 +18,7 @@ from server.models.schemas import (
     CreateAttributeRequest,
     DomainSummary,
 )
+from engine.temporal_analyzer import list_all_temporal_events
 from server.services import build_attribute_provenance_response
 
 router = APIRouter(tags=["attributes"])
@@ -488,6 +489,26 @@ def confirm_attribute(attribute_id: str, request: Request) -> AttributeResponse:
         if not _is_current_status(str(current[9])):
             raise HTTPException(status_code=409, detail="attribute is not editable")
         return _confirm_attribute(conn, attribute_id=attribute_id, current=current)
+
+
+@router.get("/identity/evolution")
+def list_identity_evolution(request: Request) -> list[dict[str, object]]:
+    """Return the temporal evolution timeline — all detected drift, shift, and decay events."""
+    _ = request
+    with get_db_connection() as conn:
+        events = list_all_temporal_events(conn)
+    return [
+        {
+            "id": event.id,
+            "event_type": event.event_type,
+            "domain": event.domain,
+            "attribute_ids": event.attribute_ids,
+            "detected_at": event.detected_at.isoformat(),
+            "description": event.description,
+            "status": event.status,
+        }
+        for event in events
+    ]
 
 
 @router.get("/domains", response_model=list[DomainSummary])

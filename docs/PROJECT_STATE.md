@@ -33,6 +33,7 @@ This document captures the current system state after completing:
 - Conversation Signal Review
 - Cross-Domain Synthesis Staging
 - Cross-Domain Synthesis Accept-Dismiss + Narrative Generation
+- Temporal Intelligence Analysis
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -542,6 +543,28 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - dismissing or accepting a staged signal marks it processed without deleting
   history from `extracted_session_signals`
 
+### 28. Temporal Intelligence Layer
+- `engine/temporal_analyzer.py` detects three event types using only
+  `attribute_history` and `attributes` — no new data infrastructure required
+- **Drift**: attributes changed 2+ times within the last 365 days are staged
+  as `drift` events; signals that a stored belief may be actively evolving
+- **Shift cluster**: 3+ attributes in one domain changed within any 90-day
+  window are staged as `shift_cluster` events; signals a possible life transition
+- **Confidence decay**: active/confirmed attributes with confidence ≥ 0.70 not
+  confirmed or updated in 540+ days are staged as `confidence_decay` events;
+  prompts re-confirmation before stale high-confidence beliefs influence queries
+- Decay events auto-resolve when the attribute is subsequently confirmed,
+  keeping the `temporal_events` table accurate without user action
+- Events are deduplicated across refresh passes so repeated runs stay idempotent
+- Teach question planning now includes a third prioritization pass that stages
+  confidence-decay re-confirmation questions (priority 12.0) after cross-domain
+  synthesis and contradiction questions
+- Coverage evaluator now accepts an optional `shift_cluster_note` that is
+  appended to coverage notes when the queried domain has an active shift cluster,
+  warning the user that retrieved context may be outdated
+- `GET /identity/evolution` returns the full temporal event timeline (active and
+  resolved) ordered by detection time for a future "How I've changed" UI view
+
 ### 27. Cross-Domain Synthesis Staging
 - the first backend slice of Phase 4 from `docs/MAXIMIZE_INTELLIGENCE.md` is
   now implemented with deterministic local-only staging
@@ -648,7 +671,13 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   integration, synthesis review API, accept-dismiss workflows for both
   syntheses and contradiction flags, and optional local LLM narrative
   generation on synthesis acceptance are all live
-- Phases 5 through 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
+- Phase 5 (`Temporal Intelligence`) is fully implemented on the backend:
+  drift detection, shift-cluster detection, and confidence-decay detection
+  are all live; decay events auto-resolve when the user confirms the
+  attribute; Teach now surfaces confidence-decay re-confirmation questions;
+  coverage notes warn when a queried domain has an active shift cluster;
+  `GET /identity/evolution` exposes the full temporal event timeline
+- Phases 6 and 7 from `docs/MAXIMIZE_INTELLIGENCE.md` are still pending
 - the remaining Phase 2 gap is frontend depth rather than backend plumbing:
   the Teach bootstrap card and review endpoints exist, but a richer dedicated
   conversation-signal review workflow has not been built yet
@@ -738,6 +767,20 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   LLM narrative generation for accepted themes when a local model is available
 - resolve or dismiss staged contradiction flags after the user has addressed
   or ruled out the identified tension
+- detect identity drift when a single attribute changes repeatedly within the
+  past year and stage it as a reviewable temporal event
+- detect life-transition shift clusters when three or more attributes in one
+  domain change within a 90-day window and flag the domain as in flux
+- detect confidence decay for high-confidence attributes that have not been
+  confirmed or updated in over 540 days and surface re-confirmation questions
+  in Teach so stale beliefs can be validated or retired
+- auto-resolve confidence-decay events when the user subsequently confirms
+  the attribute, keeping the temporal event history accurate and append-only
+- include a staleness warning in query coverage notes when the queried domain
+  has an active shift-cluster event so the user knows retrieved context may
+  be outdated
+- expose the full temporal evolution timeline through `GET /identity/evolution`
+  for a potential "How I've changed" UI view
 
 ---
 
