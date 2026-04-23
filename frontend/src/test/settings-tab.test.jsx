@@ -340,6 +340,11 @@ describe('TeachTab', () => {
 })
 
 describe('SettingsTab', () => {
+  it('shows a loading screen while bootstrap data is loading', () => {
+    renderWithProviders(<SettingsTab bootstrapQuery={{ isLoading: true, data: undefined }} />)
+    expect(screen.getByText('Loading Settings...')).toBeInTheDocument()
+  })
+
   it('lets the user mark unknown security checks complete', async () => {
     const user = userEvent.setup()
     const bootstrap = createBootstrapData()
