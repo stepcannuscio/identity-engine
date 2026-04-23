@@ -51,7 +51,6 @@ export default function TeachTab({ bootstrapQuery }) {
   const [isSaving, setIsSaving] = useState(false)
   const [reflectMode, setReflectMode] = useState(false)
   const [reflectSessionId, setReflectSessionId] = useState(null)
-  const [reflectTurnCount, setReflectTurnCount] = useState(0)
   const [reflectQuestion, setReflectQuestion] = useState(null)
   const [reflectAnswer, setReflectAnswer] = useState('')
   const [reflectHistory, setReflectHistory] = useState([])
@@ -69,8 +68,6 @@ export default function TeachTab({ bootstrapQuery }) {
   const activeQuestion = bootstrap?.questions?.[0] ?? null
   const requiresExternalExtractionConsent = backend === 'external' || backend === 'private_server'
   const isPrivateServer = backend === 'private_server'
-  const privateServerStatus = providerStatuses.find((p) => p.provider === 'private_server')
-  const privateServerUrl = privateServerStatus?.setup_hint?.match(/http\S+/)?.[0] ?? 'your private server'
   const localAnalysisAvailable = providerStatuses.some(
     (provider) => provider.is_local && provider.available,
   )
@@ -338,7 +335,6 @@ export default function TeachTab({ bootstrapQuery }) {
       setReflectHistory([{ role: 'assistant', content: response.first_question }])
       setReflectSuggestions([])
       setReflectThemes([])
-      setReflectTurnCount(1)
       setReflectMode(true)
     } catch (error) {
       addToast({ message: error?.response?.data?.detail ?? 'Unable to start reflection.' })
@@ -360,7 +356,6 @@ export default function TeachTab({ bootstrapQuery }) {
         { role: 'assistant', content: response.next_question },
       ])
       setReflectQuestion(response.next_question)
-      setReflectTurnCount(response.turn_count)
       if (response.suggested_updates?.length) {
         setReflectSuggestions((prev) => [...prev, ...response.suggested_updates])
       }
@@ -385,7 +380,6 @@ export default function TeachTab({ bootstrapQuery }) {
     setReflectHistory([])
     setReflectSuggestions([])
     setReflectThemes([])
-    setReflectTurnCount(0)
   }
 
   if (bootstrapQuery.isLoading) {
