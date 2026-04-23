@@ -218,6 +218,7 @@ CREATE TABLE IF NOT EXISTS query_feedback (
     intent_tags_json    TEXT NOT NULL DEFAULT '[]',
     domain_hints_json   TEXT NOT NULL DEFAULT '[]',
     domains_json        TEXT NOT NULL DEFAULT '[]',
+    retrieved_attribute_ids_json TEXT NOT NULL DEFAULT '[]',
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -266,7 +267,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
     active_profile        TEXT,
     preferred_provider    TEXT,
     preferred_backend     TEXT NOT NULL DEFAULT 'local'
-                             CHECK(preferred_backend IN ('local', 'external')),
+                             CHECK(preferred_backend IN ('local', 'external', 'private_server')),
     created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -283,9 +284,9 @@ CREATE TABLE IF NOT EXISTS security_check_overrides (
 PROVIDER_STATUS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS provider_status (
     provider          TEXT PRIMARY KEY,
-    deployment        TEXT NOT NULL CHECK(deployment IN ('local', 'external')),
+    deployment        TEXT NOT NULL CHECK(deployment IN ('local', 'external', 'private')),
     trust_boundary    TEXT NOT NULL CHECK(trust_boundary IN ('self_hosted', 'external')),
-    auth_strategy     TEXT NOT NULL CHECK(auth_strategy IN ('none', 'api_key')),
+    auth_strategy     TEXT NOT NULL CHECK(auth_strategy IN ('none', 'api_key', 'url')),
     configured        INTEGER NOT NULL DEFAULT 0 CHECK(configured IN (0, 1)),
     validated         INTEGER NOT NULL DEFAULT 0 CHECK(validated IN (0, 1)),
     last_validated_at TIMESTAMP,
@@ -300,9 +301,11 @@ CREATE TABLE IF NOT EXISTS teach_questions (
     prompt           TEXT NOT NULL,
     domain           TEXT REFERENCES domains(name) ON DELETE SET NULL,
     intent_key       TEXT NOT NULL,
-    source           TEXT NOT NULL CHECK(source IN ('catalog', 'generated')),
+    source           TEXT NOT NULL CHECK(source IN (
+                         'catalog', 'generated', 'synthesis', 'contradiction'
+                     )),
     status           TEXT NOT NULL DEFAULT 'pending'
-                         CHECK(status IN ('pending', 'answered', 'dismissed')),
+                        CHECK(status IN ('pending', 'answered', 'dismissed')),
     priority         REAL NOT NULL DEFAULT 0.0,
     onboarding_stage TEXT NOT NULL DEFAULT 'teaching'
                          CHECK(onboarding_stage IN ('welcome', 'privacy', 'security', 'teaching')),
@@ -339,6 +342,138 @@ CREATE INDEX IF NOT EXISTS ix_teach_feedback_question_created
     ON teach_question_feedback(question_id, created_at DESC);
 """
 
+EXTRACTED_SESSION_SIGNALS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS extracted_session_signals (
+    id           TEXT PRIMARY KEY,
+    session_id   TEXT NOT NULL,
+    exchange_index INTEGER NOT NULL DEFAULT 0,
+    signal_type  TEXT NOT NULL CHECK(signal_type IN (
+                     'preference', 'attribute_candidate', 'correction'
+                 )),
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    processed    INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0, 1)),
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+EXTRACTED_SESSION_SIGNALS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_extracted_session_signals_unprocessed
+    ON extracted_session_signals(processed, created_at DESC);
+"""
+
+RETRIEVAL_CALIBRATION_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS retrieval_calibration (
+    id                TEXT PRIMARY KEY,
+    domain            TEXT NOT NULL,
+    source_profile    TEXT NOT NULL,
+    feedback_pattern  TEXT NOT NULL,
+    score_delta       REAL NOT NULL DEFAULT 0.0,
+    observation_count INTEGER NOT NULL DEFAULT 0,
+    last_computed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+RETRIEVAL_CALIBRATION_UNIQUE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retrieval_calibration
+    ON retrieval_calibration(domain, source_profile, feedback_pattern);
+"""
+
+CONTRADICTION_FLAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS contradiction_flags (
+    id              TEXT PRIMARY KEY,
+    attribute_a_id  TEXT NOT NULL REFERENCES attributes(id) ON DELETE CASCADE,
+    attribute_b_id  TEXT NOT NULL REFERENCES attributes(id) ON DELETE CASCADE,
+    polarity_axis   TEXT NOT NULL,
+    confidence      REAL NOT NULL DEFAULT 0.5,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending', 'resolved', 'dismissed')),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CONTRADICTION_FLAGS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_contradiction_flags_status
+    ON contradiction_flags(status, created_at DESC);
+"""
+
+CROSS_DOMAIN_SYNTHESIS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS cross_domain_synthesis (
+    id                  TEXT PRIMARY KEY,
+    theme_label         TEXT NOT NULL,
+    domains_involved_json TEXT NOT NULL DEFAULT '[]',
+    strength            REAL NOT NULL DEFAULT 0.5,
+    synthesis_text      TEXT,
+    evidence_ids_json   TEXT NOT NULL DEFAULT '[]',
+    status              TEXT NOT NULL DEFAULT 'pending_review'
+                            CHECK(status IN ('pending_review', 'accepted', 'dismissed')),
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CROSS_DOMAIN_SYNTHESIS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_cross_domain_synthesis_status
+    ON cross_domain_synthesis(status, created_at DESC);
+"""
+
+TEMPORAL_EVENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS temporal_events (
+    id               TEXT PRIMARY KEY,
+    event_type       TEXT NOT NULL CHECK(event_type IN (
+                         'drift', 'shift_cluster', 'confidence_decay'
+                     )),
+    domain           TEXT NOT NULL,
+    attribute_ids_json TEXT NOT NULL DEFAULT '[]',
+    detected_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description      TEXT,
+    status           TEXT NOT NULL DEFAULT 'active'
+                         CHECK(status IN ('active', 'resolved'))
+);
+"""
+
+TEMPORAL_EVENTS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS ix_temporal_events_domain
+    ON temporal_events(domain, event_type, detected_at DESC);
+"""
+
+VOICE_FEATURE_OBSERVATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS voice_feature_observations (
+    id                   TEXT PRIMARY KEY,
+    session_id           TEXT NOT NULL,
+    avg_sentence_length  REAL,
+    question_frequency   REAL,
+    first_person_density REAL,
+    contraction_rate     REAL,
+    em_dash_rate         REAL,
+    ellipsis_rate        REAL,
+    word_count           INTEGER NOT NULL DEFAULT 0,
+    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+VOICE_BASELINE_PROFILE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS voice_baseline_profile (
+    id                   TEXT PRIMARY KEY,
+    observation_count    INTEGER NOT NULL DEFAULT 0,
+    avg_sentence_length  REAL,
+    question_frequency   REAL,
+    first_person_density REAL,
+    contraction_rate     REAL,
+    em_dash_rate         REAL,
+    ellipsis_rate        REAL,
+    updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+ATTRIBUTE_EMBEDDING_CACHE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS attribute_embedding_cache (
+    attribute_id      TEXT PRIMARY KEY REFERENCES attributes(id) ON DELETE CASCADE,
+    embedding_model   TEXT NOT NULL,
+    text_hash         TEXT NOT NULL,
+    embedding_json    TEXT NOT NULL,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 SCHEMA_SQL = "\n\n".join(
     [
         DOMAINS_TABLE_SQL,
@@ -370,6 +505,19 @@ SCHEMA_SQL = "\n\n".join(
         TEACH_QUESTIONS_LOOKUP_INDEX_SQL,
         TEACH_FEEDBACK_TABLE_SQL,
         TEACH_FEEDBACK_LOOKUP_INDEX_SQL,
+        EXTRACTED_SESSION_SIGNALS_TABLE_SQL,
+        EXTRACTED_SESSION_SIGNALS_INDEX_SQL,
+        RETRIEVAL_CALIBRATION_TABLE_SQL,
+        RETRIEVAL_CALIBRATION_UNIQUE_INDEX_SQL,
+        CONTRADICTION_FLAGS_TABLE_SQL,
+        CONTRADICTION_FLAGS_INDEX_SQL,
+        CROSS_DOMAIN_SYNTHESIS_TABLE_SQL,
+        CROSS_DOMAIN_SYNTHESIS_INDEX_SQL,
+        TEMPORAL_EVENTS_TABLE_SQL,
+        TEMPORAL_EVENTS_INDEX_SQL,
+        VOICE_FEATURE_OBSERVATIONS_TABLE_SQL,
+        VOICE_BASELINE_PROFILE_TABLE_SQL,
+        ATTRIBUTE_EMBEDDING_CACHE_TABLE_SQL,
     ]
 )
 
@@ -428,7 +576,35 @@ def _provider_status_schema_needs_migration(conn) -> bool:
             or "trust_boundary" not in provider_status_sql
             or "auth_strategy" not in provider_status_sql
             or "check(provider in" in provider_status_sql
+            or "'private'" not in provider_status_sql
+            or "'url'" not in provider_status_sql
         )
+    )
+
+
+def _query_feedback_schema_needs_attribute_id_migration(conn) -> bool:
+    query_feedback_sql = _read_schema_sql(conn, kind="table", name="query_feedback")
+    return bool(
+        query_feedback_sql
+        and "retrieved_attribute_ids_json" not in query_feedback_sql
+    )
+
+
+def _teach_questions_schema_needs_source_migration(conn) -> bool:
+    teach_questions_sql = _read_schema_sql(conn, kind="table", name="teach_questions")
+    return bool(
+        teach_questions_sql
+        and "'synthesis'" not in teach_questions_sql
+    )
+
+
+def _app_settings_needs_private_server_migration(conn) -> bool:
+    app_settings_sql = _read_schema_sql(conn, kind="table", name="app_settings")
+    return bool(
+        app_settings_sql
+        and "privacy_preference" in app_settings_sql
+        and "preferred_provider" in app_settings_sql
+        and "'private_server'" not in app_settings_sql
     )
 
 
@@ -522,10 +698,124 @@ def _migrate_app_settings_table(conn) -> None:
     conn.commit()
 
 
+def _migrate_app_settings_for_private_server(conn) -> None:
+    """Widen preferred_backend CHECK constraint to include 'private_server'."""
+    conn.execute("ALTER TABLE app_settings RENAME TO app_settings_old")
+    conn.execute(APP_SETTINGS_TABLE_SQL)
+    conn.execute(
+        """
+        INSERT INTO app_settings (
+            id,
+            onboarding_completed,
+            privacy_preference,
+            active_profile,
+            preferred_provider,
+            preferred_backend,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            onboarding_completed,
+            privacy_preference,
+            active_profile,
+            preferred_provider,
+            preferred_backend,
+            created_at,
+            updated_at
+        FROM app_settings_old
+        """
+    )
+    conn.execute("DROP TABLE app_settings_old")
+    conn.commit()
+
+
 def _migrate_provider_status_table(conn) -> None:
     conn.execute("DROP TABLE IF EXISTS provider_status")
     conn.execute(PROVIDER_STATUS_TABLE_SQL)
     conn.commit()
+
+
+def _migrate_query_feedback_add_attribute_ids(conn) -> None:
+    conn.execute(
+        """
+        ALTER TABLE query_feedback
+        ADD COLUMN retrieved_attribute_ids_json TEXT NOT NULL DEFAULT '[]'
+        """
+    )
+    conn.commit()
+
+
+def _migrate_teach_questions_source_constraint(conn) -> None:
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("ALTER TABLE teach_questions RENAME TO teach_questions_old")
+        conn.execute("ALTER TABLE teach_question_feedback RENAME TO teach_question_feedback_old")
+        conn.executescript(
+            "\n\n".join(
+                [
+                    TEACH_QUESTIONS_TABLE_SQL,
+                    TEACH_QUESTIONS_LOOKUP_INDEX_SQL,
+                    TEACH_FEEDBACK_TABLE_SQL,
+                    TEACH_FEEDBACK_LOOKUP_INDEX_SQL,
+                ]
+            )
+        )
+        conn.execute(
+            """
+            INSERT INTO teach_questions (
+                id,
+                prompt,
+                domain,
+                intent_key,
+                source,
+                status,
+                priority,
+                onboarding_stage,
+                asked_count,
+                answer_count,
+                last_presented_at,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                prompt,
+                domain,
+                intent_key,
+                source,
+                status,
+                priority,
+                onboarding_stage,
+                asked_count,
+                answer_count,
+                last_presented_at,
+                created_at,
+                updated_at
+            FROM teach_questions_old
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO teach_question_feedback (
+                id,
+                question_id,
+                feedback,
+                created_at
+            )
+            SELECT
+                id,
+                question_id,
+                feedback,
+                created_at
+            FROM teach_question_feedback_old
+            """
+        )
+        conn.execute("DROP TABLE teach_question_feedback_old")
+        conn.execute("DROP TABLE teach_questions_old")
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _scrub_reflection_session_queries(conn) -> None:
@@ -581,8 +871,14 @@ def create_tables(conn) -> None:
         _migrate_attribute_tables(conn)
     if _app_settings_schema_needs_migration(conn):
         _migrate_app_settings_table(conn)
+    if _app_settings_needs_private_server_migration(conn):
+        _migrate_app_settings_for_private_server(conn)
     if _provider_status_schema_needs_migration(conn):
         _migrate_provider_status_table(conn)
+    if _query_feedback_schema_needs_attribute_id_migration(conn):
+        _migrate_query_feedback_add_attribute_ids(conn)
+    if _teach_questions_schema_needs_source_migration(conn):
+        _migrate_teach_questions_source_constraint(conn)
     conn.execute(
         """
         INSERT OR IGNORE INTO app_settings (

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from engine.preference_summary import PreferenceSummaryItem, PreferenceSummaryPayload
+from engine.voice_feature_extractor import load_baseline
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ def build_voice_profile(
     preference_attributes: list[dict],
     preference_summary: PreferenceSummaryPayload,
     artifact_chunks: list[dict],
+    conn: Any = None,
 ) -> VoiceProfile | None:
     """Return a bounded voice profile for explicit voice-generation tasks."""
     if source_profile != "voice_generation":
@@ -209,6 +212,20 @@ def build_voice_profile(
             exemplar_items.append(VoiceGuidanceItem(text=line, routing="local_only"))
         if len(exemplar_lines) >= 2:
             break
+
+    # Append learned structural guidance from accumulated voice observations.
+    if conn is not None:
+        try:
+            baseline = load_baseline(conn)
+            if baseline is not None:
+                for guidance_line in baseline.to_guidance_lines():
+                    if guidance_line not in preference_lines:
+                        preference_lines.append(guidance_line)
+                        preference_items.append(
+                            VoiceGuidanceItem(text=guidance_line, routing="local_only")
+                        )
+        except Exception:
+            pass
 
     profile = VoiceProfile(
         identity_lines=identity_items[:4],

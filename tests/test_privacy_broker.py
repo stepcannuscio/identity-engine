@@ -182,3 +182,69 @@ def test_interview_extraction_returns_metadata(local_config, monkeypatch):
     assert result.metadata.task_type == "interview_extraction"
     assert result.metadata.routing_enforced is False
     assert result.metadata.decision == "allowed"
+
+
+# ---------------------------------------------------------------------------
+# Private server trust tier
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def private_server_config():
+    return ProviderConfig(
+        provider="private_server",
+        api_key=None,
+        model="llama3.1:8b",
+        is_local=False,
+        base_url="http://10.0.0.1:11434",
+        arch="intel_mac",
+        ram_gb=16.0,
+    )
+
+
+def test_private_server_allows_local_only_attributes(private_server_config, monkeypatch):
+    monkeypatch.setattr(
+        privacy_broker_module,
+        "generate_response",
+        lambda messages, config, **kwargs: "ok",
+    )
+    local_only_attr = {"label": "core_value", "routing": "local_only"}
+    result = PrivacyBroker(private_server_config).generate_grounded_response(
+        [{"role": "user", "content": "test"}],
+        attributes=[local_only_attr],
+    )
+    assert result.metadata.decision == "allowed"
+    assert result.metadata.is_private_server is True
+    assert result.metadata.blocked_external_attributes_count == 0
+
+
+def test_private_server_still_requires_input_consent(private_server_config):
+    with pytest.raises(AuditedExternalExtractionConsentRequiredError) as exc_info:
+        PrivacyBroker(private_server_config).extract_structured_attributes(
+            [{"role": "user", "content": "sensitive raw input"}],
+            allow_external_input=False,
+        )
+    assert exc_info.value.audit.reason == "external_extraction_consent_required"
+
+
+def test_private_server_allows_extraction_with_consent(private_server_config, monkeypatch):
+    monkeypatch.setattr(
+        privacy_broker_module,
+        "generate_response",
+        lambda messages, config, **kwargs: '{"label": "x"}',
+    )
+    result = PrivacyBroker(private_server_config).extract_structured_attributes(
+        [{"role": "user", "content": "raw input"}],
+        allow_external_input=True,
+    )
+    assert result.metadata.decision == "allowed"
+    assert result.metadata.external_input_allowed_by_user is True
+
+
+def test_external_provider_still_blocked_from_local_only(external_config):
+    local_only_attr = {"label": "secret", "routing": "local_only"}
+    with pytest.raises(AuditedRoutingViolationError) as exc_info:
+        PrivacyBroker(external_config).generate_grounded_response(
+            [{"role": "user", "content": "test"}],
+            attributes=[local_only_attr],
+        )
+    assert exc_info.value.audit.reason == "local_only_context_blocked_for_external_inference"

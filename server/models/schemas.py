@@ -110,6 +110,7 @@ class QueryMetadata(BaseModel):
     query_type: str
     intent: QueryIntentMetadata
     attributes_used: int
+    retrieved_attribute_ids: list[str] = []
     backend_used: str
     requested_backend: str | None = None
     domains_referenced: list[str]
@@ -151,6 +152,7 @@ class QueryFeedbackRequest(BaseModel):
     ]
     intent: QueryIntentMetadata
     domains_referenced: list[str] = []
+    retrieved_attribute_ids: list[str] = []
 
 
 class QueryFeedbackResponse(BaseModel):
@@ -263,9 +265,9 @@ class ProviderStatusResponse(BaseModel):
 
     provider: str
     label: str
-    deployment: Literal["local", "external"]
+    deployment: Literal["local", "external", "private"]
     trust_boundary: Literal["self_hosted", "external"]
-    auth_strategy: Literal["none", "api_key"]
+    auth_strategy: Literal["none", "api_key", "url"]
     configured: bool
     available: bool
     validated: bool
@@ -298,11 +300,11 @@ class PrivacyPreferenceOption(BaseModel):
 class PrivacyProfileOption(BaseModel):
     """One selectable onboarding model/provider configuration."""
 
-    code: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    code: Literal["private_local_first", "balanced_hybrid", "external_assist", "private_server_first"]
     label: str
     description: str
-    default_backend: Literal["local", "external"]
-    provider_scope: Literal["self_hosted_only", "hybrid", "external_default"]
+    default_backend: Literal["local", "external", "private_server"]
+    provider_scope: Literal["self_hosted_only", "hybrid", "external_default", "private_server"]
     provider_options: list[str] = []
     recommended_provider: str | None = None
     recommendation_reason: str
@@ -347,16 +349,16 @@ class SetupOptionsResponse(BaseModel):
     profiles: list[PrivacyProfileOption]
     active_profile: str | None
     preferred_provider: str | None = None
-    preferred_backend: Literal["local", "external"]
+    preferred_backend: Literal["local", "external", "private_server"]
 
 
 class SetupProfileRequest(BaseModel):
     """Persisted onboarding profile selection."""
 
-    profile: Literal["private_local_first", "balanced_hybrid", "external_assist"]
+    profile: Literal["private_local_first", "balanced_hybrid", "external_assist", "private_server_first"]
     privacy_preference: Literal["privacy_first", "balanced", "capability_first"] | None = None
     preferred_provider: str | None = None
-    preferred_backend: Literal["local", "external"] | None = None
+    preferred_backend: Literal["local", "external", "private_server"] | None = None
     onboarding_completed: bool | None = None
 
 
@@ -374,7 +376,7 @@ class TeachQuestionResponse(BaseModel):
     prompt: str
     domain: str | None
     intent_key: str
-    source: Literal["catalog", "generated"]
+    source: Literal["catalog", "generated", "synthesis", "contradiction"]
     status: str
     priority: float
 
@@ -382,7 +384,14 @@ class TeachQuestionResponse(BaseModel):
 class TeachCard(BaseModel):
     """One Teach/onboarding card returned to the frontend."""
 
-    type: Literal["welcome", "privacy_setup", "security_setup", "question"]
+    type: Literal[
+        "welcome",
+        "privacy_setup",
+        "security_setup",
+        "question",
+        "conversation_signal",
+        "synthesis_review",
+    ]
     title: str
     body: str
     payload: dict[str, object] = {}
@@ -396,7 +405,7 @@ class TeachBootstrapResponse(BaseModel):
     privacy_preferences: list[PrivacyPreferenceOption]
     active_profile: str | None
     preferred_provider: str | None = None
-    preferred_backend: Literal["local", "external"]
+    preferred_backend: Literal["local", "external", "private_server"]
     providers: list[ProviderStatusResponse]
     profiles: list[PrivacyProfileOption]
     security_posture: SecurityPostureResponse
@@ -408,6 +417,121 @@ class TeachQuestionsResponse(BaseModel):
     """List of planned Teach questions."""
 
     questions: list[TeachQuestionResponse]
+
+
+class StagedSessionSignalResponse(BaseModel):
+    """One reviewable signal staged from a recent conversation."""
+
+    id: str
+    session_id: str
+    exchange_index: int
+    signal_type: Literal["preference", "attribute_candidate", "correction"]
+    payload: dict[str, object]
+    created_at: datetime
+
+
+class StagedSessionSignalsResponse(BaseModel):
+    """List of staged passive-learning signals awaiting review."""
+
+    signals: list[StagedSessionSignalResponse]
+
+
+class StagedSessionSignalActionResponse(BaseModel):
+    """Result of accepting or dismissing one staged signal."""
+
+    signal_id: str
+    status: Literal["accepted", "dismissed"]
+    attributes_saved: int = 0
+    preference_signals_saved: int = 0
+
+
+class CrossDomainSynthesisResponse(BaseModel):
+    """One staged cross-domain synthesis awaiting review."""
+
+    id: str
+    theme_label: str
+    domains_involved: list[str]
+    strength: float
+    synthesis_text: str | None = None
+    evidence_ids: list[str] = []
+    status: Literal["pending_review", "accepted", "dismissed"]
+    created_at: datetime
+
+
+class ContradictionFlagResponse(BaseModel):
+    """One staged contradiction flag awaiting review."""
+
+    id: str
+    attribute_a_id: str
+    attribute_a_domain: str
+    attribute_a_label: str
+    attribute_a_value: str
+    attribute_b_id: str
+    attribute_b_domain: str
+    attribute_b_label: str
+    attribute_b_value: str
+    polarity_axis: str
+    confidence: float
+    status: Literal["pending", "resolved", "dismissed"]
+    created_at: datetime
+
+
+class TeachSynthesisResponse(BaseModel):
+    """Cross-domain Teach review payload."""
+
+    syntheses: list[CrossDomainSynthesisResponse]
+    contradictions: list[ContradictionFlagResponse]
+
+
+class SynthesisActionResponse(BaseModel):
+    """Result of an accept or dismiss action on a staged synthesis."""
+
+    synthesis_id: str
+    status: Literal["accepted", "dismissed"]
+    narrative_generated: bool = False
+
+
+class ContradictionActionResponse(BaseModel):
+    """Result of a resolve or dismiss action on a contradiction flag."""
+
+    contradiction_id: str
+    status: Literal["resolved", "dismissed"]
+
+
+class ReflectionStartResponse(BaseModel):
+    """Response from starting a new deep reflection session."""
+
+    session_id: str
+    first_question: str
+    seed_domain: str | None = None
+
+
+class ReflectionTurnRequest(BaseModel):
+    """Request body for one turn in an active reflection session."""
+
+    session_id: str
+    user_message: str
+
+
+class SuggestedAttributeUpdateItem(BaseModel):
+    """One attribute update suggested during a reflection turn."""
+
+    domain: str
+    label: str
+    value: str
+    confidence: float
+    elaboration: str | None = None
+
+
+class ReflectionTurnResponse(BaseModel):
+    """Response from processing one reflection turn."""
+
+    session_id: str
+    next_question: str
+    suggested_updates: list[SuggestedAttributeUpdateItem] = []
+    themes_noticed: list[str] = []
+    staged_signal_ids: list[str] = []
+    turn_count: int
 
 
 class TeachQuestionAnswerRequest(BaseModel):
@@ -672,3 +796,19 @@ class DomainSummary(BaseModel):
 
     domain: str
     attribute_count: int
+
+
+class PrivateServerConfigRequest(BaseModel):
+    """URL and optional model override for a private Ollama server."""
+
+    server_url: str
+    model: str | None = None
+
+
+class PrivateServerTestResponse(BaseModel):
+    """Connection-test result for a private Ollama server."""
+
+    reachable: bool
+    model_available: bool
+    latency_ms: int | None = None
+    error: str | None = None

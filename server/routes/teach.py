@@ -12,6 +12,10 @@ from engine.privacy_broker import (
     AuditedExternalExtractionConsentRequiredError,
     PrivacyBroker,
 )
+from engine.reflection_session_engine import (
+    process_reflection_turn,
+    start_reflection_session,
+)
 from engine.security_posture import resolve_security_posture
 from engine.setup_state import (
     build_privacy_preferences,
@@ -26,34 +30,65 @@ from engine.teach_planner import (
     mark_question_answered,
     record_question_feedback,
 )
+from engine.staged_signal_reviewer import (
+    accept_signal,
+    count_pending_signals,
+    dismiss_signal,
+    list_pending_signals,
+)
+from engine.contradiction_detector import (
+    dismiss_contradiction,
+    resolve_contradiction,
+)
+from engine.synthesis_engine import (
+    accept_synthesis,
+    dismiss_synthesis,
+    generate_synthesis_narrative,
+    get_synthesis_by_id,
+    list_pending_cross_domain_intelligence,
+    refresh_cross_domain_intelligence,
+)
 from server.db import get_db_connection
 from server.models.schemas import (
     AttributeResponse,
     CapturePreviewWriteItem,
+    ContradictionActionResponse,
+    ContradictionFlagResponse,
+    CrossDomainSynthesisResponse,
     PrivacyPreferenceOption,
     PrivacyProfileOption,
     ProviderCredentialField,
     ProviderStatusResponse,
+    ReflectionStartResponse,
+    ReflectionTurnRequest,
+    ReflectionTurnResponse,
     SecurityCheckResponse,
     SecurityPostureResponse,
+    StagedSessionSignalActionResponse,
+    StagedSessionSignalResponse,
+    StagedSessionSignalsResponse,
+    SuggestedAttributeUpdateItem,
+    SynthesisActionResponse,
     TeachBootstrapResponse,
     TeachCard,
     TeachQuestionAnswerRequest,
     TeachQuestionFeedbackRequest,
     TeachQuestionResponse,
     TeachQuestionsResponse,
+    TeachSynthesisResponse,
 )
 
 router = APIRouter(tags=["teach"])
 
 
-def _external_extraction_consent_response() -> JSONResponse:
+def _external_extraction_consent_response(provider_label: str | None = None) -> JSONResponse:
     message = "Raw user input requires explicit consent before external extraction."
     return JSONResponse(
         {
             "error": "external_extraction_consent_required",
             "detail": message,
             "message": message,
+            "provider_label": provider_label,
         },
         status_code=409,
     )
@@ -79,6 +114,57 @@ def _serialize_questions(items) -> list[TeachQuestionResponse]:
             source=item.source,  # type: ignore[arg-type]
             status=item.status,
             priority=item.priority,
+        )
+        for item in items
+    ]
+
+
+def _serialize_staged_signals(items) -> list[StagedSessionSignalResponse]:
+    return [
+        StagedSessionSignalResponse(
+            id=item.id,
+            session_id=item.session_id,
+            exchange_index=item.exchange_index,
+            signal_type=cast(Any, item.signal_type),
+            payload=cast(dict[str, object], item.payload),
+            created_at=item.created_at,
+        )
+        for item in items
+    ]
+
+
+def _serialize_syntheses(items) -> list[CrossDomainSynthesisResponse]:
+    return [
+        CrossDomainSynthesisResponse(
+            id=item.id,
+            theme_label=item.theme_label,
+            domains_involved=list(item.domains_involved),
+            strength=item.strength,
+            synthesis_text=item.synthesis_text,
+            evidence_ids=list(item.evidence_ids),
+            status=cast(Any, item.status),
+            created_at=item.created_at,
+        )
+        for item in items
+    ]
+
+
+def _serialize_contradictions(items) -> list[ContradictionFlagResponse]:
+    return [
+        ContradictionFlagResponse(
+            id=item.id,
+            attribute_a_id=item.attribute_a_id,
+            attribute_a_domain=item.attribute_a_domain,
+            attribute_a_label=item.attribute_a_label,
+            attribute_a_value=item.attribute_a_value,
+            attribute_b_id=item.attribute_b_id,
+            attribute_b_domain=item.attribute_b_domain,
+            attribute_b_label=item.attribute_b_label,
+            attribute_b_value=item.attribute_b_value,
+            polarity_axis=item.polarity_axis,
+            confidence=item.confidence,
+            status=cast(Any, item.status),
+            created_at=item.created_at,
         )
         for item in items
     ]
@@ -154,6 +240,11 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
                 resolve_active_provider_config(conn, request.app.state.llm_config),
             )
         )
+        staged_signal_count = count_pending_signals(conn)
+        staged_signals = _serialize_staged_signals(list_pending_signals(conn, limit=3))
+        cross_domain = list_pending_cross_domain_intelligence(conn)
+        syntheses = _serialize_syntheses(cross_domain.syntheses[:3])
+        contradictions = _serialize_contradictions(cross_domain.contradictions[:3])
 
         posture = resolve_security_posture(conn)
 
@@ -196,6 +287,30 @@ def _serialize_bootstrap(request: Request) -> TeachBootstrapResponse:
                 payload={"question_id": questions[0].id, "domain": questions[0].domain},
             )
         )
+    if staged_signal_count:
+        cards.append(
+            TeachCard(
+                type="conversation_signal",
+                title="From your conversations",
+                body="Review passive learning signals captured from recent query sessions.",
+                payload={
+                    "count": staged_signal_count,
+                    "signals": [item.model_dump(mode="json") for item in staged_signals],
+                },
+            )
+        )
+    if syntheses or contradictions:
+        cards.append(
+            TeachCard(
+                type="synthesis_review",
+                title="Themes and tensions",
+                body="Review patterns the engine noticed across multiple domains of your identity.",
+                payload={
+                    "syntheses": [item.model_dump(mode="json") for item in syntheses],
+                    "contradictions": [item.model_dump(mode="json") for item in contradictions],
+                },
+            )
+        )
 
     return TeachBootstrapResponse(
         onboarding_completed=bool(settings["onboarding_completed"]),
@@ -227,6 +342,28 @@ def questions(request: Request) -> TeachQuestionsResponse:
             resolve_active_provider_config(conn, request.app.state.llm_config),
         )
     return TeachQuestionsResponse(questions=_serialize_questions(items))
+
+
+@router.get("/teach/conversation-signals", response_model=StagedSessionSignalsResponse)
+def conversation_signals(request: Request) -> StagedSessionSignalsResponse:
+    """Return staged passive-learning signals awaiting Teach review."""
+    _ = request
+    with get_db_connection() as conn:
+        items = list_pending_signals(conn)
+    return StagedSessionSignalsResponse(signals=_serialize_staged_signals(items))
+
+
+@router.get("/teach/synthesis", response_model=TeachSynthesisResponse)
+def teach_synthesis(request: Request) -> TeachSynthesisResponse:
+    """Return pending cross-domain syntheses and contradiction flags."""
+    _ = request
+    with get_db_connection() as conn:
+        refresh_cross_domain_intelligence(conn)
+        items = list_pending_cross_domain_intelligence(conn)
+    return TeachSynthesisResponse(
+        syntheses=_serialize_syntheses(items.syntheses),
+        contradictions=_serialize_contradictions(items.contradictions),
+    )
 
 
 @router.post("/teach/questions/{question_id}/answer", response_model=None)
@@ -271,8 +408,11 @@ def answer_question(
 
             saved = save_preview_attributes(conn, _accepted_to_dicts(accepted))
             mark_question_answered(conn, question_id)
-    except AuditedExternalExtractionConsentRequiredError:
-        return _external_extraction_consent_response()
+    except AuditedExternalExtractionConsentRequiredError as exc:
+        provider_label = getattr(exc.audit, "provider", None)
+        if provider_label == "private_server":
+            provider_label = "your private server"
+        return _external_extraction_consent_response(provider_label=provider_label)
 
     return {
         "attributes_saved": len(saved),
@@ -312,3 +452,173 @@ def feedback(
             raise HTTPException(status_code=404, detail="teach question not found")
         record_question_feedback(conn, question_id, payload.feedback)
     return _serialize_bootstrap(request)
+
+
+@router.post(
+    "/teach/conversation-signals/{signal_id}/accept",
+    response_model=StagedSessionSignalActionResponse,
+)
+def accept_conversation_signal(signal_id: str, request: Request) -> StagedSessionSignalActionResponse:
+    """Accept and promote one staged conversation-derived signal."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = accept_signal(conn, signal_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StagedSessionSignalActionResponse(
+        signal_id=result.signal_id,
+        status=cast(Any, result.status),
+        attributes_saved=result.attributes_saved,
+        preference_signals_saved=result.preference_signals_saved,
+    )
+
+
+@router.post(
+    "/teach/conversation-signals/{signal_id}/dismiss",
+    response_model=StagedSessionSignalActionResponse,
+)
+def dismiss_conversation_signal(signal_id: str, request: Request) -> StagedSessionSignalActionResponse:
+    """Dismiss one staged conversation-derived signal."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = dismiss_signal(conn, signal_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StagedSessionSignalActionResponse(
+        signal_id=result.signal_id,
+        status=cast(Any, result.status),
+        attributes_saved=result.attributes_saved,
+        preference_signals_saved=result.preference_signals_saved,
+    )
+
+
+@router.post(
+    "/teach/synthesis/{synthesis_id}/accept",
+    response_model=SynthesisActionResponse,
+)
+def accept_synthesis_item(synthesis_id: str, request: Request) -> SynthesisActionResponse:
+    """Accept a staged cross-domain synthesis; attempts local narrative generation."""
+    with get_db_connection() as conn:
+        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+        try:
+            synthesis_row = get_synthesis_by_id(conn, synthesis_id)
+            if synthesis_row is None:
+                raise HTTPException(status_code=404, detail="synthesis not found")
+            narrative = generate_synthesis_narrative(synthesis_row, provider_config)
+            result = accept_synthesis(conn, synthesis_id, narrative=narrative)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SynthesisActionResponse(
+        synthesis_id=result.synthesis_id,
+        status=cast(Any, result.status),
+        narrative_generated=result.narrative_generated,
+    )
+
+
+@router.post(
+    "/teach/synthesis/{synthesis_id}/dismiss",
+    response_model=SynthesisActionResponse,
+)
+def dismiss_synthesis_item(synthesis_id: str, request: Request) -> SynthesisActionResponse:
+    """Dismiss a staged cross-domain synthesis."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = dismiss_synthesis(conn, synthesis_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SynthesisActionResponse(
+        synthesis_id=result.synthesis_id,
+        status=cast(Any, result.status),
+        narrative_generated=result.narrative_generated,
+    )
+
+
+@router.post(
+    "/teach/contradictions/{contradiction_id}/resolve",
+    response_model=ContradictionActionResponse,
+)
+def resolve_contradiction_item(contradiction_id: str, request: Request) -> ContradictionActionResponse:
+    """Mark a contradiction flag as resolved (user has addressed the tension)."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = resolve_contradiction(conn, contradiction_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ContradictionActionResponse(
+        contradiction_id=result.contradiction_id,
+        status=cast(Any, result.status),
+    )
+
+
+@router.post(
+    "/teach/contradictions/{contradiction_id}/dismiss",
+    response_model=ContradictionActionResponse,
+)
+def dismiss_contradiction_item(contradiction_id: str, request: Request) -> ContradictionActionResponse:
+    """Dismiss a contradiction flag (user says it is not a real tension)."""
+    _ = request
+    with get_db_connection() as conn:
+        try:
+            result = dismiss_contradiction(conn, contradiction_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ContradictionActionResponse(
+        contradiction_id=result.contradiction_id,
+        status=cast(Any, result.status),
+    )
+
+
+@router.post("/teach/reflection/start", response_model=ReflectionStartResponse)
+def start_reflection(request: Request) -> ReflectionStartResponse:
+    """Start a new deep reflection session seeded from synthesis and temporal data."""
+    with get_db_connection() as conn:
+        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+        session_id, state, first_question = start_reflection_session(conn, provider_config)
+    if not hasattr(request.app.state, "reflection_sessions"):
+        request.app.state.reflection_sessions = {}
+    request.app.state.reflection_sessions[session_id] = state
+    return ReflectionStartResponse(
+        session_id=session_id,
+        first_question=first_question,
+        seed_domain=state.seed_domain,
+    )
+
+
+@router.post("/teach/reflection/turn", response_model=ReflectionTurnResponse)
+def reflection_turn(
+    payload: ReflectionTurnRequest,
+    request: Request,
+) -> ReflectionTurnResponse:
+    """Process one turn in an active reflection session."""
+    sessions: dict[str, Any] = getattr(request.app.state, "reflection_sessions", {})
+    state = sessions.get(payload.session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="reflection session not found")
+    if not payload.user_message.strip():
+        raise HTTPException(status_code=422, detail="user_message is required")
+    with get_db_connection() as conn:
+        provider_config = resolve_active_provider_config(conn, request.app.state.llm_config)
+        result = process_reflection_turn(conn, state, payload.user_message, provider_config)
+    return ReflectionTurnResponse(
+        session_id=payload.session_id,
+        next_question=result.next_question,
+        suggested_updates=[
+            SuggestedAttributeUpdateItem(
+                domain=u.domain,
+                label=u.label,
+                value=u.value,
+                confidence=u.confidence,
+                elaboration=u.elaboration,
+            )
+            for u in result.suggested_updates
+        ],
+        themes_noticed=result.themes_noticed,
+        staged_signal_ids=result.staged_signal_ids,
+        turn_count=state.turn_count,
+    )

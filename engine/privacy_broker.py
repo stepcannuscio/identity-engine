@@ -37,6 +37,7 @@ class InferenceDecision:
     warning: str | None = None
     reason: str | None = None
     external_input_allowed_by_user: bool = False
+    is_private_server: bool = False
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_routing_log_entry(
@@ -64,6 +65,7 @@ class InferenceDecision:
             "warning": self.warning,
             "reason": self.reason,
             "external_input_allowed_by_user": self.external_input_allowed_by_user,
+            "is_private_server": self.is_private_server,
             "timestamp": self.timestamp,
         }
 
@@ -258,9 +260,11 @@ class PrivacyBroker:
             contains_local_only_context=resolved_contains_local_only,
             local_only_stripped_for_external=local_only_stripped_for_external,
             external_input_allowed_by_user=external_input_allowed_by_user,
+            is_private_server=self.provider_config.is_trusted_private,
         )
 
-        if enforce_routing and not self.provider_config.is_local:
+        # private_server is user-owned — local_only attrs are allowed to travel there
+        if enforce_routing and not self.provider_config.is_local and not self.provider_config.is_trusted_private:
             blocked = [
                 attribute
                 for attribute in attributes

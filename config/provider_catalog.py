@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-ProviderDeployment = Literal["local", "external"]
+ProviderDeployment = Literal["local", "external", "private"]
 ProviderTrustBoundary = Literal["self_hosted", "external"]
-ProviderAuthStrategy = Literal["none", "api_key"]
+ProviderAuthStrategy = Literal["none", "api_key", "url"]
 CredentialInputType = Literal["password", "text"]
 
 
@@ -87,6 +87,33 @@ PROVIDER_DEFINITIONS: dict[str, ProviderDefinition] = {
             ),
         ),
     ),
+    "private_server": ProviderDefinition(
+        provider="private_server",
+        label="Private server",
+        deployment="private",
+        trust_boundary="self_hosted",
+        auth_strategy="url",
+        default_model="llama3.1:8b",
+        keyring_username="private-server-url",
+        description="Remote Ollama instance you control (home server or VPS via Tailscale/WireGuard).",
+        setup_hint="Enter your server's Ollama URL, e.g. http://100.x.x.x:11434",
+        credential_fields=(
+            CredentialField(
+                name="server_url",
+                label="Ollama server URL",
+                input_type="text",
+                placeholder="http://100.x.x.x:11434",
+                secret=False,
+            ),
+            CredentialField(
+                name="model",
+                label="Model name (optional)",
+                input_type="text",
+                placeholder="llama3.1:8b",
+                secret=False,
+            ),
+        ),
+    ),
 }
 
 
@@ -97,7 +124,7 @@ def get_provider_definition(provider: str) -> ProviderDefinition:
 
 def list_provider_definitions() -> list[ProviderDefinition]:
     """Return providers in display / preference order."""
-    return [PROVIDER_DEFINITIONS[name] for name in ("ollama", "anthropic", "groq")]
+    return [PROVIDER_DEFINITIONS[name] for name in ("ollama", "anthropic", "groq", "private_server")]
 
 
 def list_external_provider_ids() -> list[str]:
@@ -106,5 +133,14 @@ def list_external_provider_ids() -> list[str]:
         definition.provider
         for definition in list_provider_definitions()
         if definition.deployment == "external"
+    ]
+
+
+def list_private_provider_ids() -> list[str]:
+    """Return user-controlled remote provider ids."""
+    return [
+        definition.provider
+        for definition in list_provider_definitions()
+        if definition.deployment == "private"
     ]
 

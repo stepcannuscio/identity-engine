@@ -13,6 +13,8 @@ from config.llm_router import ProviderConfig
 from engine.interview_catalog import DOMAINS
 from engine.privacy_broker import PrivacyBroker
 from engine.setup_state import resolve_local_provider_config
+from engine.synthesis_engine import refresh_cross_domain_intelligence
+from engine.temporal_analyzer import refresh_temporal_intelligence
 
 QUESTION_LIMIT = 3
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
@@ -237,6 +239,129 @@ def _insert_question(
     )
 
 
+def _synthesis_prompt(theme_label: str, domains: list[str]) -> str:
+    domain_text = ", ".join(domains)
+    return (
+        f"We noticed a {theme_label} thread across your {domain_text}. "
+        "Does that resonate with you right now?"
+    )
+
+
+def _contradiction_prompt(
+    *,
+    attribute_a_value: str,
+    attribute_b_value: str,
+) -> str:
+    return (
+        "You've described yourself in two different ways: "
+        f"\"{attribute_a_value}\" and \"{attribute_b_value}\". "
+        "Which feels more accurate now?"
+    )
+
+
+def _confidence_decay_prompt(label: str, value: str) -> str:
+    return (
+        f"It's been a while since you confirmed '{label}'. "
+        f"Is this still true: \"{value}\"?"
+    )
+
+
+def _stage_temporal_questions(
+    conn,
+    *,
+    seen_intents: set[str],
+    seen_prompts: set[str],
+) -> int:
+    events = refresh_temporal_intelligence(conn)
+    inserted = 0
+
+    for event in events:
+        if event.event_type != "confidence_decay":
+            continue
+        if not event.attribute_ids:
+            continue
+        attribute_id = event.attribute_ids[0]
+        attr_row = conn.execute(
+            "SELECT label, value FROM attributes WHERE id = ?",
+            (attribute_id,),
+        ).fetchone()
+        if attr_row is None:
+            continue
+        label = str(attr_row[0])
+        value = str(attr_row[1])
+        intent_key = f"temporal_decay_{event.id}"
+        prompt = _confidence_decay_prompt(label, value)
+        normalized_prompt = _normalize_prompt(prompt)
+        if intent_key in seen_intents or normalized_prompt in seen_prompts:
+            continue
+        _insert_question(
+            conn,
+            prompt=prompt,
+            domain=event.domain,
+            intent_key=intent_key,
+            source="temporal",
+            priority=12.0,
+        )
+        seen_intents.add(intent_key)
+        seen_prompts.add(normalized_prompt)
+        inserted += 1
+        if inserted >= 2:
+            break
+
+    return inserted
+
+
+def _stage_cross_domain_questions(
+    conn,
+    *,
+    seen_intents: set[str],
+    seen_prompts: set[str],
+) -> int:
+    refresh_result = refresh_cross_domain_intelligence(conn)
+    inserted = 0
+
+    for item in refresh_result.syntheses[:2]:
+        prompt = _synthesis_prompt(item.theme_label, item.domains_involved)
+        intent_key = f"synthesis_review_{item.id}"
+        normalized_prompt = _normalize_prompt(prompt)
+        if intent_key in seen_intents or normalized_prompt in seen_prompts:
+            continue
+        _insert_question(
+            conn,
+            prompt=prompt,
+            domain=item.domains_involved[0] if item.domains_involved else None,
+            intent_key=intent_key,
+            source="synthesis",
+            priority=14.0 + float(item.strength),
+        )
+        seen_intents.add(intent_key)
+        seen_prompts.add(normalized_prompt)
+        inserted += 1
+
+    for item in refresh_result.contradictions[:2]:
+        prompt = _contradiction_prompt(
+            attribute_a_value=item.attribute_a_value,
+            attribute_b_value=item.attribute_b_value,
+        )
+        intent_key = f"contradiction_review_{item.id}"
+        normalized_prompt = _normalize_prompt(prompt)
+        if intent_key in seen_intents or normalized_prompt in seen_prompts:
+            continue
+        _insert_question(
+            conn,
+            prompt=prompt,
+            domain=item.attribute_a_domain,
+            intent_key=intent_key,
+            source="contradiction",
+            priority=13.0 + float(item.confidence),
+        )
+        seen_intents.add(intent_key)
+        seen_prompts.add(normalized_prompt)
+        inserted += 1
+
+    return inserted
+
+
 def ensure_question_queue(
     conn,
     provider_config: ProviderConfig,
@@ -249,6 +374,16 @@ def ensure_question_queue(
     seen_intents = _seen_intents(conn)
     seen_prompts = _seen_prompts(conn)
     tags = _artifact_tags(conn)
+    _stage_cross_domain_questions(
+        conn,
+        seen_intents=seen_intents,
+        seen_prompts=seen_prompts,
+    )
+    _stage_temporal_questions(
+        conn,
+        seen_intents=seen_intents,
+        seen_prompts=seen_prompts,
+    )
 
     ranked_domains = sorted(
         counts.items(),

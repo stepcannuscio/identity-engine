@@ -8,6 +8,7 @@ the pipeline can either hedge or skip LLM inference when ground-truth is thin.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace as dc_replace
 from datetime import UTC, datetime
 from typing import Any
@@ -19,11 +20,16 @@ from engine.coverage_evaluator import (
     CoverageAssessment,
     evaluate_coverage,
 )
+from engine.feedback_calibrator import build_recent_feedback_gap_note
+from engine.temporal_analyzer import list_active_temporal_events
 from engine.privacy_broker import InferenceDecision, PrivacyBroker
 from engine.prompt_builder import RoutingViolationError, build_prompt
 from engine.query_classifier import build_query_plan
 from engine.session import Session
+from engine.session_learner import maybe_extract_from_exchange
 from engine.setup_state import resolve_local_provider_config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,11 +54,20 @@ class QueryContext:
     acquisition: AcquisitionPlan
 
 
+def _backend_label(provider_config: Any) -> str:
+    """Return a backend label string for attribute filtering and audit logging."""
+    if getattr(provider_config, "is_local", False):
+        return "local"
+    if getattr(provider_config, "provider", None) == "private_server":
+        return "private_server"
+    return "external"
+
+
 def _preference_attributes_for_backend(
     assembled_context: AssembledContext,
     backend: str,
 ) -> list[dict]:
-    if backend == "local":
+    if backend in ("local", "private_server"):
         return assembled_context.preference_attributes
     return [
         attribute
@@ -65,7 +80,7 @@ def _identity_attributes_for_backend(
     assembled_context: AssembledContext,
     backend: str,
 ) -> list[dict]:
-    if backend == "local":
+    if backend in ("local", "private_server"):
         return assembled_context.attributes
     return [
         attribute
@@ -83,6 +98,21 @@ def _should_reroute_to_artifact_grounded_self(
         and not assembled_context.attributes
         and not assembled_context.preference_attributes
         and bool(assembled_context.artifact_chunks)
+    )
+
+
+def _build_shift_cluster_note(conn, *, domains: list[str]) -> str | None:
+    """Return a staleness warning if any queried domains have a recent shift cluster."""
+    if not domains:
+        return None
+    events = list_active_temporal_events(conn, event_type="shift_cluster")
+    affected = sorted({e.domain for e in events if e.domain in domains})
+    if not affected:
+        return None
+    domain_text = ", ".join(affected)
+    return (
+        f"Your {domain_text} profile has changed significantly recently — "
+        "some retrieved context may be outdated."
     )
 
 
@@ -116,8 +146,9 @@ def _build_query_context(
         conn,
         intent_tags=intent_tags,
         domain_hints=domain_hints,
+        provider_config=provider_config,
     )
-    backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    backend = _backend_label(provider_config)
     identity_attributes = _identity_attributes_for_backend(assembled_context, backend)
     preference_attributes = _preference_attributes_for_backend(assembled_context, backend)
     if backend == "external" and (
@@ -126,7 +157,21 @@ def _build_query_context(
         or any(chunk.get("routing") == "local_only" for chunk in assembled_context.artifact_chunks)
     ):
         assembled_context = dc_replace(assembled_context, had_local_only_stripped=True)
-    coverage = evaluate_coverage(assembled_context, backend=backend)
+    feedback_gap_note = build_recent_feedback_gap_note(
+        conn,
+        domains=assembled_context.domains_used or domain_hints,
+        source_profile=source_profile,
+    )
+    shift_cluster_note = _build_shift_cluster_note(
+        conn,
+        domains=assembled_context.domains_used or domain_hints,
+    )
+    coverage = evaluate_coverage(
+        assembled_context,
+        backend=backend,
+        feedback_gap_note=feedback_gap_note,
+        shift_cluster_note=shift_cluster_note,
+    )
     acquisition = build_acquisition_plan(user_query, assembled_context, coverage)
     messages = build_prompt(
         assembled_context,
@@ -162,7 +207,7 @@ def prepare_query(
 ) -> QueryContext:
     """Prepare a query without generating a response yet."""
     query_plan = build_query_plan(user_query)
-    requested_backend = "local" if getattr(provider_config, "is_local", False) else "external"
+    requested_backend = _backend_label(provider_config)
 
     context = _build_query_context(
         user_query,
@@ -197,7 +242,7 @@ def prepare_query(
             "rerouted self-style query to artifact-grounded answering because only uploaded evidence was available"
         )
 
-    if context.source_profile == "artifact_grounded_self" and requested_backend == "external":
+    if context.source_profile == "artifact_grounded_self" and requested_backend not in ("local", "private_server"):
         try:
             local_provider_config = resolve_local_provider_config(provider_config)
         except Exception:
@@ -296,6 +341,7 @@ def apply_local_fallback_audit(
 
 
 def record_query_result(
+    conn,
     session: Session,
     context: QueryContext,
     response: str,
@@ -306,6 +352,19 @@ def record_query_result(
     session.query_count += 1
     session.attributes_retrieved += len(context.attributes)
     session.log_query(audit, query_type=context.query_type)
+    try:
+        maybe_extract_from_exchange(
+            conn,
+            session,
+            user_query=context.query,
+            coverage_confidence=context.coverage.confidence,
+            retrieved_attributes=context.attributes,
+            provider_config=context.provider_config,
+            source_profile=context.source_profile,
+            domain_hints=context.domain_hints,
+        )
+    except Exception:
+        logger.exception("Passive session learning failed after query completion.")
 
 
 def record_blocked_query(session: Session, context: QueryContext, error: Exception) -> None:
@@ -326,14 +385,14 @@ def query(
 
     if context.forced_response is not None:
         audit = build_forced_artifact_response_decision(context, provider_config)
-        record_query_result(session, context, context.forced_response, audit)
+        record_query_result(conn, session, context, context.forced_response, audit)
         return context.forced_response
 
     if context.coverage.confidence == "insufficient_data" and not _privacy_would_block(
         context
     ):
         audit = build_insufficient_data_decision(context, context.provider_config)
-        record_query_result(session, context, INSUFFICIENT_DATA_MESSAGE, audit)
+        record_query_result(conn, session, context, INSUFFICIENT_DATA_MESSAGE, audit)
         return INSUFFICIENT_DATA_MESSAGE
 
     try:
@@ -350,6 +409,12 @@ def query(
         raise
     response = result.content
     assert isinstance(response, str)
-    record_query_result(session, context, response, apply_local_fallback_audit(result.metadata, context))
+    record_query_result(
+        conn,
+        session,
+        context,
+        response,
+        apply_local_fallback_audit(result.metadata, context),
+    )
 
     return response

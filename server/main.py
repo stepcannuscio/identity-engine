@@ -165,6 +165,7 @@ async def lifespan(app: FastAPI):
     app.state.login_attempts = {}
     app.state.login_locks = {}
     app.state.current_session = Session()
+    app.state.reflection_sessions = {}
 
     start_worker(llm_config)
     print(f"Identity engine server ready at https://{bind_ip}:{PORT}")

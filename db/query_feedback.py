@@ -25,6 +25,7 @@ class QueryFeedbackInput:
     intent_tags: list[str]
     domain_hints: list[str]
     domains_referenced: list[str]
+    retrieved_attribute_ids: list[str]
 
 
 def record_query_feedback(conn, payload: QueryFeedbackInput) -> str:
@@ -45,9 +46,10 @@ def record_query_feedback(conn, payload: QueryFeedbackInput) -> str:
             confidence,
             intent_tags_json,
             domain_hints_json,
-            domains_json
+            domains_json,
+            retrieved_attribute_ids_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             feedback_id,
@@ -63,6 +65,7 @@ def record_query_feedback(conn, payload: QueryFeedbackInput) -> str:
             json.dumps(sorted(set(payload.intent_tags))),
             json.dumps(sorted(set(payload.domain_hints))),
             json.dumps(sorted(set(payload.domains_referenced))),
+            json.dumps(sorted(set(payload.retrieved_attribute_ids))),
         ),
     )
     register_query_feedback_evidence(conn, feedback_id=feedback_id)

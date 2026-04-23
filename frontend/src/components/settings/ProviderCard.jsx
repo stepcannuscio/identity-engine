@@ -1,11 +1,17 @@
 export default function ProviderCard({
   isSaving,
   isSelected,
+  isTesting,
+  testResult,
   onFieldChange,
   onSave,
+  onTest,
   provider,
   values,
 }) {
+  const isUrlAuth = provider.auth_strategy === 'url'
+  const isApiKeyAuth = provider.auth_strategy === 'api_key'
+
   return (
     <article className="teach-panel provider-card">
       <div className="teach-panel-header">
@@ -26,7 +32,7 @@ export default function ProviderCard({
       {provider.setup_hint ? <p className="field-help">{provider.setup_hint}</p> : null}
       {provider.reason && !provider.available ? <p className="field-help">{provider.reason}</p> : null}
 
-      {provider.auth_strategy === 'api_key'
+      {(isApiKeyAuth || isUrlAuth)
         ? provider.credential_fields?.map((field) => (
             <input
               key={`${provider.provider}-${field.name}`}
@@ -38,7 +44,7 @@ export default function ProviderCard({
           ))
         : null}
 
-      {provider.auth_strategy === 'api_key' ? (
+      {isApiKeyAuth ? (
         <button
           type="button"
           className="button-secondary"
@@ -50,6 +56,35 @@ export default function ProviderCard({
         >
           {isSaving ? 'Saving...' : 'Save credentials'}
         </button>
+      ) : null}
+
+      {isUrlAuth ? (
+        <div className="teach-action-row">
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => onSave(provider.provider)}
+            disabled={isSaving || !(values?.server_url ?? '').trim()}
+          >
+            {isSaving ? 'Saving...' : 'Save server URL'}
+          </button>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => onTest(provider.provider)}
+            disabled={isTesting || !(values?.server_url ?? '').trim()}
+          >
+            {isTesting ? 'Testing...' : 'Test connection'}
+          </button>
+        </div>
+      ) : null}
+
+      {testResult && isUrlAuth ? (
+        <p className={`field-help ${testResult.reachable ? 'status-ready' : 'status-error'}`}>
+          {testResult.reachable
+            ? `Connected${testResult.latency_ms != null ? ` (${testResult.latency_ms}ms)` : ''} — ${testResult.model_available ? 'model ready' : testResult.error ?? 'model not found'}`
+            : `Unreachable: ${testResult.error ?? 'check server and VPN connection'}`}
+        </p>
       ) : null}
     </article>
   )

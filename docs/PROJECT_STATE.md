@@ -22,11 +22,20 @@ This document captures the current system state after completing:
 - Profile-Based Model Setup
 - Machine Security Recommendations
 - Query Usefulness Tuning + Eval Harness
+- Semantic Retrieval Bridge
 - Query Feedback Loop
+- Feedback Recalibration Loop
 - Voice Fidelity Tuning
 - Extraction Consent + Audit Redaction + Artifact Upload Guardrails
 - Frontend Route Code-Splitting
 - Generalized Evidence Layer
+- Passive Session Learning Staging
+- Conversation Signal Review
+- Cross-Domain Synthesis Staging
+- Cross-Domain Synthesis Accept-Dismiss + Narrative Generation
+- Temporal Intelligence Analysis
+- Natural Voice Learning
+- Deep Reflection Mode
 
 It is intended to:
 - allow seamless continuation in a new chat
@@ -357,10 +366,20 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - explicit false-positive prevention for generic terms
 - identity retrieval scoring now incorporates:
   - normalized label/value/elaboration overlap
+  - a separate deterministic concept-expansion component for abstract queries
   - phrase boosts
   - stronger domain-intent bonuses
   - freshness from `last_confirmed` / `updated_at`
   - correction-aware penalties for unstable labels with prior non-current versions
+- deterministic concept expansion is now domain-aware and can bridge abstract
+  prompts such as “what motivates me?” to labels like `intrinsic_drive`
+- retrieval now also supports an optional bounded similarity tier:
+  - temporary SQLite FTS5 matching over active attribute text
+  - local/private embedding similarity via Ollama `nomic-embed-text` when that
+    embedding model is already available
+  - similarity bonus is capped and cannot override the main deterministic score
+- attribute embedding vectors are cached locally in:
+  - `attribute_embedding_cache`
 - preference and artifact selection now also use stronger domain-aware scoring
   so planning and self-model questions are grounded more usefully without
   adding a probabilistic reranker
@@ -382,6 +401,24 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   - `wrong_focus`
 - query feedback is stored separately from canonical attributes and does not
   auto-promote into identity truth
+- deterministic retrieval calibration is now derived from accumulated
+  `query_feedback` rows and persisted in:
+  - `retrieval_calibration`
+- calibration is computed conservatively per `(domain, source_profile,
+  feedback_pattern)` and only applies bounded domain-level score deltas
+- retrieval now loads calibration deltas for the active source profile and
+  applies them as a capped adjustment during attribute scoring; calibration can
+  nudge ranking but cannot override the main deterministic relevance signal
+- query feedback rows can now persist the retrieved attribute ids for the
+  grounded answer, still as local-only feedback metadata
+- repeated low-rated feedback linked to the same inferred attribute now writes
+  an append-only `attribute_history` entry and lowers attribute confidence
+  conservatively without mutating user-authored values
+- query feedback writes now trigger a background-safe recalibration pass after
+  each 10 new feedback records
+- low-confidence coverage notes can now surface recent repeated
+  `missed_context` patterns for the same domain/profile so the UI makes known
+  grounding gaps visible instead of treating them as generic thin context
 - the repository now includes a versioned deterministic query eval corpus at:
   - `evals/query_usefulness/v1.json`
 - the evaluation runner lives at:
@@ -466,6 +503,162 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 - `GET /attributes/{id}/provenance` remains stable, but now reads through the
   generalized evidence layer when generalized provenance entries are available
 
+### 25. Passive Session Learning Staging
+- completed query turns can now trigger a best-effort passive learning pass
+  after the exchange is recorded in session state
+- this flow is implemented in `engine/session_learner.py`
+- gating is conservative:
+  - only runs when the user message has at least 20 words
+  - skips `high_confidence` turns to reduce noise
+  - prefers a local Ollama model and silently skips when no local model is ready
+- all inference still flows through `PrivacyBroker`; no direct model calls were
+  added
+- the learner stages review-only conversation signals in
+  `extracted_session_signals`; it does not promote anything directly into
+  canonical identity truth
+- staged signal types currently include:
+  - `attribute_candidate`
+  - `preference`
+  - `correction`
+- staged payloads include lightweight source metadata such as:
+  - `source_profile`
+  - `domain_hints`
+  - a bounded `query_excerpt`
+  - linked attribute ids for correction candidates when available
+- extraction failures are intentionally non-blocking and do not affect the
+  user-facing query response path
+
+### 26. Conversation Signal Review
+- Teach can now surface reviewable passive-learning items from recent query
+  sessions through:
+  - `GET /teach/conversation-signals`
+  - `POST /teach/conversation-signals/{signal_id}/accept`
+  - `POST /teach/conversation-signals/{signal_id}/dismiss`
+- Teach bootstrap now includes a `conversation_signal` card when staged items
+  are waiting for review
+- accepted staged items are promoted conservatively:
+  - `attribute_candidate` items write canonical local-only attributes
+  - `preference` items write local preference signals with `system_inference`
+    provenance
+  - `correction` items write local correction-linked preference signals rather
+    than silently mutating canonical identity truth
+- dismissing or accepting a staged signal marks it processed without deleting
+  history from `extracted_session_signals`
+
+### 28. Temporal Intelligence Layer
+- `engine/temporal_analyzer.py` detects three event types using only
+  `attribute_history` and `attributes` — no new data infrastructure required
+- **Drift**: attributes changed 2+ times within the last 365 days are staged
+  as `drift` events; signals that a stored belief may be actively evolving
+- **Shift cluster**: 3+ attributes in one domain changed within any 90-day
+  window are staged as `shift_cluster` events; signals a possible life transition
+- **Confidence decay**: active/confirmed attributes with confidence ≥ 0.70 not
+  confirmed or updated in 540+ days are staged as `confidence_decay` events;
+  prompts re-confirmation before stale high-confidence beliefs influence queries
+- Decay events auto-resolve when the attribute is subsequently confirmed,
+  keeping the `temporal_events` table accurate without user action
+- Events are deduplicated across refresh passes so repeated runs stay idempotent
+- Teach question planning now includes a third prioritization pass that stages
+  confidence-decay re-confirmation questions (priority 12.0) after cross-domain
+  synthesis and contradiction questions
+- Coverage evaluator now accepts an optional `shift_cluster_note` that is
+  appended to coverage notes when the queried domain has an active shift cluster,
+  warning the user that retrieved context may be outdated
+- `GET /identity/evolution` returns the full temporal event timeline (active and
+  resolved) ordered by detection time for a future "How I've changed" UI view
+
+### 29. Natural Voice Learning Layer
+- `engine/voice_feature_extractor.py` extracts seven pure-statistical voice
+  features from user text using only local regex — no model call:
+  - `avg_sentence_length`
+  - `question_frequency`
+  - `first_person_density`
+  - `contraction_rate`
+  - `em_dash_rate`
+  - `ellipsis_rate`
+  - `word_count`
+- extraction returns `None` for texts shorter than 50 words
+- the session learner now calls the extractor after each qualifying exchange
+  and persists the result in `voice_feature_observations` when the query
+  meets the 50-word threshold; this fires independently of whether the LLM
+  signal-extraction path is active
+- a rolling aggregate baseline is maintained in `voice_baseline_profile`
+  (upserted on every observation write) as a single `singleton` row
+- `build_voice_profile()` now accepts an optional `conn` and, when ≥ 5
+  observations exist, loads the baseline and appends learned structural
+  guidance as local-only `VoiceGuidanceItem` preference lines:
+  - average sentence length
+  - question register (frequent / rare)
+  - contraction register (informal / formal)
+  - em-dash usage
+  - ellipsis usage
+- baseline guidance is local-only and is never sent to external providers
+- extraction failures are non-blocking and silent
+
+### 30. Deep Reflection Mode
+- `engine/reflection_session_engine.py` manages multi-turn Socratic reflection sessions
+- `build_reflection_session_seed()` finds the best starting point using Phase 4+5 data:
+  - prefers domains with active contradiction flags
+  - falls back to pending synthesis domains, then drift domains, then most-populated domain
+- session state is stored in `app.state.reflection_sessions[session_id]` (in-memory) for
+  the duration of the server process; no active session state is persisted to the DB
+- all inference flows through `PrivacyBroker` with `task_type="reflection"`:
+  - only local-only context is assembled (seed domain attributes, contradictions, syntheses)
+  - contains_local_only_context is set appropriately per call
+- `start_reflection_session()` creates session state and generates the first question via
+  LLM; falls back to deterministic seed question when no local model is available
+- `process_reflection_turn()` processes each user response:
+  - appends user message to history
+  - calls LLM for next question + suggested attribute updates + themes noticed
+  - falls back to a deterministic turn sequence when LLM is unavailable
+  - caps suggested update confidence at 0.75
+  - limits suggestions to 2 items per turn
+  - deduplicates themes across turns
+  - stages any suggested updates as `attribute_candidate` signals in
+    `extracted_session_signals` for review through the existing Teach signal-review flow
+  - never auto-promotes suggestions into canonical attributes
+- two new backend endpoints exposed on `server/routes/teach.py`:
+  - `POST /teach/reflection/start` — creates session, returns session_id + first_question
+  - `POST /teach/reflection/turn` — processes one user turn, returns next_question,
+    suggested_updates, themes_noticed, staged_signal_ids, turn_count
+- frontend TeachTab adds "Deep Reflect" mode:
+  - button shown after onboarding is complete
+  - switches to a conversational view with Q&A history
+  - displays suggested attribute updates and themes as they accumulate
+  - exit returns the user to the normal Teach view
+  - staged suggestions can be reviewed through the existing conversation-signal review flow
+
+### 27. Cross-Domain Synthesis Staging
+- the first backend slice of Phase 4 from `docs/MAXIMIZE_INTELLIGENCE.md` is
+  now implemented with deterministic local-only staging
+- active high-confidence attributes can now be scanned for:
+  - repeated semantic themes spanning 3+ domains
+  - polarity tensions across high-confidence attributes
+- cross-domain theme staging is implemented in `engine/synthesis_engine.py`
+  and currently produces deterministic synthesis summaries rather than an
+  LLM-written narrative
+- contradiction detection is implemented in
+  `engine/contradiction_detector.py` using a static polarity lexicon
+- staged outputs persist in:
+  - `cross_domain_synthesis`
+  - `contradiction_flags`
+- Teach now surfaces these reviewable items through:
+  - `GET /teach/synthesis`
+  - `Teach` bootstrap `synthesis_review` cards
+- Teach question planning now prioritizes staged synthesis/contradiction review
+  prompts ahead of generic catalog questions when pending items exist
+- review remains user-mediated; no synthesis or contradiction result writes
+  directly into canonical attributes
+- synthesis and contradiction items can now be actioned through:
+  - `POST /teach/synthesis/{id}/accept` — marks accepted; attempts optional
+    local LLM narrative generation via PrivacyBroker and persists the result
+    in `synthesis_text` when a local model is available; silent on failure
+  - `POST /teach/synthesis/{id}/dismiss` — marks dismissed
+  - `POST /teach/contradictions/{id}/resolve` — marks resolved (user has
+    addressed the tension)
+  - `POST /teach/contradictions/{id}/dismiss` — marks dismissed (user says
+    it is not a real tension)
+
 ---
 
 # Key Invariants (DO NOT BREAK)
@@ -521,6 +714,49 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
 ---
 
 # What the System Can Do Now
+
+## Intelligence Roadmap Status
+
+- Phase 1 (`Semantic Retrieval Bridge`) is implemented on the backend:
+  deterministic domain-aware concept expansion is live, retrieval includes a
+  separate expanded-query score, and an optional bounded local-only similarity
+  tier is available through temporary FTS5 matching plus Ollama embeddings when
+  a local embedding model is already available
+- Phase 2 (`Passive Session Learning`) is implemented on the backend:
+  qualifying query exchanges can stage review-only conversation signals, and
+  Teach now exposes list/accept/dismiss APIs for those staged items
+- Phase 3 (`Feedback Recalibration Loop`) is implemented on the backend:
+  feedback now drives both bounded domain-level retrieval calibration and
+  conservative attribute-level confidence downgrades for repeatedly low-rated
+  inferred attributes, with append-only audit history
+- Phase 4 (`Cross-Domain Synthesis`) is fully implemented on the backend:
+  deterministic theme detection, contradiction staging, Teach queue
+  integration, synthesis review API, accept-dismiss workflows for both
+  syntheses and contradiction flags, and optional local LLM narrative
+  generation on synthesis acceptance are all live
+- Phase 5 (`Temporal Intelligence`) is fully implemented on the backend:
+  drift detection, shift-cluster detection, and confidence-decay detection
+  are all live; decay events auto-resolve when the user confirms the
+  attribute; Teach now surfaces confidence-decay re-confirmation questions;
+  coverage notes warn when a queried domain has an active shift cluster;
+  `GET /identity/evolution` exposes the full temporal event timeline
+- Phase 6 (`Natural Voice Learning`) is fully implemented on the backend:
+  pure-statistical voice feature extraction is live; observations are
+  accumulated per-session in `voice_feature_observations`; a rolling
+  aggregate baseline is maintained in `voice_baseline_profile`; the session
+  learner now extracts voice features from queries ≥ 50 words without any
+  model call; `build_voice_profile()` now loads the baseline when ≥ 5
+  observations exist and appends learned structural guidance (sentence
+  length, question frequency, contraction register, em-dash/ellipsis usage)
+  as local-only preference guidance lines
+- Phase 7 (`Deep Reflection Mode`) is fully implemented: multi-turn Socratic reflection
+  sessions are live; seed selection uses contradiction flags, pending syntheses, and drift
+  domains from Phases 4 and 5; all inference flows through PrivacyBroker; suggested updates
+  stage via `extracted_session_signals` for user review; frontend TeachTab includes a
+  conversational "Deep Reflect" mode
+- the remaining Phase 2 gap is frontend depth rather than backend plumbing:
+  the Teach bootstrap card and review endpoints exist, but a richer dedicated
+  conversation-signal review workflow has not been built yet
 
 - store identity securely and locally
 - enforce strict privacy boundaries
@@ -592,6 +828,40 @@ The Identity Engine is a **privacy-first, local-first identity modeling system**
   lower-level voice preference signals without mutating canonical attributes
 - lazy-load authenticated app tabs so slower machines do not pay the initial
   cost of every screen up front
+- bridge abstract self-queries to stored identity labels using deterministic,
+  domain-aware concept expansion instead of exact lexical overlap alone
+- optionally add bounded local-only similarity support with temporary FTS5 and
+  cached Ollama embeddings without letting that bonus override deterministic
+  grounding
+- passively stage review-only identity and preference hints from qualifying
+  query sessions without auto-promoting them into canonical truth
+- review, accept, or dismiss staged conversation signals through Teach APIs
+  while preserving audit-friendly local history
+- detect cross-domain identity themes and contradiction candidates locally,
+  then surface them in Teach before generic onboarding prompts
+- accept or dismiss staged cross-domain synthesis items, with optional local
+  LLM narrative generation for accepted themes when a local model is available
+- resolve or dismiss staged contradiction flags after the user has addressed
+  or ruled out the identified tension
+- detect identity drift when a single attribute changes repeatedly within the
+  past year and stage it as a reviewable temporal event
+- detect life-transition shift clusters when three or more attributes in one
+  domain change within a 90-day window and flag the domain as in flux
+- detect confidence decay for high-confidence attributes that have not been
+  confirmed or updated in over 540 days and surface re-confirmation questions
+  in Teach so stale beliefs can be validated or retired
+- auto-resolve confidence-decay events when the user subsequently confirms
+  the attribute, keeping the temporal event history accurate and append-only
+- include a staleness warning in query coverage notes when the queried domain
+  has an active shift-cluster event so the user knows retrieved context may
+  be outdated
+- expose the full temporal evolution timeline through `GET /identity/evolution`
+  for a potential "How I've changed" UI view
+- passively accumulate structural voice features from queries ≥ 50 words
+  using only local regex, with no model call required
+- maintain a rolling voice baseline profile from accumulated observations and
+  apply it as learned structural guidance during voice-generation drafting
+  when enough observations exist
 
 ---
 

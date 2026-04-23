@@ -448,34 +448,48 @@ def _notes_for(
     confidence: ConfidenceLabel,
     counts: CoverageCounts,
     cap_applied: str | None,
+    feedback_gap_note: str | None = None,
+    shift_cluster_note: str | None = None,
 ) -> str | None:
+    note: str | None = None
     if confidence == "insufficient_data":
-        return "No relevant attributes, preferences, or artifacts were retrieved."
-    if cap_applied == "no_identity_support":
-        return (
+        note = "No relevant attributes, preferences, or artifacts were retrieved."
+    elif cap_applied == "no_identity_support":
+        note = (
             "Artifact evidence present but no active identity attributes or "
             "preference attributes found — capped below high confidence."
         )
-    if cap_applied == "artifact_single_source_below_high":
-        return (
+    elif cap_applied == "artifact_single_source_below_high":
+        note = (
             "Evidence relies on a single artifact source without enough "
             "structured support — capped below high confidence."
         )
-    if cap_applied == "artifact_only_single_source":
-        return (
+    elif cap_applied == "artifact_only_single_source":
+        note = (
             "Evidence comes from a single artifact source only — "
             "capped below medium confidence."
         )
-    if confidence == "low_confidence":
-        return (
+    elif confidence == "low_confidence":
+        note = (
             f"Only thin context was available "
             f"(attributes={counts.attributes}, "
             f"preferences={counts.preferences}, "
             f"artifacts={counts.artifacts})."
         )
-    if confidence == "medium_confidence":
-        return "Partial context — some relevant signals, but coverage is uneven."
-    return None
+    elif confidence == "medium_confidence":
+        note = "Partial context — some relevant signals, but coverage is uneven."
+
+    if confidence == "low_confidence" and feedback_gap_note:
+        if note:
+            note = f"{note} {feedback_gap_note}"
+        else:
+            note = feedback_gap_note
+
+    if shift_cluster_note:
+        if note:
+            return f"{note} {shift_cluster_note}"
+        return shift_cluster_note
+    return note
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +500,8 @@ def evaluate_coverage(
     context: AssembledContext,
     *,
     backend: str = "local",
+    feedback_gap_note: str | None = None,
+    shift_cluster_note: str | None = None,
 ) -> CoverageAssessment:
     """Score an assembled context and classify answering confidence.
 
@@ -582,6 +598,12 @@ def evaluate_coverage(
         counts=counts,
         score=raw_score,
         confidence=confidence,
-        notes=_notes_for(confidence, counts, cap_applied),
+        notes=_notes_for(
+            confidence,
+            counts,
+            cap_applied,
+            feedback_gap_note=feedback_gap_note,
+            shift_cluster_note=shift_cluster_note,
+        ),
         breakdown=breakdown,
     )

@@ -33,6 +33,7 @@ describe('QueryFeedbackPanel', () => {
               domain_hints: ['voice'],
             },
             domains_referenced: ['voice'],
+            retrieved_attribute_ids: ['attr-1'],
           },
         }}
       />,
@@ -47,6 +48,7 @@ describe('QueryFeedbackPanel', () => {
       expect.objectContaining({
         feedback: 'wrong_focus',
         voice_feedback: 'too_formal',
+        retrieved_attribute_ids: ['attr-1'],
       }),
     )
   })

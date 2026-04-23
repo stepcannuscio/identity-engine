@@ -177,6 +177,28 @@ def test_score_attribute_applies_domain_bonus_correctly():
     assert score_attribute(query_text, in_domain) > score_attribute(query_text, out_domain)
 
 
+def test_score_attribute_uses_domain_aware_concept_expansion_for_abstract_goal_query():
+    query_text = "What motivates me when work gets hard?"
+    abstract_match = {
+        "label": "intrinsic_drive",
+        "value": "I stay engaged when the work feels deeply meaningful.",
+        "domain": "goals",
+        "confidence": 0.7,
+        "status": "active",
+        "source": "reflection",
+    }
+    unrelated = {
+        "label": "friendship_style",
+        "value": "I keep a small trusted circle.",
+        "domain": "relationships",
+        "confidence": 0.7,
+        "status": "active",
+        "source": "reflection",
+    }
+
+    assert score_attribute(query_text, abstract_match) > score_attribute(query_text, unrelated)
+
+
 def test_retrieve_attributes_respects_simple_budget_max_attributes(conn, domain_ids):
     for i in range(15):
         _insert_attribute(
@@ -307,6 +329,36 @@ def test_retrieve_attribute_candidates_prefers_recently_confirmed_goal(conn, dom
     results = retrieve_attributes("What is my main goal this week?", "simple", conn)
 
     assert results[0]["label"] == "weekly_priority"
+
+
+def test_retrieve_attributes_can_apply_optional_similarity_bonus(conn, domain_ids, monkeypatch):
+    _insert_attribute(
+        conn,
+        domain_ids["goals"],
+        "career_direction",
+        "Shift toward technical leadership over the next year.",
+        confidence=0.7,
+        routing="external_ok",
+        status="active",
+    )
+
+    monkeypatch.setattr(
+        "engine.retriever.compute_similarity_bonus",
+        lambda conn, query, attributes, provider_config=None: {
+            str(attributes[0]["id"]): 0.1,
+        },
+    )
+
+    results = retrieve_attributes(
+        "Where am I headed professionally?",
+        "simple",
+        conn,
+        provider_config=SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None),
+    )
+
+    assert results
+    assert results[0]["label"] == "career_direction"
+    assert results[0]["score"] >= 0.1
 
 
 def test_build_prompt_includes_system_message_first():
@@ -748,6 +800,89 @@ def test_query_logs_normalized_audit_entry(conn, domain_ids):
     assert entry["is_local"] is False
     assert entry["decision"] == "allowed"
     assert entry["domains_referenced"] == ["goals"]
+
+
+def test_query_triggers_passive_session_learning_after_completed_exchange(conn, domain_ids):
+    for label, value in [
+        ("priority_goal", "Ship a personal project this quarter."),
+        ("secondary_goal", "Read one book per month this year."),
+        ("long_term_goal", "Build a sustainable freelance practice."),
+    ]:
+        _insert_attribute(
+            conn,
+            domain_ids["goals"],
+            label,
+            value,
+            confidence=0.9,
+            status="confirmed",
+        )
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    with patch(
+        "engine.query_engine.PrivacyBroker.generate_grounded_response",
+        return_value=BrokeredResult(
+            content="Focused and steady.",
+            metadata=InferenceDecision(
+                provider="ollama",
+                model="llama3.1:8b",
+                is_local=True,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+            ),
+        ),
+    ), patch("engine.query_engine.maybe_extract_from_exchange", return_value=2) as learner_mock:
+        result = query("What is my main goal?", session, conn, config)
+
+    assert result == "Focused and steady."
+    learner_mock.assert_called_once()
+    args, kwargs = learner_mock.call_args
+    assert args[0] is conn
+    assert args[1] is session
+    assert kwargs["user_query"] == "What is my main goal?"
+    assert kwargs["provider_config"] is config
+
+
+def test_query_swallows_passive_session_learning_failures(conn, domain_ids):
+    for label, value in [
+        ("priority_goal", "Ship a personal project this quarter."),
+        ("secondary_goal", "Read one book per month this year."),
+        ("long_term_goal", "Build a sustainable freelance practice."),
+    ]:
+        _insert_attribute(
+            conn,
+            domain_ids["goals"],
+            label,
+            value,
+            confidence=0.9,
+            status="confirmed",
+        )
+    session = Session()
+    config = SimpleNamespace(is_local=True, provider="ollama", model="llama3.1:8b", api_key=None)
+
+    with patch(
+        "engine.query_engine.PrivacyBroker.generate_grounded_response",
+        return_value=BrokeredResult(
+            content="Focused and steady.",
+            metadata=InferenceDecision(
+                provider="ollama",
+                model="llama3.1:8b",
+                is_local=True,
+                task_type="query_generation",
+                blocked_external_attributes_count=0,
+                routing_enforced=True,
+            ),
+        ),
+    ), patch(
+        "engine.query_engine.maybe_extract_from_exchange",
+        side_effect=RuntimeError("learner boom"),
+    ):
+        result = query("What is my main goal?", session, conn, config)
+
+    assert result == "Focused and steady."
+    assert session.query_count == 1
+    assert len(session.routing_log) == 1
 
 
 def test_query_strips_local_only_attribute_for_external_backend_and_proceeds(conn, domain_ids):

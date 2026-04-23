@@ -47,6 +47,41 @@ def _config():
     )
 
 
+def _insert_attribute(
+    conn,
+    *,
+    domain: str,
+    label: str,
+    value: str,
+    confidence: float = 0.84,
+) -> str:
+    domain_id = conn.execute("SELECT id FROM domains WHERE name = ?", (domain,)).fetchone()[0]
+    attribute_id = f"{domain}-{label}"
+    now = "2026-04-20T09:00:00+00:00"
+    conn.execute(
+        """
+        INSERT INTO attributes (
+            id, domain_id, label, value, elaboration, mutability, source, confidence,
+            routing, status, created_at, updated_at, last_confirmed
+        )
+        VALUES (?, ?, ?, ?, ?, 'stable', 'explicit', ?, 'local_only', 'confirmed', ?, ?, ?)
+        """,
+        (
+            attribute_id,
+            domain_id,
+            label,
+            value,
+            None,
+            confidence,
+            now,
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    return attribute_id
+
+
 def test_build_question_generation_messages_only_uses_sanitized_metadata():
     messages = build_question_generation_messages(
         domain="values",
@@ -237,3 +272,43 @@ def test_ensure_question_queue_skips_generated_prompt_that_was_already_seen(conn
 
     assert generated_count == 0
     assert prompt_count == 1
+
+
+def test_get_next_questions_prioritizes_synthesis_and_contradiction_reviews(conn):
+    _insert_attribute(
+        conn,
+        domain="personality",
+        label="social_orientation",
+        value="I am introverted and need quiet after groups.",
+    )
+    _insert_attribute(
+        conn,
+        domain="patterns",
+        label="meeting_energy",
+        value="Big meetings drain my social battery quickly.",
+    )
+    _insert_attribute(
+        conn,
+        domain="relationships",
+        label="connection_needs",
+        value="I connect best in one-on-one conversations.",
+    )
+    _insert_attribute(
+        conn,
+        domain="goals",
+        label="exploration_style",
+        value="I stay creative when I keep things spontaneous and flexible.",
+    )
+    _insert_attribute(
+        conn,
+        domain="patterns",
+        label="workflow_structure",
+        value="I do my best work with highly structured routines and organized plans.",
+    )
+
+    questions = get_next_questions(conn, _config(), limit=3)
+
+    assert questions
+    assert questions[0].source in {"synthesis", "contradiction"}
+    assert any(item.source == "synthesis" for item in questions)
+    assert any(item.source == "contradiction" for item in questions)

@@ -29,8 +29,8 @@ from typing import Any, cast
 import requests
 
 from config.provider_catalog import get_provider_definition, list_external_provider_ids
-# All keychain reads go through settings.get_api_key — never call keyring here.
-from config.settings import get_api_key
+# All keychain reads go through settings helpers — never call keyring here.
+from config.settings import get_api_key, get_private_server_url
 
 logger = logging.getLogger(__name__)
 _STARTED_OLLAMA_PROCESS: object | None = None
@@ -80,13 +80,19 @@ EXTRACT_SYSTEM_PROMPT = (
 
 @dataclass
 class ProviderConfig:
-    provider: str | None      # "anthropic", "groq", "ollama", or None
+    provider: str | None      # "anthropic", "groq", "ollama", "private_server", or None
     api_key: str | None
     model: str
     is_local: bool
+    base_url: str | None = None   # remote Ollama base URL for private_server
     # Metadata for the startup report
     arch: str = ""
     ram_gb: float = 0.0
+
+    @property
+    def is_trusted_private(self) -> bool:
+        """True when provider is private_server — user-owned machine, encrypted tunnel."""
+        return self.provider == "private_server"
 
 # ---------------------------------------------------------------------------
 # Hardware detection
@@ -326,11 +332,55 @@ def resolve_external_router(preferred_provider: str | None = None) -> ProviderCo
     return _resolve_external_router(detect_hardware(), preferred_provider=preferred_provider)
 
 
+def _resolve_private_server_router(hw: dict[str, Any]) -> ProviderConfig:
+    url = get_private_server_url()
+    if not url:
+        raise ConfigurationError(
+            "Private server URL is not configured.\n"
+            "Run: make add-private-server-url URL=http://100.x.x.x:11434"
+        )
+    try:
+        requests.get(url, timeout=2)
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Private server at {url!r} is not reachable: {exc}"
+        ) from exc
+
+    # Warn if the default model is not available on the remote
+    definition = get_provider_definition("private_server")
+    model = definition.default_model or TIER_MODELS["local_large"]
+    try:
+        resp = requests.get(f"{url}/api/tags", timeout=5)
+        resp.raise_for_status()
+        remote_models = [m.get("name", "") for m in resp.json().get("models", [])]
+        tag = model.split(":")[0]
+        if not any(m.startswith(model) or m.startswith(tag + ":") for m in remote_models):
+            logger.warning(
+                "Model %r not found on private server. Pull it with: ollama pull %s",
+                model,
+                model,
+            )
+    except Exception:
+        pass  # model check is advisory only
+
+    return ProviderConfig(
+        provider="private_server",
+        api_key=None,
+        model=model,
+        is_local=False,
+        base_url=url,
+        arch=hw["arch"],
+        ram_gb=hw["ram_gb"],
+    )
+
+
 def resolve_provider_router(provider: str) -> ProviderConfig:
     """Resolve a specific named provider or raise ConfigurationError."""
     hw = detect_hardware()
     if provider == "ollama":
         return _resolve_local_router(hw)
+    if provider == "private_server":
+        return _resolve_private_server_router(hw)
     if provider in list_external_provider_ids():
         return _resolve_external_router(hw, preferred_provider=provider)
     raise ConfigurationError(f"Unknown provider: {provider!r}")
@@ -340,6 +390,7 @@ def resolve_router() -> ProviderConfig:
     """Detect hardware, resolve the best available backend, return ProviderConfig.
 
     Resolution order:
+      0. Private server if configured and reachable
       1. Local Ollama if hardware supports it and model is available/pullable
       2. Anthropic API key from keychain
       3. Groq API key from keychain
@@ -350,7 +401,14 @@ def resolve_router() -> ProviderConfig:
     """
     hw = detect_hardware()
 
-    # Try local first
+    # Try private server first when configured
+    if get_private_server_url():
+        try:
+            return _resolve_private_server_router(hw)
+        except ConfigurationError as exc:
+            logger.warning("Private server resolution failed, falling back: %s", exc)
+
+    # Try local Ollama
     if hw["recommended_tier"] in ("local_large", "local_small"):
         try:
             return _resolve_local_router(hw)
@@ -367,9 +425,10 @@ def resolve_router() -> ProviderConfig:
     raise ConfigurationError(
         "No LLM backend is available.\n\n"
         "Options:\n"
-        "  1. Install Ollama (https://ollama.com) for local inference.\n"
-        "  2. Add an Anthropic API key:  make add-anthropic-key KEY=sk-ant-...\n"
-        "  3. Add a Groq API key:        make add-groq-key KEY=gsk_...\n"
+        "  1. Configure a private server: make add-private-server-url URL=http://100.x.x.x:11434\n"
+        "  2. Install Ollama (https://ollama.com) for local inference.\n"
+        "  3. Add an Anthropic API key:  make add-anthropic-key KEY=sk-ant-...\n"
+        "  4. Add a Groq API key:        make add-groq-key KEY=gsk_...\n"
     )
 
 # ---------------------------------------------------------------------------
@@ -397,21 +456,27 @@ def _parse_json_response(raw: str) -> list:
     return json.loads(content)
 
 
-def _call_ollama(messages: list[dict], model: str, timeout: int = OLLAMA_TIMEOUT) -> str:
+def _call_ollama(
+    messages: list[dict],
+    model: str,
+    timeout: int = OLLAMA_TIMEOUT,
+    base_url: str = OLLAMA_BASE_URL,
+) -> str:
     payload = {"model": model, "messages": messages, "stream": False}
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=timeout
-    )
+    resp = requests.post(f"{base_url}/api/chat", json=payload, timeout=timeout)
     resp.raise_for_status()
     return resp.json()["message"]["content"].strip()
 
 
 def _stream_ollama(
-    messages: list[dict], model: str, timeout: int = OLLAMA_TIMEOUT
+    messages: list[dict],
+    model: str,
+    timeout: int = OLLAMA_TIMEOUT,
+    base_url: str = OLLAMA_BASE_URL,
 ) -> Generator[str, None, None]:
     payload = {"model": model, "messages": messages, "stream": True}
     with requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
+        f"{base_url}/api/chat",
         json=payload,
         timeout=timeout,
         stream=True,
@@ -424,6 +489,53 @@ def _stream_ollama(
             content = chunk.get("message", {}).get("content", "")
             if content:
                 yield str(content)
+
+
+def generate_embedding(
+    text: str,
+    config: ProviderConfig,
+    *,
+    model: str = "nomic-embed-text",
+    timeout_seconds: int = 10,
+) -> list[float] | None:
+    """Return a local/private embedding vector, or ``None`` when unavailable.
+
+    Embeddings are intentionally limited to local Ollama or a trusted private
+    server. External API providers are never used for retrieval embeddings.
+    """
+    if not text.strip():
+        return None
+    if not (getattr(config, "is_local", False) or getattr(config, "provider", None) == "private_server"):
+        return None
+
+    base_url = getattr(config, "base_url", None) or OLLAMA_BASE_URL
+    try:
+        tags_response = requests.get(f"{base_url}/api/tags", timeout=5)
+        tags_response.raise_for_status()
+        models = [item.get("name", "") for item in tags_response.json().get("models", [])]
+        tag = model.split(":")[0]
+        if not any(name.startswith(model) or name.startswith(tag + ":") for name in models):
+            return None
+        response = requests.post(
+            f"{base_url}/api/embed",
+            json={"model": model, "input": text},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return None
+
+    embeddings = payload.get("embeddings")
+    if isinstance(embeddings, list) and embeddings:
+        first = embeddings[0]
+        if isinstance(first, list):
+            return [float(value) for value in first]
+
+    single = payload.get("embedding")
+    if isinstance(single, list):
+        return [float(value) for value in single]
+    return None
 
 
 def _call_anthropic(
@@ -529,8 +641,9 @@ def extract_attributes(question: str, answer: str, config: ProviderConfig) -> li
         retry = attempt == 1
         messages = _build_messages(question, answer, retry=retry)
 
-        if config.is_local:
-            raw = _call_ollama(messages, config.model)
+        if config.is_local or config.provider == "private_server":
+            url = config.base_url or OLLAMA_BASE_URL
+            raw = _call_ollama(messages, config.model, base_url=url)
         elif config.provider == "anthropic":
             assert config.api_key is not None
             raw = _call_anthropic(messages, config.model, config.api_key)
@@ -567,10 +680,11 @@ def generate_response(
     """
     resolved_timeout = timeout_seconds or 120
 
-    if config.is_local:
+    if config.is_local or config.provider == "private_server":
+        url = config.base_url or OLLAMA_BASE_URL
         if stream:
-            return _stream_ollama(messages, config.model, timeout=resolved_timeout)
-        return _call_ollama(messages, config.model, timeout=resolved_timeout)
+            return _stream_ollama(messages, config.model, timeout=resolved_timeout, base_url=url)
+        return _call_ollama(messages, config.model, timeout=resolved_timeout, base_url=url)
     if config.provider == "anthropic":
         assert config.api_key is not None
         if stream:
@@ -631,6 +745,8 @@ def print_routing_report(config: ProviderConfig) -> None:
 
     if config.is_local:
         line = f"Running locally   {config.model:<22} ({arch_label}, {ram_str})"
+    elif config.provider == "private_server":
+        line = f"Running via private server  {config.model:<22} ({config.base_url})"
     else:
         reason = "local model not available on this hardware"
         line = (

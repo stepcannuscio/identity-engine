@@ -1,7 +1,7 @@
 """Canonical settings, constants, and keychain access for identity-engine."""
 
 import logging
-
+import os
 from pathlib import Path
 
 import keyring
@@ -117,3 +117,20 @@ def get_ui_passphrase() -> str | None:
 def set_ui_passphrase(passphrase: str) -> None:
     """Store the UI passphrase in the system keychain."""
     keyring.set_password(_KEYRING_SERVICE, _UI_PASSPHRASE_USERNAME, passphrase)
+
+
+def get_private_server_url() -> str | None:
+    """Return the configured private Ollama server URL.
+
+    Checks IDENTITY_ENGINE_PRIVATE_SERVER_URL env var first (for CI/dev),
+    then falls back to the system keychain.
+    """
+    env_url = os.environ.get("IDENTITY_ENGINE_PRIVATE_SERVER_URL")
+    if env_url:
+        return env_url.strip().rstrip("/") or None
+    return get_api_key("private_server")
+
+
+def set_private_server_url(url: str) -> None:
+    """Store the private Ollama server URL in the system keychain."""
+    set_api_key("private_server", url.strip().rstrip("/"))

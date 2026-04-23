@@ -18,7 +18,7 @@ describe('Header', () => {
     expect(button).toBeDisabled()
     expect(button).toHaveAttribute(
       'title',
-      'Configure an external provider in Settings before switching',
+      'Configure a private server or external provider in Settings before switching',
     )
   })
 

@@ -13,7 +13,7 @@ BACKEND_ARGS ?=
 FRONTEND_ARGS ?=
 
 .PHONY: help setup init test test-backend test-frontend typecheck verify-backend clean \
-	capture query view serve smoke add-anthropic-key add-groq-key \
+	capture query view serve smoke add-anthropic-key add-groq-key add-private-server-url \
 	set-ui-passphrase frontend-install frontend-dev frontend-build dev
 
 ## Show this help message
@@ -165,6 +165,12 @@ add-groq-key:
 	$(PYTHON) -c "import keyring, sys; \
 	keyring.set_password('identity-engine', \
 	'groq-api-key', sys.argv[1])" $(KEY)
+
+## Store a private Ollama server URL in the system keychain
+## Usage: make add-private-server-url URL=http://100.x.x.x:11434
+add-private-server-url:
+	$(PYTHON) -c "import sys; from config.settings import set_private_server_url; \
+	set_private_server_url(sys.argv[1])" $(URL)
 
 ## Update the UI passphrase stored in the system keychain
 set-ui-passphrase:

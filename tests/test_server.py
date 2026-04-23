@@ -1290,6 +1290,7 @@ def test_query_response_includes_normalized_privacy_metadata(
     assert body["metadata"]["privacy"]["routing_enforced"] is True
     assert body["metadata"]["privacy"]["summary"] == "Processed locally with privacy rules applied."
     assert body["metadata"]["confidence"] == "medium_confidence"
+    assert body["metadata"]["retrieved_attribute_ids"] == []
     assert body["metadata"]["coverage"] == {
         "attributes": 2,
         "preferences": 0,
@@ -1527,6 +1528,7 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
                 "domain_hints": ["goals", "patterns"],
             },
             "domains_referenced": ["goals", "patterns"],
+            "retrieved_attribute_ids": ["attr-1", "attr-2"],
         },
         headers=_login_headers(client),
     )
@@ -1535,7 +1537,8 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
     feedback_id = response.json()["id"]
     row = _db(client).execute(
         """
-        SELECT query_text, response_text, feedback, notes, backend, source_profile
+        SELECT query_text, response_text, feedback, notes, backend, source_profile,
+               retrieved_attribute_ids_json
         FROM query_feedback
         WHERE id = ?
         """,
@@ -1548,6 +1551,7 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
         "The focus-block guidance matched my working style.",
         "local",
         "preference_sensitive",
+        '["attr-1", "attr-2"]',
     )
 
     evidence_rows = _db(client).execute(
@@ -1576,6 +1580,59 @@ def test_post_query_feedback_stores_local_feedback_row(client: TestClient):
     ]
 
 
+def test_post_query_feedback_triggers_retrieval_calibration_after_batch(client: TestClient):
+    headers = _login_headers(client)
+    payload = {
+        "query": "How should I plan my week?",
+        "response": "Protect your focus blocks and group shallow work.",
+        "query_type": "simple",
+        "backend_used": "local",
+        "confidence": "low_confidence",
+        "intent": {
+            "source_profile": "preference_sensitive",
+            "intent_tags": ["planning"],
+            "domain_hints": ["goals"],
+        },
+        "domains_referenced": ["goals"],
+        "retrieved_attribute_ids": [],
+    }
+
+    for _ in range(7):
+        response = client.post(
+            "/query/feedback",
+            json={**payload, "feedback": "missed_context"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    for _ in range(3):
+        response = client.post(
+            "/query/feedback",
+            json={**payload, "feedback": "helpful"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    rows = _db(client).execute(
+        """
+        SELECT feedback_pattern, score_delta, observation_count
+        FROM retrieval_calibration
+        WHERE domain = 'goals' AND source_profile = 'preference_sensitive'
+        ORDER BY feedback_pattern
+        """
+    ).fetchall()
+
+    assert len(rows) == 4
+    assert {row[0] for row in rows} == {
+        "helpful",
+        "missed_context",
+        "ungrounded",
+        "wrong_focus",
+    }
+    assert all(row[2] == 10 for row in rows)
+    assert all(row[1] is not None for row in rows)
+
+
 def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient):
     response = client.post(
         "/query/feedback",
@@ -1594,6 +1651,7 @@ def test_post_query_feedback_stores_voice_feedback_and_signal(client: TestClient
                 "domain_hints": ["voice"],
             },
             "domains_referenced": ["voice"],
+            "retrieved_attribute_ids": [],
         },
         headers=_login_headers(client),
     )
@@ -1683,6 +1741,7 @@ def test_get_evidence_returns_privacy_safe_summaries_only(client: TestClient):
                 "domain_hints": ["goals"],
             },
             "domains_referenced": ["goals"],
+            "retrieved_attribute_ids": [],
         },
         headers=_login_headers(client),
     )
@@ -1736,12 +1795,66 @@ def test_post_query_feedback_rejects_voice_feedback_for_non_voice_query(client: 
                 "domain_hints": ["goals"],
             },
             "domains_referenced": ["goals"],
+            "retrieved_attribute_ids": [],
         },
         headers=_login_headers(client),
     )
 
     assert response.status_code == 422
     assert response.json()["detail"] == "voice_feedback is only valid for voice_generation queries."
+
+
+def test_post_query_feedback_can_lower_repeated_low_rated_inferred_attribute_confidence(
+    client: TestClient,
+):
+    headers = _login_headers(client)
+    attribute_id = _insert_attribute(
+        _db(client),
+        "goals",
+        "plan_horizon",
+        "I plan in quarterly arcs.",
+        source="inferred",
+    )
+    payload = {
+        "query": "How should I plan my week?",
+        "response": "Protect your focus blocks and group shallow work.",
+        "feedback": "missed_context",
+        "query_type": "simple",
+        "backend_used": "local",
+        "confidence": "low_confidence",
+        "intent": {
+            "source_profile": "preference_sensitive",
+            "intent_tags": ["planning"],
+            "domain_hints": ["goals"],
+        },
+        "domains_referenced": ["goals"],
+        "retrieved_attribute_ids": [attribute_id],
+    }
+
+    for _ in range(10):
+        response = client.post("/query/feedback", json=payload, headers=headers)
+        assert response.status_code == 200
+
+    row = _db(client).execute(
+        "SELECT confidence FROM attributes WHERE id = ?",
+        (attribute_id,),
+    ).fetchone()
+    assert row is not None
+    assert float(row[0]) == pytest.approx(0.65)
+
+    history = _db(client).execute(
+        """
+        SELECT previous_confidence, changed_by, reason
+        FROM attribute_history
+        WHERE attribute_id = ?
+        ORDER BY changed_at ASC, id ASC
+        """,
+        (attribute_id,),
+    ).fetchall()
+    assert history
+    assert history[-1][0] == pytest.approx(0.8)
+    assert history[-1][1] == "inferred"
+    assert str(history[-1][2]).startswith("feedback_calibration:")
 
 
 def test_query_stream_includes_blocked_privacy_state_on_error(client: TestClient, monkeypatch):
@@ -2108,6 +2221,241 @@ def test_teach_bootstrap_returns_cards_and_questions(client, monkeypatch):
     body = response.json()
     assert body["cards"][0]["type"] == "welcome"
     assert body["questions"]
+
+
+def test_teach_bootstrap_includes_conversation_signal_card_when_staged_items_exist(client):
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            str(uuid.uuid4()),
+            "session-1",
+            0,
+            "attribute_candidate",
+            json.dumps(
+                {
+                    "domain": "goals",
+                    "label": "career_direction",
+                    "value": "I want to move toward technical leadership.",
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.get("/teach/bootstrap", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    conversation_cards = [card for card in cards if card["type"] == "conversation_signal"]
+    assert conversation_cards
+    assert conversation_cards[0]["payload"]["count"] == 1
+
+
+def test_get_conversation_signals_returns_pending_staged_items(client):
+    signal_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            signal_id,
+            "session-2",
+            1,
+            "preference",
+            json.dumps(
+                {
+                    "category": "work_style",
+                    "subject": "solo_work",
+                    "signal": "prefer",
+                    "strength": 4,
+                    "summary": "Recent conversations suggest a preference for solo work.",
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.get("/teach/conversation-signals", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["signals"]
+    assert body["signals"][0]["id"] == signal_id
+    assert body["signals"][0]["signal_type"] == "preference"
+
+
+def test_accept_conversation_signal_promotes_attribute_candidate(client):
+    signal_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            signal_id,
+            "session-3",
+            0,
+            "attribute_candidate",
+            json.dumps(
+                {
+                    "domain": "goals",
+                    "label": "career_direction",
+                    "value": "I want to move toward technical leadership.",
+                    "elaboration": "This keeps coming up in planning questions.",
+                    "mutability": "evolving",
+                    "confidence": 0.7,
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/conversation-signals/{signal_id}/accept",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["attributes_saved"] == 1
+
+    processed = _db(client).execute(
+        "SELECT processed FROM extracted_session_signals WHERE id = ?",
+        (signal_id,),
+    ).fetchone()
+    assert processed == (1,)
+
+    stored = _db(client).execute(
+        """
+        SELECT label, value
+        FROM attributes
+        WHERE label = 'career_direction' AND status IN ('active', 'confirmed')
+        """
+    ).fetchone()
+    assert stored == ("career_direction", "I want to move toward technical leadership.")
+
+
+def test_dismiss_conversation_signal_marks_item_processed(client):
+    signal_id = str(uuid.uuid4())
+    _db(client).execute(
+        """
+        INSERT INTO extracted_session_signals (
+            id, session_id, exchange_index, signal_type, payload_json, processed
+        )
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            signal_id,
+            "session-4",
+            0,
+            "correction",
+            json.dumps(
+                {
+                    "summary": "The user corrected an overgeneralized pattern.",
+                    "correction_text": "The pattern depends on context.",
+                    "attribute_ids": [],
+                }
+            ),
+        ),
+    )
+    _db(client).commit()
+
+    response = client.post(
+        f"/teach/conversation-signals/{signal_id}/dismiss",
+        headers=_login_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "dismissed"
+    processed = _db(client).execute(
+        "SELECT processed FROM extracted_session_signals WHERE id = ?",
+        (signal_id,),
+    ).fetchone()
+    assert processed == (1,)
+
+
+def test_teach_synthesis_returns_pending_cross_domain_items(client):
+    _insert_attribute(
+        _db(client),
+        "personality",
+        "social_orientation",
+        "I am introverted and need quiet to recharge after groups.",
+    )
+    _insert_attribute(
+        _db(client),
+        "patterns",
+        "meeting_energy",
+        "Big meetings drain my social battery quickly.",
+    )
+    _insert_attribute(
+        _db(client),
+        "relationships",
+        "connection_needs",
+        "I connect best in one-on-one conversations.",
+    )
+    _insert_attribute(
+        _db(client),
+        "goals",
+        "exploration_style",
+        "I stay creative when I keep things spontaneous and flexible.",
+    )
+    _insert_attribute(
+        _db(client),
+        "patterns",
+        "workflow_structure",
+        "I do my best work with highly structured routines and organized plans.",
+    )
+
+    response = client.get("/teach/synthesis", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["syntheses"]
+    assert body["syntheses"][0]["theme_label"] == "social energy"
+    assert body["contradictions"]
+    assert body["contradictions"][0]["polarity_axis"] == "structure_spontaneity"
+
+
+def test_teach_bootstrap_includes_synthesis_review_card(client):
+    _insert_attribute(
+        _db(client),
+        "personality",
+        "social_orientation",
+        "I am introverted and need quiet to recharge after groups.",
+    )
+    _insert_attribute(
+        _db(client),
+        "patterns",
+        "meeting_energy",
+        "Large meetings drain my social battery quickly.",
+    )
+    _insert_attribute(
+        _db(client),
+        "relationships",
+        "connection_needs",
+        "I prefer one-on-one conversations over crowded gatherings.",
+    )
+
+    response = client.get("/teach/bootstrap", headers=_login_headers(client))
+
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    synthesis_cards = [card for card in cards if card["type"] == "synthesis_review"]
+    assert synthesis_cards
+    assert synthesis_cards[0]["payload"]["syntheses"]
 
 
 def test_security_posture_override_persists_unknown_check_completion(client, monkeypatch):
